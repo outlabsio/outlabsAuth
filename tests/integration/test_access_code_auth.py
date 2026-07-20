@@ -45,7 +45,7 @@ async def test_access_code_request_and_verify_flow_works_for_presets(
     try:
         captured: dict[str, str] = {}
 
-        async def capture_access_code(user, code, request=None, redirect_url=None):
+        async def capture_access_code(user, code, request=None, redirect_url=None, **_kwargs):
             captured["user_id"] = str(user.id)
             captured["email"] = user.email
             captured["code"] = code
@@ -216,6 +216,199 @@ async def test_access_code_request_rate_limit_returns_retry_metadata(test_engine
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_access_code_request_and_verify_by_verified_phone(test_engine):
+    auth = SimpleRBAC(
+        engine=test_engine,
+        secret_key="test-secret-key-do-not-use-in-production-12345678",
+        access_token_expire_minutes=60,
+        enable_access_codes=True,
+        access_code_length=6,
+        enable_token_cleanup=False,
+    )
+    await auth.initialize()
+    try:
+        captured: dict[str, str] = {}
+        phone = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+
+        async def capture_access_code(user, code, request=None, redirect_url=None, **_kwargs):
+            captured["user_id"] = str(user.id)
+            captured["email"] = user.email
+            captured["phone"] = user.phone or ""
+            captured["code"] = code
+
+        auth.user_service.on_after_access_code_requested = capture_access_code
+
+        async with auth.get_session() as session:
+            user = await auth.user_service.create_user(
+                session=session,
+                email=f"phone-login-{uuid.uuid4().hex[:8]}@example.com",
+                password="AccessCodePass123!",
+                first_name="Phone",
+                last_name="Login",
+            )
+            user.phone = phone
+            user.phone_verified = True
+            await session.commit()
+            user_email = user.email
+            user_id = str(user.id)
+
+        app = _build_app(auth)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            unknown_phone_response = await client.post(
+                "/v1/auth/access-code/request",
+                json={"phone": "+19998887766"},
+            )
+            assert unknown_phone_response.status_code == 204, unknown_phone_response.text
+            assert captured == {}
+
+            both_identifiers_response = await client.post(
+                "/v1/auth/access-code/request",
+                json={"email": user_email, "phone": phone},
+            )
+            assert both_identifiers_response.status_code == 422, both_identifiers_response.text
+
+            request_response = await client.post(
+                "/v1/auth/access-code/request",
+                json={"phone": phone, "redirect_url": "/app/dashboard"},
+            )
+            assert request_response.status_code == 204, request_response.text
+            assert captured["user_id"] == user_id
+            assert captured["phone"] == phone
+            assert captured["code"].isdigit()
+            assert len(captured["code"]) == 6
+
+            verify_response = await client.post(
+                "/v1/auth/access-code/verify",
+                json={"phone": phone, "code": captured["code"]},
+            )
+            assert verify_response.status_code == 200, verify_response.text
+            tokens = verify_response.json()
+            assert tokens["access_token"]
+            assert tokens["refresh_token"]
+
+            email_verify_response = await client.post(
+                "/v1/auth/access-code/verify",
+                json={"email": user_email, "code": captured["code"]},
+            )
+            assert email_verify_response.status_code == 401, email_verify_response.text
+
+            current_user_response = await client.get(
+                "/v1/users/me",
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            )
+            assert current_user_response.status_code == 200, current_user_response.text
+            me = current_user_response.json()
+            assert me["email"] == user_email
+            assert me["phone"] == phone
+            assert me["phone_verified"] is True
+
+        async with auth.get_session() as session:
+            refreshed_user = await auth.user_service.get_user_by_email(session, user_email)
+            assert refreshed_user is not None
+            assert "WHATSAPP_OTP" in refreshed_user.auth_methods
+            challenges = (
+                (
+                    await session.execute(
+                        select(AuthChallenge).where(
+                            AuthChallenge.user_id == refreshed_user.id,
+                            AuthChallenge.challenge_type
+                            == AuthChallengeType.WHATSAPP_OTP.value,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(challenges) == 1
+            assert challenges[0].recipient == phone
+            assert challenges[0].used_at is not None
+    finally:
+        await auth.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_access_code_sms_channel_stores_sms_otp_and_skips_whatsapp_host(
+    test_engine,
+):
+    auth = SimpleRBAC(
+        engine=test_engine,
+        secret_key="test-secret-key-do-not-use-in-production-12345678",
+        access_token_expire_minutes=60,
+        enable_access_codes=True,
+        access_code_length=6,
+        enable_token_cleanup=False,
+    )
+    await auth.initialize()
+    try:
+        captured: dict[str, str] = {}
+        phone = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+
+        async def capture_access_code(
+            user,
+            code,
+            request=None,
+            redirect_url=None,
+            *,
+            delivery_channel="email",
+            challenge_type="access_code",
+        ):
+            captured["code"] = code
+            captured["delivery_channel"] = delivery_channel
+            captured["challenge_type"] = challenge_type
+
+        auth.user_service.on_after_access_code_requested = capture_access_code
+
+        async with auth.get_session() as session:
+            user = await auth.user_service.create_user(
+                session=session,
+                email=f"sms-login-{uuid.uuid4().hex[:8]}@example.com",
+                password="AccessCodePass123!",
+            )
+            user.phone = phone
+            user.phone_verified = True
+            await session.commit()
+            user_id = user.id
+
+        app = _build_app(auth)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            request_response = await client.post(
+                "/v1/auth/access-code/request",
+                json={"phone": phone, "channel": "sms"},
+            )
+            assert request_response.status_code == 204, request_response.text
+            assert captured["delivery_channel"] == "sms"
+            assert captured["challenge_type"] == "sms_otp"
+
+            verify_response = await client.post(
+                "/v1/auth/access-code/verify",
+                json={"phone": phone, "channel": "sms", "code": captured["code"]},
+            )
+            assert verify_response.status_code == 200, verify_response.text
+
+        async with auth.get_session() as session:
+            challenges = (
+                (
+                    await session.execute(
+                        select(AuthChallenge).where(
+                            AuthChallenge.user_id == user_id,
+                            AuthChallenge.challenge_type == AuthChallengeType.SMS_OTP.value,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(challenges) == 1
+            assert challenges[0].used_at is not None
+    finally:
+        await auth.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_access_code_request_does_not_reveal_unknown_or_inactive_accounts(test_engine):
     auth = SimpleRBAC(
         engine=test_engine,
@@ -227,7 +420,7 @@ async def test_access_code_request_does_not_reveal_unknown_or_inactive_accounts(
     try:
         captured: list[str] = []
 
-        async def capture_access_code(user, code, request=None, redirect_url=None):
+        async def capture_access_code(user, code, request=None, redirect_url=None, **_kwargs):
             captured.append(code)
 
         auth.user_service.on_after_access_code_requested = capture_access_code

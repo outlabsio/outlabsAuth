@@ -44,13 +44,22 @@ from outlabs_auth.routers import (
     get_memberships_router,
     get_permissions_router,
     get_roles_router,
+    get_audit_router,
     get_users_router,
 )
 
 try:
-    from .transactional_mail import build_enterprise_example_transactional_mail_service
+    from .challenge_messaging import build_enterprise_example_challenge_messaging_service
+    from .transactional_mail import (
+        build_enterprise_example_transactional_mail_service,
+        resolve_mail_provider_name,
+    )
 except ImportError:
-    from transactional_mail import build_enterprise_example_transactional_mail_service
+    from challenge_messaging import build_enterprise_example_challenge_messaging_service
+    from transactional_mail import (
+        build_enterprise_example_transactional_mail_service,
+        resolve_mail_provider_name,
+    )
 
 # ============================================================================
 # Configuration
@@ -108,15 +117,39 @@ REDIS_KEY_PREFIX = (
 DEBUG_MODE = ENV != "production"
 ENABLE_MAGIC_LINKS = _env_flag("ENABLE_MAGIC_LINKS", default=DEBUG_MODE)
 ENABLE_ACCESS_CODES = _env_flag("ENABLE_ACCESS_CODES", default=DEBUG_MODE)
-MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag("MAGIC_LINK_DEBUG_TOKENS")
-ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag("ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE)
+MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
+    "MAGIC_LINK_DEBUG_TOKENS", default=DEBUG_MODE
+)
+ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag(
+    "ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE
+)
+INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
+    "INVITE_DEBUG_TOKENS", default=DEBUG_MODE
+)
+PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag(
+    "PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE
+)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
+API_PUBLIC_URL = _trim_trailing_slash(os.getenv("API_PUBLIC_URL", "http://localhost:8004"))
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+OUTLABS_AUTH_MAIL_PROVIDER = os.getenv("OUTLABS_AUTH_MAIL_PROVIDER", "auto")
 MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
 MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
 MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
 MAILGUN_FROM_EMAIL = os.getenv("MAILGUN_FROM_EMAIL")
 MAILGUN_FROM_NAME = os.getenv("MAILGUN_FROM_NAME", "Outlabs Auth")
-MAILGUN_RECIPIENT_OVERRIDE = os.getenv("MAILGUN_RECIPIENT_OVERRIDE")
+MAIL_RECIPIENT_OVERRIDE = os.getenv("MAIL_RECIPIENT_OVERRIDE") or os.getenv(
+    "MAILGUN_RECIPIENT_OVERRIDE"
+)
+MAILGUN_RECIPIENT_OVERRIDE = MAIL_RECIPIENT_OVERRIDE  # backward-compatible alias
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
+TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID = os.getenv(
+    "TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID"
+)
+TWILIO_SMS_FROM = os.getenv("TWILIO_SMS_FROM")
 FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
 
 
@@ -219,17 +252,27 @@ auth = EnterpriseRBAC(
     observability_config=obs_config,
     transactional_mail_service=build_enterprise_example_transactional_mail_service(
         frontend_url=FRONTEND_URL,
+        mail_provider=OUTLABS_AUTH_MAIL_PROVIDER,
         mailgun_api_base_url=MAILGUN_API_BASE_URL,
         mailgun_domain=MAILGUN_DOMAIN,
         mailgun_api_key=MAILGUN_API_KEY,
         mailgun_from_email=MAILGUN_FROM_EMAIL,
         mailgun_from_name=MAILGUN_FROM_NAME,
-        mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
+        recipient_override=MAIL_RECIPIENT_OVERRIDE,
+    ),
+    transactional_messaging_service=build_enterprise_example_challenge_messaging_service(
+        access_code_content_sid=TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID,
+        twilio_account_sid=TWILIO_ACCOUNT_SID,
+        twilio_auth_token=TWILIO_AUTH_TOKEN,
+        twilio_whatsapp_from=TWILIO_WHATSAPP_FROM,
+        twilio_sms_from=TWILIO_SMS_FROM,
     ),
 )
 
 latest_magic_links: dict[str, dict[str, Any]] = {}
 latest_access_codes: dict[str, dict[str, Any]] = {}
+latest_invites: dict[str, dict[str, Any]] = {}
+latest_phone_verifies: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -259,6 +302,11 @@ def _build_frontend_access_code_url(redirect_url: Optional[str] = None) -> str:
     return f"{FRONTEND_URL}/auth/access-code?{urlencode(params)}"
 
 
+def _build_frontend_invite_link(token: str) -> str:
+    params = {"token": token}
+    return f"{FRONTEND_URL}/auth/accept-invite?{urlencode(params)}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
@@ -275,8 +323,9 @@ async def lifespan(app: FastAPI):
         redis_ok = auth.redis_client is not None and auth.redis_client.is_available
         print(f"Redis ({REDIS_URL}): {'connected' if redis_ok else 'unavailable, reconnect scheduled'}")
 
-    if auth.config.enable_magic_links and MAGIC_LINK_DEBUG_TOKENS:
+    if getattr(auth.config, "enable_magic_links", False) and MAGIC_LINK_DEBUG_TOKENS:
         print("Magic links enabled with dev token capture")
+        original_on_after_magic_link = auth.user_service.on_after_magic_link_requested
 
         async def capture_magic_link(user, token, request=None, redirect_url=None):
             email = str(user.email).lower()
@@ -289,26 +338,87 @@ async def lifespan(app: FastAPI):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             print(f"Magic link for {email}: {magic_link_url}")
+            await original_on_after_magic_link(
+                user, token, request, redirect_url=redirect_url
+            )
 
         auth.user_service.on_after_magic_link_requested = capture_magic_link
 
-    if auth.config.enable_access_codes and ACCESS_CODE_DEBUG_CODES:
+    if getattr(auth.config, "enable_access_codes", False) and ACCESS_CODE_DEBUG_CODES:
         print("Access codes enabled with dev code capture")
+        original_on_after_access_code = auth.user_service.on_after_access_code_requested
 
-        async def capture_access_code(user, code, request=None, redirect_url=None):
+        async def capture_access_code(
+            user, code, request=None, redirect_url=None, **kwargs
+        ):
             email = str(user.email).lower()
+            phone = (getattr(user, "phone", None) or "").strip() or None
             access_code_url = _build_frontend_access_code_url(redirect_url=redirect_url)
-            latest_access_codes[email] = {
+            payload = {
                 "email": email,
+                "phone": phone,
                 "code": code,
                 "access_code_url": access_code_url,
                 "redirect_url": redirect_url,
+                "delivery_channel": kwargs.get("delivery_channel"),
+                "challenge_type": kwargs.get("challenge_type"),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            latest_access_codes[email] = payload
+            if phone:
+                latest_access_codes[phone] = payload
             print(f"Access code for {email}: {code}")
+            if phone:
+                print(f"Access code also keyed by phone {phone}")
             print(f"Access code entry URL for {email}: {access_code_url}")
+            await original_on_after_access_code(
+                user, code, request, redirect_url=redirect_url, **kwargs
+            )
 
         auth.user_service.on_after_access_code_requested = capture_access_code
+
+    if INVITE_DEBUG_TOKENS:
+        print("Invites enabled with dev token capture")
+        original_on_after_invite = auth.user_service.on_after_invite
+
+        async def capture_invite(user, token, request=None):
+            email = str(user.email).lower()
+            invite_url = _build_frontend_invite_link(token)
+            latest_invites[email] = {
+                "email": email,
+                "token": token,
+                "invite_url": invite_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Invite for {email}: {invite_url}")
+            await original_on_after_invite(user, token, request)
+
+        auth.user_service.on_after_invite = capture_invite
+
+    if PHONE_VERIFY_DEBUG_CODES:
+        print("Phone verify enabled with dev code capture")
+        original_send_phone_verify = auth.user_service.send_phone_verify_delivery
+
+        async def capture_phone_verify(
+            user, code, request=None, metadata=None, **extra_metadata
+        ):
+            email = str(user.email).lower()
+            latest_phone_verifies[email] = {
+                "email": email,
+                "phone": getattr(user, "phone", None),
+                "code": code,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Phone verify code for {email}: {code}")
+            return await original_send_phone_verify(
+                user,
+                code,
+                request=request,
+                metadata=metadata,
+                **extra_metadata,
+            )
+
+        auth.user_service.send_phone_verify_delivery = capture_phone_verify
 
     # Create example-owned domain tables only. Auth tables come from migrations.
     print("Ensuring example domain tables exist...")
@@ -322,6 +432,7 @@ async def lifespan(app: FastAPI):
     print("Including API routers...")
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
     app.include_router(get_users_router(auth, prefix="/v1/users"))
+    app.include_router(get_audit_router(auth, prefix="/v1/audit-events"))
     app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
     app.include_router(get_api_key_admin_router(auth, prefix="/v1/admin/entities"))
     app.include_router(get_integration_principals_router(auth, prefix="/v1/admin"))
@@ -332,24 +443,112 @@ async def lifespan(app: FastAPI):
     app.include_router(get_config_router(auth, prefix="/v1/config"))
     app.include_router(get_team_directory_router(auth, prefix="/v1"))
 
+    if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+        from outlabs_auth.oauth.providers import get_google_client
+        from outlabs_auth.routers.oauth import get_oauth_router
+        from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
+
+        google_client = get_google_client(
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+        )
+        google_login_prefix = "/v1/oauth/google"
+        google_associate_prefix = "/v1/oauth-associate/google"
+        app.include_router(
+            get_oauth_router(
+                google_client,
+                auth,
+                state_secret=SECRET_KEY,
+                prefix=google_login_prefix,
+                redirect_url=f"{API_PUBLIC_URL}{google_login_prefix}/callback",
+                success_redirect_url=f"{FRONTEND_URL}/auth/oauth/callback",
+                error_redirect_url=f"{FRONTEND_URL}/auth/login",
+                associate_by_email=True,
+                is_verified_by_default=True,
+                require_existing_user=True,
+                cookie_secure=not DEBUG_MODE,
+            )
+        )
+        app.include_router(
+            get_oauth_associate_router(
+                google_client,
+                auth,
+                state_secret=SECRET_KEY,
+                prefix=google_associate_prefix,
+                redirect_url=f"{API_PUBLIC_URL}{google_associate_prefix}/callback",
+                success_redirect_url=f"{FRONTEND_URL}/app/account",
+                cookie_secure=not DEBUG_MODE,
+            )
+        )
+        print(
+            "Google OAuth login (invite-only) mounted at "
+            f"{google_login_prefix} "
+            f"(callback {API_PUBLIC_URL}{google_login_prefix}/callback)"
+        )
+        print(
+            "Google OAuth associate mounted at "
+            f"{google_associate_prefix} "
+            f"(callback {API_PUBLIC_URL}{google_associate_prefix}/callback)"
+        )
+    else:
+        print(
+            "Google OAuth login/associate: not mounted "
+            "(set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable)"
+        )
+
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")
     print(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}")
-    print(f"API: http://localhost:8004")
-    print(f"Docs: http://localhost:8004/docs")
+    print(f"API: {API_PUBLIC_URL}")
+    print(f"Docs: {API_PUBLIC_URL}/docs")
     print(f"Frontend URL: {FRONTEND_URL}")
     print(f"Magic links: {'enabled' if auth.config.enable_magic_links else 'disabled'}")
     print(f"Access codes: {'enabled' if auth.config.enable_access_codes else 'disabled'}")
     if MAGIC_LINK_DEBUG_TOKENS:
         print("Magic link debug endpoint: /dev/auth/magic-link/latest?email=<email>")
     if ACCESS_CODE_DEBUG_CODES:
-        print("Access code debug endpoint: /dev/auth/access-code/latest?email=<email>")
-    if MAILGUN_DOMAIN and MAILGUN_API_KEY and MAILGUN_FROM_EMAIL:
-        print(f"Mailgun domain: {MAILGUN_DOMAIN}")
-        if MAILGUN_RECIPIENT_OVERRIDE:
-            print(f"Mailgun sandbox override recipient: {MAILGUN_RECIPIENT_OVERRIDE}")
+        print(
+            "Access code debug endpoint: "
+            "/dev/auth/access-code/latest?email=<email> or ?phone=<e164>"
+        )
+    if INVITE_DEBUG_TOKENS:
+        print("Invite debug endpoint: /dev/auth/invite/latest?email=<email>")
+    if PHONE_VERIFY_DEBUG_CODES:
+        print("Phone verify debug endpoint: /dev/auth/phone-verify/latest?email=<email>")
+    resolved_mail_provider = resolve_mail_provider_name(OUTLABS_AUTH_MAIL_PROVIDER)
+    print(f"Transactional mail provider: {resolved_mail_provider}")
+    if MAIL_RECIPIENT_OVERRIDE:
+        print(f"Mail sandbox override recipient: {MAIL_RECIPIENT_OVERRIDE}")
+    if resolved_mail_provider == "console":
+        print(
+            "Transactional mail: console fallback "
+            "(set OUTLABS_AUTH_MAIL_PROVIDER + provider credentials to send live mail)"
+        )
+    whatsapp_live = bool(
+        TWILIO_ACCOUNT_SID
+        and TWILIO_AUTH_TOKEN
+        and TWILIO_WHATSAPP_FROM
+        and TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID
+    )
+    sms_live = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_SMS_FROM)
+    if whatsapp_live:
+        print(
+            "Challenge messaging WhatsApp: Twilio "
+            f"(from {TWILIO_WHATSAPP_FROM}; content SID configured)"
+        )
     else:
-        print("Mailgun: not configured, falling back to console email output")
+        print(
+            "Challenge messaging WhatsApp: console spike "
+            "(set TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM/"
+            "WHATSAPP_ACCESS_CODE_CONTENT_SID for live Twilio delivery)"
+        )
+    if sms_live:
+        print(f"Challenge messaging SMS: Twilio (from {TWILIO_SMS_FROM})")
+    else:
+        print(
+            "Challenge messaging SMS: console spike "
+            "(set TWILIO_ACCOUNT_SID/AUTH_TOKEN/SMS_FROM for live Twilio SMS)"
+        )
 
     yield
 
@@ -428,25 +627,81 @@ async def open_latest_magic_link(email: str = Query(..., min_length=1)):
 
 
 @app.get("/dev/auth/access-code/latest", include_in_schema=False)
-async def latest_access_code(email: str = Query(..., min_length=1)):
+async def latest_access_code(
+    email: Optional[str] = Query(None, min_length=1),
+    phone: Optional[str] = Query(None, min_length=1),
+):
     """Return the latest captured access code for local development only."""
     if not ACCESS_CODE_DEBUG_CODES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    captured = latest_access_codes.get(email.lower())
+    has_email = bool(email and email.strip())
+    has_phone = bool(phone and phone.strip())
+    if has_email == has_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide exactly one of email or phone",
+        )
+
+    lookup_key = email.lower() if has_email else phone.strip()
+    captured = latest_access_codes.get(lookup_key)
     if not captured:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No access code has been requested for that email",
+            detail=(
+                "No access code has been requested for that email"
+                if has_email
+                else "No access code has been requested for that phone"
+            ),
         )
     return captured
 
 
 @app.get("/dev/auth/access-code/open", include_in_schema=False)
-async def open_latest_access_code(email: str = Query(..., min_length=1)):
+async def open_latest_access_code(
+    email: Optional[str] = Query(None, min_length=1),
+    phone: Optional[str] = Query(None, min_length=1),
+):
     """Redirect to the access-code entry page for local development only."""
-    captured = await latest_access_code(email=email)
+    captured = await latest_access_code(email=email, phone=phone)
     return RedirectResponse(str(captured["access_code_url"]))
+
+
+@app.get("/dev/auth/invite/latest", include_in_schema=False)
+async def latest_invite(email: str = Query(..., min_length=1)):
+    """Return the latest captured invite token for local development only."""
+    if not INVITE_DEBUG_TOKENS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_invites.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No invite has been issued for that email",
+        )
+    return captured
+
+
+@app.get("/dev/auth/invite/open", include_in_schema=False)
+async def open_latest_invite(email: str = Query(..., min_length=1)):
+    """Redirect to the latest captured invite accept URL for local development only."""
+    captured = await latest_invite(email=email)
+    return RedirectResponse(str(captured["invite_url"]))
+
+
+@app.get("/dev/auth/phone-verify/latest", include_in_schema=False)
+async def latest_phone_verify(email: str = Query(..., min_length=1)):
+    """Return the latest captured phone-verify code for local development only."""
+    if not PHONE_VERIFY_DEBUG_CODES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_phone_verifies.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No phone verification code has been requested for that email",
+        )
+    return captured
 
 
 async def get_session(request: Request):

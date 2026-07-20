@@ -114,12 +114,37 @@ def test_auth_config_preserves_explicit_redis_opt_out(test_secret_key: str):
 
 
 @pytest.mark.unit
-def test_auth_config_rejects_cache_without_redis(test_secret_key: str):
-    with pytest.raises(ValidationError, match="enable_caching=True requires Redis"):
+def test_auth_config_rejects_cache_without_backend(test_secret_key: str):
+    with pytest.raises(ValidationError, match="enable_caching=True requires cache_backend"):
         AuthConfig(
             secret_key=test_secret_key,
             enable_caching=True,
         )
+
+
+@pytest.mark.unit
+def test_auth_config_allows_memory_cache_without_redis(test_secret_key: str):
+    config = AuthConfig(
+        secret_key=test_secret_key,
+        cache_backend="memory",
+    )
+
+    assert config.cache_backend == "memory"
+    assert config.enable_caching is True
+    assert config.redis_enabled is False
+    assert config.redis_key_prefix == "outlabs-auth:memory"
+
+
+@pytest.mark.unit
+def test_auth_config_redis_url_selects_redis_cache_backend(test_secret_key: str):
+    config = AuthConfig(
+        secret_key=test_secret_key,
+        redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:config",
+    )
+
+    assert config.cache_backend == "redis"
+    assert config.enable_caching is True
 
 
 @pytest.mark.unit
@@ -181,3 +206,22 @@ async def test_cache_service_listener_lifecycle(auth_config):
 
     assert cache_service._listener_task is None
     assert redis.pubsub.closed is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_simple_rbac_initializes_memory_cache(test_engine, test_secret_key: str):
+    auth = SimpleRBAC(
+        engine=test_engine,
+        secret_key=test_secret_key,
+        cache_backend="memory",
+        enable_token_cleanup=False,
+    )
+    await auth.initialize()
+    try:
+        assert auth.config.cache_backend == "memory"
+        assert auth.cache_service is not None
+        assert auth.redis_client is None
+        assert auth.cache_service.redis_client.is_available is True
+    finally:
+        await auth.shutdown()

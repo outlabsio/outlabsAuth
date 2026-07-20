@@ -12,6 +12,7 @@ These tests ensure role management works correctly end-to-end.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -468,6 +469,101 @@ async def test_admin_can_revoke_role_from_user(
     roles = user_resp.json()
     # Response is list of RoleResponse, not wrapped memberships
     assert not any(r["id"] == role_id for r in roles)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_patch_direct_role_membership_validity_window(
+    client: httpx.AsyncClient, admin_user: dict, regular_user: dict
+):
+    """Admin can update a direct role membership validity window via PATCH."""
+    role_name = f"window-{uuid.uuid4().hex[:8]}"
+    create_resp = await client.post(
+        "/v1/roles/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"name": role_name, "display_name": "Window Role"},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    role_id = create_resp.json()["id"]
+
+    assign_resp = await client.post(
+        f"/v1/users/{regular_user['id']}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_id": role_id},
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+    membership_id = assign_resp.json()["id"]
+
+    valid_from = datetime.now(timezone.utc).replace(microsecond=0)
+    valid_until = valid_from + timedelta(days=30)
+
+    patch_resp = await client.patch(
+        f"/v1/users/{regular_user['id']}/role-memberships/{membership_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "valid_from": valid_from.isoformat().replace("+00:00", "Z"),
+            "valid_until": valid_until.isoformat().replace("+00:00", "Z"),
+        },
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    payload = patch_resp.json()
+    assert payload["id"] == membership_id
+    assert payload["status"] == "active"
+    assert payload["valid_from"] is not None
+    assert payload["valid_until"] is not None
+
+    memberships_resp = await client.get(
+        f"/v1/users/{regular_user['id']}/role-memberships?include_inactive=true",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert memberships_resp.status_code == 200, memberships_resp.text
+    membership = next(item for item in memberships_resp.json() if item["id"] == membership_id)
+    assert membership["valid_from"] is not None
+    assert membership["valid_until"] is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_list_and_revoke_another_users_personal_api_keys(
+    client: httpx.AsyncClient,
+    auth_instance: SimpleRBAC,
+    admin_user: dict,
+    regular_user: dict,
+):
+    """Admin can list and revoke personal API keys owned by another user."""
+    async with auth_instance.get_session() as session:
+        _, api_key = await auth_instance.api_key_service.create_api_key(
+            session,
+            owner_id=uuid.UUID(regular_user["id"]),
+            name=f"admin-manage-{uuid.uuid4().hex[:8]}",
+            scopes=["user:read"],
+            actor_user_id=uuid.UUID(regular_user["id"]),
+        )
+        await session.commit()
+        key_id = str(api_key.id)
+
+    list_resp = await client.get(
+        f"/v1/users/{regular_user['id']}/api-keys",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert list_resp.status_code == 200, list_resp.text
+    keys = list_resp.json()
+    assert any(item["id"] == key_id for item in keys)
+
+    revoke_resp = await client.delete(
+        f"/v1/users/{regular_user['id']}/api-keys/{key_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert revoke_resp.status_code == 204, revoke_resp.text
+
+    list_after = await client.get(
+        f"/v1/users/{regular_user['id']}/api-keys",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert list_after.status_code == 200, list_after.text
+    revoked = next(item for item in list_after.json() if item["id"] == key_id)
+    assert revoked["status"] == "revoked"
+
 
 
 @pytest.mark.integration

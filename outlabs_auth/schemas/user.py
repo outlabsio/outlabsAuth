@@ -19,6 +19,7 @@ class UserResponse(BaseModel):
     last_name: Optional[str] = None
     status: str  # UserStatus enum value
     email_verified: bool = False
+    phone_verified: bool = False
     is_superuser: bool = False
     avatar_url: Optional[str] = None
     phone: Optional[str] = None
@@ -50,6 +51,11 @@ class UserUpdateRequest(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(
+        default=None,
+        description="E.164 WhatsApp/SMS delivery number. Send null or empty to clear.",
+        max_length=20,
+    )
 
 
 class UserCreateRequest(BaseModel):
@@ -76,6 +82,12 @@ class ChangePasswordRequest(BaseModel):
 
     current_password: str
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class PhoneVerifyCodeRequest(BaseModel):
+    """Confirm a WhatsApp/SMS phone verification code."""
+
+    code: str = Field(..., min_length=4, max_length=12)
 
 
 class AdminResetPasswordRequest(BaseModel):

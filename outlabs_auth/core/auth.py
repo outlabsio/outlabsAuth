@@ -105,6 +105,7 @@ class OutlabsAuth:
         background_job_mode: Literal["disabled", "embedded"] = "disabled",
         notification_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
+        transactional_messaging_service: Optional[Any] = None,
         # Observability
         observability_config: Optional[Any] = None,
         observability_logger: Optional[Any] = None,
@@ -135,9 +136,8 @@ class OutlabsAuth:
             enable_entity_hierarchy: Enable entity system (EnterpriseRBAC)
             enable_context_aware_roles: Context-based role permissions (optional)
             enable_abac: Attribute-based access control (optional)
-            enable_caching: Redis-backed permission caching. Defaults to True
-                when Redis is enabled; pass False to opt out while keeping
-                Redis counters/rate limits.
+            enable_caching: Permission caching. Defaults to True when Redis is
+                enabled or when cache_backend='memory'; pass False to opt out.
             enable_audit_log: Audit logging for compliance (optional)
             trust_resource_context_header: Trust client-provided X-Resource-Context headers for ABAC
             store_oauth_provider_tokens: Persist OAuth provider tokens in database
@@ -167,6 +167,8 @@ class OutlabsAuth:
                 process for single-process development only.
             notification_service: NotificationService instance (optional)
             transactional_mail_service: Optional transactional auth mail service
+            transactional_messaging_service: Optional channel-agnostic challenge
+                delivery service (magic link / access code; host-owned email/WhatsApp)
             observability_logger: Optional host-managed logger adapter for auth events
             observability_metrics_registry: Optional Prometheus registry for auth metrics
             observability_instrument_external_engine: Allow DB query instrumentation when the engine is host-owned
@@ -187,7 +189,15 @@ class OutlabsAuth:
             )
 
         resolved_redis_enabled = redis_enabled if redis_enabled is not None else bool(redis_url)
-        resolved_enable_caching = enable_caching if enable_caching is not None else resolved_redis_enabled
+        requested_cache_backend = kwargs.get("cache_backend")
+        if enable_caching is not None:
+            resolved_enable_caching = enable_caching
+        elif resolved_redis_enabled:
+            resolved_enable_caching = True
+        elif requested_cache_backend == "memory":
+            resolved_enable_caching = True
+        else:
+            resolved_enable_caching = False
 
         # Validate configuration
         self._validate_config(
@@ -196,6 +206,7 @@ class OutlabsAuth:
             enable_abac=enable_abac,
             enable_caching=resolved_enable_caching,
             redis_enabled=resolved_redis_enabled,
+            cache_backend=requested_cache_backend if isinstance(requested_cache_backend, str) else "none",
             store_oauth_provider_tokens=store_oauth_provider_tokens,
             oauth_token_encryption_key=oauth_token_encryption_key,
         )
@@ -260,6 +271,7 @@ class OutlabsAuth:
         # Store notification service
         self.notification_service = notification_service
         self.transactional_mail_service = transactional_mail_service
+        self.transactional_messaging_service = transactional_messaging_service
 
         # Initialize observability
         self.observability_config = observability_config
@@ -333,15 +345,18 @@ class OutlabsAuth:
         redis_enabled: bool,
         store_oauth_provider_tokens: bool,
         oauth_token_encryption_key: Optional[str],
+        cache_backend: str = "none",
     ):
         """Validate configuration is internally consistent."""
         # Context-aware roles require entity hierarchy
         if enable_context_aware_roles and not enable_entity_hierarchy:
             raise ConfigurationError("enable_context_aware_roles requires enable_entity_hierarchy=True")
 
-        # Caching requires Redis to be enabled.
-        if enable_caching and not redis_enabled:
-            raise ConfigurationError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
+        # Caching requires Redis or the in-process memory backend (DD-057).
+        if enable_caching and not redis_enabled and cache_backend != "memory":
+            raise ConfigurationError(
+                "enable_caching=True requires Redis (redis_url/redis_enabled) or cache_backend='memory'"
+            )
 
         if store_oauth_provider_tokens and not oauth_token_encryption_key:
             raise ConfigurationError("store_oauth_provider_tokens=True requires oauth_token_encryption_key")
@@ -513,6 +528,7 @@ class OutlabsAuth:
             auth_service=self.auth_service,
             user_audit_service=self.user_audit_service,
             transactional_mail_service=self.transactional_mail_service,
+            transactional_messaging_service=self.transactional_messaging_service,
         )
         self.role_service = RoleService(
             self.config,
@@ -536,13 +552,28 @@ class OutlabsAuth:
             observability=self.observability,
         )
 
-        # Initialize Redis client if enabled
+        # Initialize Redis client and/or permission cache (DD-057)
         if self.config.redis_enabled:
             from outlabs_auth.services.redis_client import RedisClient
 
             self.redis_client = RedisClient(self.config)
-            if self.config.enable_caching:
+
+        if self.config.enable_caching:
+            if self.config.cache_backend == "redis":
+                if self.redis_client is None:
+                    from outlabs_auth.services.redis_client import RedisClient
+
+                    self.redis_client = RedisClient(self.config)
                 self.cache_service = CacheService(self.redis_client, self.config)
+                self.cache = self.cache_service
+            elif self.config.cache_backend == "memory":
+                from outlabs_auth.services.cache_backend import MemoryCacheBackend
+
+                memory_backend = MemoryCacheBackend(
+                    self.config,
+                    max_entries=self.config.cache_memory_max_entries,
+                )
+                self.cache_service = CacheService(memory_backend, self.config)
                 self.cache = self.cache_service
 
         if self.config.store_oauth_provider_tokens:
@@ -1308,6 +1339,11 @@ class OutlabsAuth:
             mail_aclose = getattr(self.transactional_mail_service, "aclose", None)
             if mail_aclose is not None:
                 await mail_aclose()
+
+        if self.transactional_messaging_service is not None:
+            messaging_aclose = getattr(self.transactional_messaging_service, "aclose", None)
+            if messaging_aclose is not None:
+                await messaging_aclose()
 
         if self.cache_service is not None:
             await self.cache_service.shutdown()

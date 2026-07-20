@@ -110,6 +110,63 @@ class UserAuditService(BaseService[UserAuditEvent]):
         result = await session.execute(stmt)
         return list(result.scalars().all()), total
 
+    async def list_events(
+        self,
+        session: AsyncSession,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        event_category: Optional[str] = None,
+        event_type: Optional[str] = None,
+        subject_user_id: Optional[UUID] = None,
+        actor_user_id: Optional[UUID] = None,
+        entity_id: Optional[UUID] = None,
+        root_entity_ids: Optional[List[UUID]] = None,
+        occurred_from: Optional[datetime] = None,
+        occurred_to: Optional[datetime] = None,
+    ) -> Tuple[List[UserAuditEvent], int]:
+        """Return paginated audit events across users, with optional scope filters."""
+        filters: list[Any] = []
+        if event_category:
+            filters.append(cast(Any, UserAuditEvent.event_category) == event_category)
+        if event_type:
+            filters.append(cast(Any, UserAuditEvent.event_type) == event_type)
+        if subject_user_id:
+            filters.append(cast(Any, UserAuditEvent.subject_user_id) == subject_user_id)
+        if actor_user_id:
+            filters.append(cast(Any, UserAuditEvent.actor_user_id) == actor_user_id)
+        if entity_id:
+            filters.append(cast(Any, UserAuditEvent.entity_id) == entity_id)
+        if root_entity_ids is not None:
+            if not root_entity_ids:
+                return [], 0
+            filters.append(
+                cast(Any, UserAuditEvent.root_entity_id).in_(root_entity_ids)
+            )
+        if occurred_from is not None:
+            filters.append(cast(Any, UserAuditEvent.occurred_at) >= occurred_from)
+        if occurred_to is not None:
+            filters.append(cast(Any, UserAuditEvent.occurred_at) <= occurred_to)
+
+        occurred_at_col = cast(Any, UserAuditEvent.occurred_at)
+        created_at_col = cast(Any, UserAuditEvent.created_at)
+
+        count_stmt = select(func.count()).select_from(UserAuditEvent)
+        if filters:
+            count_stmt = count_stmt.where(*filters)
+        total = int((await session.execute(count_stmt)).scalar_one())
+
+        stmt = select(UserAuditEvent)
+        if filters:
+            stmt = stmt.where(*filters)
+        stmt = (
+            stmt.order_by(occurred_at_col.desc(), created_at_col.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all()), total
+
     @classmethod
     def _normalize_payload(cls, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if payload is None:

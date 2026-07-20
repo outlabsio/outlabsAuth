@@ -3,18 +3,26 @@
 This directory contains **design specifications and architectural decisions** for maintainers and contributors.
 
 ## For Library Users
-Looking for usage documentation? See **[docs-library/](../docs-library/)** instead.
+
+Start with the **[OutlabsAuth Handbook](../docs-library/)** (`docs-library/`), not
+this folder. That tree is written for people integrating the library and is the
+content source for a future public docs site.
+
+- **[Handbook home](../docs-library/)** — reading paths and full guide index
+- **[Getting Started](../docs-library/01-Getting-Started.md)** — install through first login
+- **[AUTH_UI.md](./AUTH_UI.md)** — [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) sister admin console
+- **[../examples/](../examples/)** — runnable SimpleRBAC / EnterpriseRBAC apps
+
+This `docs/` tree is design specs and maintainer material.
 
 ## Design Documents
 
-### Core Vision
-- **REDESIGN_VISION.md** - Project vision and architectural approach
+### Architecture
 - **LIBRARY_ARCHITECTURE.md** - Technical architecture details
-- **IMPLEMENTATION_ROADMAP.md** - Development phases and timeline
 - **ENTITY_AUTHORIZATION_ROLE_ONLY.md** - Decision memo for role-only entity authorization
 
 ### Design Decisions
-- **DESIGN_DECISIONS.md** - Complete record of architectural decisions (DD-001 to DD-037+)
+- **DESIGN_DECISIONS.md** - Why the architecture is the way it is (DD-001 onward)
 - **CURRENT_IMPLEMENTATION_STATUS.md** - Current delivered slices, accepted implementation nuances, and known remaining gaps
 - **COMPARISON_MATRIX.md** - SimpleRBAC vs EnterpriseRBAC feature comparison
 
@@ -33,9 +41,12 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 
 ### Extensions
 - **AUTH_EXTENSIONS.md** - Optional features (OAuth, MFA, passwordless)
+- **WHATSAPP_ACCOUNT_MESSAGING.md** - WhatsApp/OTP delivery via host-owned providers (intents vs NotificationService)
 - **ERROR_HANDLING.md** - Exception hierarchy specification
-- **MIGRATION_GUIDE.md** - Migration from centralized API
 
 ---
 
-**Note**: These are planning/specification documents. Actual implementation may differ - always check the code and `docs-library/` for current behavior.
+**Note**: These describe the current system and were verified against the source on
+2026-07-16. Where a doc and the code disagree, **the code wins** — and that is a bug in
+the doc worth fixing rather than working around. The `examples/` are the reference
+integration, and `README.md`'s quickstart is executed by a test.

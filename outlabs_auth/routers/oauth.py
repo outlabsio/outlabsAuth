@@ -8,13 +8,19 @@ Provides ready-to-use OAuth routes for authentication with social providers
 import secrets
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional, cast
+from typing import Any, Optional, Union, cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.core.exceptions import InvalidInputError
+from outlabs_auth.core.exceptions import (
+    AccountInactiveError,
+    InvalidInputError,
+    OutlabsAuthException,
+)
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth_state_store import consume_oauth_state, issue_oauth_state
@@ -81,6 +87,43 @@ def _normalize_oauth_email(email: Optional[str]) -> Optional[str]:
         return None
 
 
+def _build_token_redirect(base_url: str, tokens: dict[str, Any]) -> str:
+    """Build SPA redirect with tokens in the URL fragment (not query string)."""
+    base = base_url.split("#", 1)[0]
+    fragment = urlencode(
+        {
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_type": tokens.get("token_type") or "bearer",
+        }
+    )
+    return f"{base}#{fragment}"
+
+
+def _build_error_redirect(base_url: str, *, error_code: str) -> str:
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}{urlencode({'oauth_error': error_code})}"
+
+
+def _oauth_error_code(exc: BaseException) -> str:
+    if isinstance(exc, HTTPException):
+        detail = str(exc.detail or "")
+        if "No account found" in detail:
+            return "unknown_account"
+        if "already exists" in detail:
+            return "account_exists"
+        if "inactive" in detail.lower() or "invited" in detail.lower():
+            return "inactive"
+        if "state" in detail.lower():
+            return "invalid_state"
+        return "provider"
+    if isinstance(exc, AccountInactiveError):
+        return "inactive"
+    if isinstance(exc, OutlabsAuthException):
+        return "auth"
+    return "provider"
+
+
 def get_oauth_router(
     oauth_client: Any,
     auth: Any,
@@ -88,10 +131,20 @@ def get_oauth_router(
     prefix: str = "",
     tags: Optional[list[str | Enum]] = None,
     redirect_url: Optional[str] = None,
+    success_redirect_url: Optional[str] = None,
+    error_redirect_url: Optional[str] = None,
     associate_by_email: bool = False,
     is_verified_by_default: bool = False,
+    require_existing_user: bool = False,
+    cookie_secure: bool = True,
 ) -> APIRouter:
-    """Generate OAuth authentication router for a provider."""
+    """
+    Generate OAuth authentication router for a provider.
+
+    When ``require_existing_user`` is True, unknown emails are rejected (invite-only /
+    no self-registration via OAuth). When ``success_redirect_url`` is set, successful
+    callbacks redirect to the SPA with tokens in the URL fragment instead of JSON.
+    """
     from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
 
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
@@ -134,6 +187,7 @@ def get_oauth_router(
             state=state,
             provider=oauth_client.name,
             flow="login",
+            cookie_secure=cookie_secure,
         )
 
         authorization_url = await oauth_client.get_authorization_url(
@@ -147,9 +201,16 @@ def get_oauth_router(
     @router.get(
         "/callback",
         name=callback_route_name,
+        response_model=None,
         summary=f"{oauth_client.name.title()} OAuth callback",
         description="Handles OAuth provider callback and authenticates user",
         responses={
+            status.HTTP_302_FOUND: {
+                "description": "SPA redirect when success_redirect_url is configured",
+            },
+            status.HTTP_200_OK: {
+                "description": "Token JSON when success_redirect_url is unset",
+            },
             status.HTTP_400_BAD_REQUEST: {
                 "description": "Invalid state token or inactive user",
                 "content": {
@@ -162,6 +223,10 @@ def get_oauth_router(
                             "no_email": {
                                 "summary": "Provider didn't return email",
                                 "value": {"detail": "Email not available from OAuth provider"},
+                            },
+                            "unknown_account": {
+                                "summary": "Invite-only: no local account for provider email",
+                                "value": {"detail": "No account found for this email"},
                             },
                             "user_exists": {
                                 "summary": "User with this email already exists",
@@ -184,60 +249,82 @@ def get_oauth_router(
         access_token_state: tuple[dict[str, Any], str] = Depends(
             oauth2_authorize_callback
         ),
-    ):
+    ) -> Union[dict[str, Any], RedirectResponse]:
+        def _maybe_error_redirect(exc: BaseException) -> RedirectResponse:
+            if not error_redirect_url:
+                raise exc
+            return RedirectResponse(
+                url=_build_error_redirect(
+                    error_redirect_url, error_code=_oauth_error_code(exc)
+                ),
+                status_code=status.HTTP_302_FOUND,
+            )
+
         token, state = access_token_state
 
         try:
             decode_state_token(state, state_secret)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid OAuth state token",
+            return _maybe_error_redirect(
+                HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid OAuth state token",
+                )
             )
 
-        await consume_oauth_state(
-            session=session,
-            request=request,
-            response=response,
-            state=state,
-            provider=oauth_client.name,
-            flow="login",
-        )
+        try:
+            await consume_oauth_state(
+                session=session,
+                request=request,
+                response=response,
+                state=state,
+                provider=oauth_client.name,
+                flow="login",
+            )
 
-        user_info = await get_oauth_user_info(oauth_client, token)
+            user_info = await get_oauth_user_info(oauth_client, token)
 
-        user = await oauth_callback(
-            auth=auth,
-            session=session,
-            provider=oauth_client.name,
-            access_token=token["access_token"],
-            refresh_token=token.get("refresh_token"),
-            expires_at=token.get("expires_at"),
-            account_id=user_info.provider_user_id,
-            account_email=user_info.email,
-            account_email_verified=user_info.email_verified,
-            associate_by_email=associate_by_email,
-            is_verified_by_default=is_verified_by_default,
-            request=request,
-        )
+            user = await oauth_callback(
+                auth=auth,
+                session=session,
+                provider=oauth_client.name,
+                access_token=token["access_token"],
+                refresh_token=token.get("refresh_token"),
+                expires_at=token.get("expires_at"),
+                account_id=user_info.provider_user_id,
+                account_email=user_info.email,
+                account_email_verified=user_info.email_verified,
+                associate_by_email=associate_by_email,
+                is_verified_by_default=is_verified_by_default,
+                require_existing_user=require_existing_user,
+                request=request,
+            )
 
-        tokens = await auth.auth_service.create_tokens_for_user(
-            session,
-            user,
-            device_name=f"oauth:{oauth_client.name}",
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-            auth_method=f"oauth:{oauth_client.name}",
-        )
+            tokens = await auth.auth_service.create_tokens_for_user(
+                session,
+                user,
+                device_name=f"oauth:{oauth_client.name}",
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                auth_method=f"oauth:{oauth_client.name}",
+            )
 
-        await auth.user_service.on_after_login(user, request)
-        await auth.user_service.on_after_oauth_login(user, oauth_client.name, request)
+            await auth.user_service.on_after_login(user, request)
+            await auth.user_service.on_after_oauth_login(user, oauth_client.name, request)
 
-        # OAuth callback is a GET endpoint; commit explicitly before the UoW
-        # middleware's read-method rollback step runs.
-        await session.commit()
+            # OAuth callback is a GET endpoint; commit explicitly before the UoW
+            # middleware's read-method rollback step runs.
+            await session.commit()
+        except (HTTPException, OutlabsAuthException) as exc:
+            return _maybe_error_redirect(exc)
 
-        return tokens.to_dict()
+        token_payload = tokens.to_dict()
+        if success_redirect_url:
+            return RedirectResponse(
+                url=_build_token_redirect(success_redirect_url, token_payload),
+                status_code=status.HTTP_302_FOUND,
+            )
+        return token_payload
 
     return router
 
@@ -254,6 +341,7 @@ async def oauth_callback(
     expires_at: Optional[int] = None,
     associate_by_email: bool = False,
     is_verified_by_default: bool = False,
+    require_existing_user: bool = False,
     request: Optional[Request] = None,
 ) -> Any:
     """Resolve/create a user and social-account link for an OAuth callback."""
@@ -319,12 +407,21 @@ async def oauth_callback(
     created_user = False
 
     if user is None:
+        if require_existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No account found for this email",
+            )
+        # create_user requires a password today; use a one-time placeholder then
+        # clear it so the account is OAuth-only (no PASSWORD auth method).
         random_password = _generate_oauth_placeholder_password(auth.config)
         user = await auth.user_service.create_user(
             session=session,
             email=normalized_email,
             password=random_password,
         )
+        user.hashed_password = None
+        user.auth_methods = []
         user.email_verified = account_email_verified if is_verified_by_default else False
         created_user = True
     elif not associate_by_email:

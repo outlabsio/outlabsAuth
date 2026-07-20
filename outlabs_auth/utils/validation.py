@@ -45,6 +45,30 @@ def validate_email(email: str) -> str:
     return email
 
 
+_E164_PHONE_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def validate_phone(phone: str, field_name: str = "phone") -> str:
+    """
+    Validate and normalize a phone number for WhatsApp/SMS delivery.
+
+    Expects E.164 (e.g. +15551234567). Strips whitespace only.
+    """
+    if not phone or not isinstance(phone, str):
+        raise InvalidInputError(
+            message=f"{field_name} is required",
+            details={"field": field_name},
+        )
+
+    normalized = phone.strip().replace(" ", "")
+    if not _E164_PHONE_RE.match(normalized):
+        raise InvalidInputError(
+            message="Phone must be E.164 format (e.g. +15551234567)",
+            details={"field": field_name, "value": phone},
+        )
+    return normalized
+
+
 def validate_name(
     name: str, field_name: str = "name", min_length: int = 1, max_length: int = 100
 ) -> str:

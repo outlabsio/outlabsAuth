@@ -1,16 +1,11 @@
 # OutlabsAuth Library - API Design & Developer Experience
 
-**Version**: 1.4
-**Date**: 2025-01-14
-**Status**: Design Phase
+**Applies to**: `outlabs-auth` (alpha — the API surface is still settling before 1.0)
 
-**Architecture Changes (v1.4)**:
-- **Unified AuthDeps**: Single dependency class replaces SimpleDeps, MultiSourceDeps, etc. (DD-035)
-- **JWT Service Tokens**: Zero-DB authentication for internal microservices (DD-034)
-- **Redis Counters**: API key usage tracking with 99%+ reduction in DB writes (DD-033)
-- **Temporary Locks**: API keys locked for 30 min after 10 failures (no permanent revocation) (DD-028)
-- **12-Char Prefixes**: API key prefixes (12 characters for identification) (DD-028)
-- **SHA-256 Hashing**: Fast hashing appropriate for high-entropy secrets (DD-028 corrected)
+This document is a worked-examples companion to the README. The README quickstart is
+executed by `tests/unit/test_readme_quickstart.py`, and the two runnable reference
+apps are `examples/simple_rbac/main.py` and `examples/enterprise_rbac/main.py`. When
+this document and those disagree, they are right.
 
 ---
 
@@ -22,9 +17,9 @@
 4. [EnterpriseRBAC Examples](#enterpriserbac-examples)
    - [Basic Hierarchy](#basic-hierarchy-examples)
    - [Optional Features](#optional-features-examples)
-5. **[API Key Authentication](#api-key-authentication)** - Core v1.0 feature
-6. **[JWT Service Tokens](#jwt-service-tokens)** ← NEW (v1.4 - DD-034)
-7. **[Multi-Source Authentication](#multi-source-authentication)** - Updated for AuthDeps
+5. [API Key Authentication](#api-key-authentication)
+6. [JWT Service Tokens](#jwt-service-tokens)
+7. [Multi-Source Authentication](#multi-source-authentication)
 8. [FastAPI Integration Patterns](#fastapi-integration-patterns)
 9. [Configuration](#configuration)
 10. [Testing Your App](#testing-your-app)
@@ -34,18 +29,11 @@
 ## Installation
 
 ```bash
-# Install from PyPI (when published)
 pip install outlabs-auth
-
-# Install with optional dependencies
-pip install outlabs-auth[redis]  # For caching support
-pip install outlabs-auth[full]   # All optional dependencies
-
-# Install from source (development)
-git clone https://github.com/outlabs/outlabs-auth.git
-cd outlabs-auth
-pip install -e .
 ```
+
+You also need a PostgreSQL database reachable from the consuming app. Connection URLs
+use the asyncpg driver: `postgresql+asyncpg://user:pass@host:5432/dbname`.
 
 ---
 
@@ -55,120 +43,143 @@ pip install -e .
 
 ```python
 # app.py
-from fastapi import FastAPI, Depends
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from outlabs_auth import SimpleRBAC
-from motor.motor_asyncio import AsyncIOMotorClient
+from outlabs_auth.routers import get_auth_router, get_users_router
 
-# Initialize FastAPI
-app = FastAPI()
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/myapp",
+    # Must be at least 32 characters for HS256, or construction raises.
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key=os.environ["SECRET_KEY"],
+)
 
-# Initialize database
-mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
-database = mongo_client["myapp"]
+# Router factories dereference `auth.deps` at call time, and `auth.deps` only
+# exists after `initialize()` (async) or `prime_fastapi_routing()` (sync). To
+# mount at import time, prime first.
+auth.prime_fastapi_routing()
 
-# Initialize auth
-auth = SimpleRBAC(database=database)
 
-# Initialize database collections
-@app.on_event("startup")
-async def startup():
-    await auth.initialize()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await auth.initialize()  # migrations, Redis, async service wiring
+    yield
+    await auth.shutdown()
 
-# Public endpoint
-@app.get("/")
-async def root():
-    return {"message": "Welcome to my app"}
 
-# Protected endpoint - requires authentication
-@app.get("/users/me")
-async def get_current_user(user=Depends(auth.get_current_user)):
-    return {
-        "email": user.email,
-        "status": user.status,
-        "profile": user.profile
-    }
+app = FastAPI(lifespan=lifespan)
 
-# Protected endpoint - requires permission
-@app.delete("/users/{user_id}")
-async def delete_user(
-    user_id: str,
-    user=Depends(auth.require_permission("user:delete"))
-):
-    await auth.user_service.delete_user(user_id)
-    return {"message": "User deleted"}
+# Installs the exception handlers AND the UnitOfWork / RequestCache middleware.
+# Prefer this over a bare register_exception_handlers(): the middleware commits
+# before the response starts, which is what makes a create immediately readable.
+auth.instrument_fastapi(app)
 
-# Authentication endpoints
-from outlabs_auth.schemas import LoginRequest, RegisterRequest
-
-@app.post("/auth/register")
-async def register(data: RegisterRequest):
-    user = await auth.user_service.create_user(
-        email=data.email,
-        password=data.password
-    )
-    return {"message": "User created", "user_id": str(user.id)}
-
-@app.post("/auth/login")
-async def login(data: LoginRequest):
-    tokens = await auth.auth_service.login(
-        email=data.email,
-        password=data.password
-    )
-    return tokens
+app.include_router(get_auth_router(auth, prefix="/auth", tags=["Auth"]))
+app.include_router(get_users_router(auth, prefix="/users", tags=["Users"]))
 
 # Run with: uvicorn app:app --reload
 ```
 
-That's it! You now have:
-- User registration
-- Login with JWT tokens
-- Protected routes
-- Permission checks
+That gives you registration, login with JWT tokens, refresh, and user management
+endpoints without writing a route.
+
+Two things this is deliberate about:
+
+- **`prime_fastapi_routing()` before mounting at import.** Without it, the router
+  factories raise `ConfigurationError: Dependencies not initialized`. If you would
+  rather mount inside `lifespan()` after `initialize()`, that works and needs no
+  priming — see `examples/simple_rbac/main.py`.
+- **A real `secret_key`.** Anything under 32 characters is rejected at construction
+  for HS256, so a placeholder never reaches the first request.
+
+For production, run migrations explicitly with the packaged CLI (`outlabs-auth
+migrate`) rather than `auto_migrate=True`.
+
+### Protecting your own routes
+
+```python
+from fastapi import Depends, FastAPI, HTTPException
+
+# Dependencies come from auth.deps (an AuthDeps instance). They return a plain
+# dict, not a model: keys include "user", "user_id", "source", and "metadata".
+@app.get("/me")
+async def read_me(ctx: dict = Depends(auth.deps.require_auth())):
+    user = ctx["user"]
+    return {"email": user.email, "status": user.status}
+
+
+@app.delete("/things/{thing_id}")
+async def delete_thing(
+    thing_id: str,
+    ctx: dict = Depends(auth.require_permission("thing:delete")),
+):
+    # auth.require_permission delegates to auth.deps.require_permission
+    return {"deleted": thing_id}
+```
 
 ---
 
 ## SimpleRBAC Examples
+
+Every service method takes an `AsyncSession` as its first argument. The library does
+not hold an ambient session for you — you either open one with `auth.get_session()`
+or take the request-scoped one via `Depends(auth.uow)` / `Depends(auth.session)`.
 
 ### Example 1: Basic User Management
 
 ```python
 from outlabs_auth import SimpleRBAC
 
-auth = SimpleRBAC(database=db)
+auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+await auth.initialize()
 
-# Create a user
-user = await auth.user_service.create_user(
-    email="john@example.com",
-    password="SecurePass123!",
-    first_name="John",
-    last_name="Doe"
-)
+async with auth.get_session() as session:
+    # Create a user
+    user = await auth.user_service.create_user(
+        session,
+        email="john@example.com",
+        password="SecurePass123!",
+        first_name="John",
+        last_name="Doe",
+    )
 
-# Create roles
-admin_role = await auth.role_service.create_role(
-    name="admin",
-    display_name="Administrator",
-    permissions=[
-        "user:read", "user:create", "user:update", "user:delete",
-        "role:read", "role:create", "role:update", "role:delete"
-    ]
-)
+    # Create roles. Note the field is `permission_names`, not `permissions`.
+    admin_role = await auth.role_service.create_role(
+        session,
+        name="admin",
+        display_name="Administrator",
+        permission_names=[
+            "user:read", "user:create", "user:update", "user:delete",
+            "role:read", "role:create", "role:update", "role:delete",
+        ],
+    )
 
-viewer_role = await auth.role_service.create_role(
-    name="viewer",
-    display_name="Viewer",
-    permissions=["user:read", "role:read"]
-)
+    viewer_role = await auth.role_service.create_role(
+        session,
+        name="viewer",
+        display_name="Viewer",
+        permission_names=["user:read", "role:read"],
+    )
 
-# Assign role to user
-await auth.user_service.assign_role(user.id, admin_role.id)
+    # Assign a role to a user (flat RBAC)
+    await auth.role_service.assign_role_to_user(
+        session,
+        user_id=user.id,
+        role_id=admin_role.id,
+    )
 
-# Check permission
-has_permission = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="user:delete"
-)
-# Returns: True (user has admin role)
+    await session.commit()
+
+# Check a permission — returns a bool
+async with auth.get_session() as session:
+    allowed = await auth.permission_service.check_permission(
+        session,
+        user_id=user.id,
+        permission="user:delete",
+    )
 ```
 
 ### Example 2: Custom Permissions
@@ -183,61 +194,74 @@ CUSTOM_PERMISSIONS = [
     "report:export",
 ]
 
-# Create role with custom permissions
-accountant_role = await auth.role_service.create_role(
-    name="accountant",
-    display_name="Accountant",
-    permissions=[
-        "invoice:create",
-        "invoice:approve",
-        "report:view",
-        "report:export"
-    ]
-)
+async with auth.get_session() as session:
+    accountant_role = await auth.role_service.create_role(
+        session,
+        name="accountant",
+        display_name="Accountant",
+        permission_names=[
+            "invoice:create",
+            "invoice:approve",
+            "report:view",
+            "report:export",
+        ],
+    )
+    await session.commit()
 
 # Use in routes
 @app.post("/invoices")
 async def create_invoice(
     data: InvoiceCreate,
-    user=Depends(auth.require_permission("invoice:create"))
+    ctx: dict = Depends(auth.require_permission("invoice:create")),
 ):
-    # Only users with invoice:create permission can access
-    invoice = await invoice_service.create(data)
-    return invoice
+    return await invoice_service.create(data)
+
 
 @app.post("/invoices/{invoice_id}/approve")
 async def approve_invoice(
     invoice_id: str,
-    user=Depends(auth.require_permission("invoice:approve"))
+    ctx: dict = Depends(auth.require_permission("invoice:approve")),
 ):
-    # Separate permission for approval
-    invoice = await invoice_service.approve(invoice_id, user.id)
-    return invoice
+    return await invoice_service.approve(invoice_id, ctx["user_id"])
 ```
 
 ### Example 3: Multiple Permission Checks
 
-```python
-from outlabs_auth.dependencies import require_any_permission, require_all_permissions
+`require_permission` accepts several permissions. By default the check passes if
+**any** of them match; pass `require_all=True` to demand all of them.
 
-# Require ANY of the permissions
+```python
+# Require ANY of the permissions (default)
 @app.get("/reports/{report_id}")
 async def get_report(
     report_id: str,
-    user=Depends(require_any_permission(auth, ["report:view", "report:export"]))
+    ctx: dict = Depends(auth.deps.require_permission("report:view", "report:export")),
 ):
-    # User needs report:view OR report:export
     return await report_service.get(report_id)
+
 
 # Require ALL permissions
 @app.delete("/users/{user_id}/complete")
 async def complete_delete_user(
     user_id: str,
-    user=Depends(require_all_permissions(auth, ["user:delete", "user:purge"]))
+    ctx: dict = Depends(
+        auth.deps.require_permission("user:delete", "user:purge", require_all=True)
+    ),
 ):
-    # User needs BOTH user:delete AND user:purge
-    await user_service.complete_deletion(user_id)
     return {"message": "User completely removed"}
+```
+
+Outside of a route, `permission_service` has imperative equivalents that raise
+`PermissionDeniedError` instead of returning a bool:
+
+```python
+async with auth.get_session() as session:
+    await auth.permission_service.require_any_permission(
+        session, user_id=user.id, permissions=["report:view", "report:export"]
+    )
+    await auth.permission_service.require_all_permissions(
+        session, user_id=user.id, permissions=["user:delete", "user:purge"]
+    )
 ```
 
 ---
@@ -246,1226 +270,642 @@ async def complete_delete_user(
 
 ### Basic Hierarchy Examples
 
-These examples show EnterpriseRBAC's core features (entity hierarchy and tree permissions), which are always included.
+EnterpriseRBAC forces `enable_entity_hierarchy=True`. Everything from SimpleRBAC still
+applies; entities add a tree to scope permissions against.
 
 #### Example 1: Creating Entity Hierarchy
 
 ```python
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.models.sql.enums import EntityClass
 
-# Basic setup - entity hierarchy is always included
-auth = EnterpriseRBAC(database=db)
+auth = EnterpriseRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+await auth.initialize()
 
-# Create organization
-company = await auth.entity_service.create_entity(
-    name="acme_corp",
-    display_name="ACME Corporation",
-    entity_class="structural",
-    entity_type="company"
-)
+async with auth.get_session() as session:
+    company = await auth.entity_service.create_entity(
+        session,
+        name="acme_corp",
+        display_name="ACME Corporation",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="company",
+    )
 
-# Create departments
-engineering = await auth.entity_service.create_entity(
-    name="engineering",
-    display_name="Engineering Department",
-    entity_class="structural",
-    entity_type="department",
-    parent_id=company.id
-)
+    engineering = await auth.entity_service.create_entity(
+        session,
+        name="engineering",
+        display_name="Engineering Department",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="department",
+        parent_id=company.id,
+    )
 
-sales = await auth.entity_service.create_entity(
-    name="sales",
-    display_name="Sales Department",
-    entity_class="structural",
-    entity_type="department",
-    parent_id=company.id
-)
+    backend_team = await auth.entity_service.create_entity(
+        session,
+        name="backend_team",
+        display_name="Backend Team",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="team",
+        parent_id=engineering.id,
+    )
 
-# Create teams within department
-backend_team = await auth.entity_service.create_entity(
-    name="backend_team",
-    display_name="Backend Team",
-    entity_class="structural",
-    entity_type="team",
-    parent_id=engineering.id
-)
+    # Access groups are cross-cutting rather than structural
+    admins_group = await auth.entity_service.create_entity(
+        session,
+        name="company_admins",
+        display_name="Company Administrators",
+        entity_class=EntityClass.ACCESS_GROUP,
+        entity_type="admin_group",
+        parent_id=company.id,
+    )
 
-# Create access groups (cross-cutting)
-admins_group = await auth.entity_service.create_entity(
-    name="company_admins",
-    display_name="Company Administrators",
-    entity_class="access_group",
-    entity_type="admin_group",
-    parent_id=company.id
-)
+    await session.commit()
 ```
 
-### Example 2: Entity Memberships with Roles
+#### Example 2: Entity Memberships with Roles
 
 ```python
-# Create role that can be assigned at department level
-dept_manager_role = await auth.role_service.create_role(
-    name="department_manager",
-    display_name="Department Manager",
-    permissions=[
-        "entity:read",
-        "entity:update",
-        "entity:read_tree",      # Can read all sub-entities
-        "entity:create_tree",    # Can create sub-entities
-        "user:read",
-        "user:read_tree",        # Can see all users in sub-entities
-        "user:manage_tree"       # Can manage users in sub-entities
-    ],
-    assignable_at_types=["department"]
-)
+async with auth.get_session() as session:
+    dept_manager_role = await auth.role_service.create_role(
+        session,
+        name="department_manager",
+        display_name="Department Manager",
+        permission_names=[
+            "entity:read",
+            "entity:update",
+            "entity:read_tree",      # Can read all sub-entities
+            "entity:create_tree",    # Can create sub-entities
+            "user:read",
+            "user:read_tree",
+            "user:manage_tree",
+        ],
+        assignable_at_types=["department"],
+    )
 
-# Assign user to department with role
-await auth.membership_service.add_member(
-    entity_id=engineering.id,
-    user_id=user.id,
-    role_ids=[dept_manager_role.id]
-)
-
-# User can now:
-# - Read/update engineering department
-# - Read all teams under engineering
-# - Create new teams under engineering
-# - Manage all users in engineering and its teams
+    await auth.membership_service.add_member(
+        session,
+        entity_id=engineering.id,
+        user_id=user.id,
+        role_ids=[dept_manager_role.id],
+    )
+    await session.commit()
 ```
 
-### Example 3: Tree Permissions in Routes
+#### Example 3: Tree Permissions in Routes
 
 ```python
-# Permission required in specific entity
+# Permission required in one specific entity
 @app.get("/entities/{entity_id}/details")
 async def get_entity_details(
     entity_id: str,
-    user=Depends(auth.require_entity_permission("entity:read", "entity_id"))
+    ctx: dict = Depends(auth.require_entity_permission("entity:read", "entity_id")),
 ):
-    # User must have entity:read in THIS specific entity
-    entity = await auth.entity_service.get(entity_id)
-    return entity
+    ...
 
-# Tree permission - can access descendants
+# Tree permission — grants access across descendants.
+# require_tree_permission checks the "<permission>_tree" variant of the permission
+# in the named entity or any of its ancestors.
 @app.post("/entities/{parent_id}/sub-entities")
 async def create_sub_entity(
     parent_id: str,
     data: EntityCreate,
-    user=Depends(auth.require_tree_permission("entity:create", "parent_id"))
+    ctx: dict = Depends(auth.require_tree_permission("entity:create", "parent_id")),
 ):
-    # User must have entity:create_tree in parent_id (or any ancestor)
-    entity = await auth.entity_service.create_entity(
-        parent_id=parent_id,
-        **data.dict()
-    )
-    return entity
-
-# Member management with tree permission
-@app.post("/entities/{entity_id}/members")
-async def add_member(
-    entity_id: str,
-    data: MemberAdd,
-    user=Depends(auth.require_tree_permission("user:manage", "entity_id"))
-):
-    # User must have user:manage_tree in entity_id or any ancestor
-    await auth.membership_service.add_member(
-        entity_id=entity_id,
-        user_id=data.user_id,
-        role_ids=data.role_ids
-    )
-    return {"message": "Member added"}
+    ...
 ```
 
-### Example 4: Get User's Accessible Entities
+#### Example 4: Get a User's Accessible Entities
 
 ```python
 @app.get("/my-entities")
-async def get_my_entities(user=Depends(auth.get_current_user)):
-    # Get all entities where user has membership
-    entities = await auth.membership_service.get_user_entities(user.id)
-    return entities
-
-@app.get("/my-entities/{entity_type}")
-async def get_my_entities_by_type(
-    entity_type: str,
-    user=Depends(auth.get_current_user)
+async def get_my_entities(
+    ctx: dict = Depends(auth.deps.require_auth()),
+    session: AsyncSession = Depends(auth.session),
 ):
-    # Get entities of specific type (e.g., "department", "team")
     entities = await auth.membership_service.get_user_entities(
-        user.id,
-        entity_type=entity_type
+        session, user_id=ctx["user"].id
     )
     return entities
+```
 
-@app.get("/entities-with-permission/{permission}")
-async def get_entities_with_permission(
-    permission: str,
-    user=Depends(auth.get_current_user)
-):
-    # Get all entities where user has specific permission
-    entity_ids = await auth.permission_service.get_user_entities_with_permission(
-        user_id=user.id,
-        permission=permission
-    )
-    return {"entity_ids": entity_ids}
+To list every permission a user holds, use `permission_service.get_user_permissions`:
+
+```python
+perms: list[str] = await auth.permission_service.get_user_permissions(
+    session, user_id=user.id
+)
 ```
 
 ---
 
 ### Optional Features Examples
 
-These examples show EnterpriseRBAC's optional features (context-aware roles, ABAC, caching, audit logging), which can be enabled via feature flags.
+These are opt-in feature flags on EnterpriseRBAC. SimpleRBAC force-disables all three.
 
 #### Example 1: Context-Aware Roles
 
 ```python
-from outlabs_auth import EnterpriseRBAC
-
-# Enable context-aware roles feature
 auth = EnterpriseRBAC(
-    database=db,
-    enable_context_aware_roles=True  # Opt-in feature
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_context_aware_roles=True,
 )
-
-# Create context-aware role
-regional_manager = await auth.role_service.create_role(
-    name="regional_manager",
-    display_name="Regional Manager",
-
-    # Default permissions (fallback)
-    permissions=["entity:read", "user:read"],
-
-    # Context-specific permissions by entity type
-    entity_type_permissions={
-        "region": [
-            # Full management at region level
-            "entity:manage",
-            "entity:manage_tree",
-            "user:manage_tree",
-            "budget:approve",
-            "report:view_all"
-        ],
-        "office": [
-            # Read-only at office level
-            "entity:read",
-            "entity:read_tree",
-            "user:read",
-            "report:view"
-        ],
-        "team": [
-            # Advisory role at team level
-            "entity:read",
-            "user:read",
-            "report:view"
-        ]
-    },
-
-    assignable_at_types=["region", "office", "team"]
-)
-
-# Assign role at region level
-await auth.membership_service.add_member(
-    entity_id=west_region.id,
-    user_id=user.id,
-    role_ids=[regional_manager.id]
-)
-
-# Same user, different permissions based on context
-# At region level: full management
-# At office level: read-only
-# At team level: view only
 ```
+
+With the flag on, a role can carry different permissions depending on the entity type
+it is assigned at, via `entity_type_permissions` on `role_service.create_role`, and be
+restricted to certain levels with `assignable_at_types`.
 
 #### Example 2: ABAC Conditions
 
 ```python
-from outlabs_auth import EnterpriseRBAC
-
-# Enable ABAC feature
 auth = EnterpriseRBAC(
-    database=db,
-    enable_abac=True  # Opt-in feature
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_abac=True,
 )
-
-# Create permission with conditions
-invoice_approval = await auth.permission_service.create_permission(
-    name="invoice:approve",
-    display_name="Approve Invoices",
-    description="Allows approving invoices",
-
-    # ABAC conditions
-    conditions=[
-        {
-            "attribute": "resource.amount",
-            "operator": "LESS_THAN_OR_EQUAL",
-            "value": 50000  # Can only approve invoices <= $50k
-        },
-        {
-            "attribute": "resource.status",
-            "operator": "EQUALS",
-            "value": "pending_approval"
-        },
-        {
-            "attribute": "resource.department",
-            "operator": "EQUALS",
-            "value": {"ref": "user.department"}  # Same department
-        }
-    ]
-)
-
-# Create role with conditional permission
-manager_role = await auth.role_service.create_role(
-    name="manager",
-    display_name="Manager",
-    permissions=["invoice:approve"]  # Has permission, but conditions apply
-)
-
-# Check permission with context
-result = await auth.permission_service.check_permission_with_context(
-    user_id=user.id,
-    permission="invoice:approve",
-    entity_id=entity.id,
-    resource_attributes={
-        "amount": 35000,           # ✓ Under limit
-        "status": "pending_approval",  # ✓ Correct status
-        "department": user.profile.department  # ✓ Same department
-    }
-)
-
-if result.allowed:
-    # User can approve this specific invoice
-    await approve_invoice()
-else:
-    # Permission denied, result.reason explains why
-    raise HTTPException(403, result.reason)
 ```
 
-#### Example 3: Advanced Permission Checking with ABAC
+ABAC attaches conditions to a permission. Conditions are created explicitly against a
+permission via `permission_service.create_permission_condition_group` and
+`permission_service.create_permission_condition`, then evaluated by
+`check_permission` when you pass resource attributes:
 
 ```python
-from outlabs_auth.schemas import PolicyResult
+async with auth.get_session() as session:
+    allowed: bool = await auth.permission_service.check_permission(
+        session,
+        user_id=user.id,
+        permission="invoice:approve",
+        entity_id=entity.id,
+        resource_context={
+            "amount": 35000,
+            "status": "pending_approval",
+            "department": "finance",
+        },
+    )
 
-# Same ABAC-enabled setup from Example 2
-# auth = EnterpriseRBAC(database=db, enable_abac=True)
+    if not allowed:
+        raise HTTPException(403, "Permission denied")
+```
 
+`check_permission` returns a plain `bool`. To capture why a decision came out the way
+it did, pass a `capture` dict — the engine fills it in place.
+
+In a route, prefer the dependency, which resolves the resource attributes for you via
+a `resource_context_provider`:
+
+```python
 @app.post("/invoices/{invoice_id}/approve")
 async def approve_invoice(
     invoice_id: str,
-    user=Depends(auth.get_current_user)
-):
-    # Get invoice details
-    invoice = await invoice_service.get(invoice_id)
-
-    # Check permission with full context
-    result: PolicyResult = await auth.permission_service.check_permission_with_context(
-        user_id=user.id,
-        permission="invoice:approve",
-        entity_id=invoice.entity_id,
-        resource_attributes={
-            "amount": invoice.amount,
-            "status": invoice.status,
-            "department": invoice.department,
-            "created_by": invoice.created_by
-        }
-    )
-
-    if not result.allowed:
-        # Return detailed reason
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "Permission denied",
-                "reason": result.reason,
-                "evaluation": result.details
-            }
+    ctx: dict = Depends(
+        auth.deps.require_permission(
+            "invoice:approve",
+            resource_context_provider=load_invoice_attributes,
         )
-
-    # Approve invoice
-    approved = await invoice_service.approve(invoice_id, user.id)
-    return approved
+    ),
+):
+    ...
 ```
 
-#### Example 4: Caching Performance
+#### Example 3: Caching
+
+Providing `redis_url` turns on Redis-backed API-key counters, rate limits, and the
+permission cache (`enable_caching` defaults to whether Redis is enabled).
 
 ```python
-from outlabs_auth import EnterpriseRBAC
-import time
-
-# Providing redis_url enables Redis counters and permission caching
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     redis_url="redis://localhost:6379",
-)
-
-# First call - miss cache, hits database
-start = time.time()
-has_perm = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="invoice:create",
-    entity_id=entity.id
-)
-first_call = time.time() - start
-print(f"First call: {first_call * 1000:.2f}ms")  # ~45ms
-
-# Second call - hits cache
-start = time.time()
-has_perm = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="invoice:create",
-    entity_id=entity.id,
-    use_cache=True
-)
-second_call = time.time() - start
-print(f"Second call: {second_call * 1000:.2f}ms")  # ~2ms
-
-# Cache invalidation
-await auth.permission_service.invalidate_user_cache(user.id)
-
-# Manual cache control
-result = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="invoice:create",
-    entity_id=entity.id,
-    use_cache=False  # Force database check
+    redis_key_prefix="myapp:production",  # required namespace when Redis is on
+    cache_ttl_seconds=300,
 )
 ```
+
+Caching is managed by the library — `check_permission` has no `use_cache` parameter.
+Within a single request, `RequestCacheMiddleware` (installed by
+`instrument_fastapi()`) memoizes repeated permission checks.
 
 ---
 
 ## API Key Authentication
 
-API keys enable service-to-service authentication for automated systems, CI/CD pipelines, and backend services. They are **core v1.0 features** (not optional extensions).
+API keys authenticate external integrations and automated systems. They are a core
+feature, not an optional extension.
 
 ### Example 1: Creating API Keys
 
 ```python
-from outlabs_auth import SimpleRBAC
-from datetime import datetime, timedelta
+async with auth.get_session() as session:
+    service_user = await auth.user_service.create_user(
+        session,
+        email="service@example.com",
+        password="SecurePass123!",
+    )
 
-auth = SimpleRBAC(database=db)
+    raw_key, api_key = await auth.api_key_service.create_api_key(
+        session,
+        owner_id=service_user.id,
+        name="Production Service",
+        scopes=["user:read", "entity:read"],
+        ip_whitelist=["10.0.1.0/24", "192.168.1.100"],
+        rate_limit_per_minute=60,
+        expires_in_days=90,
+        prefix_type="sk_live",
+    )
+    await session.commit()
 
-# Create user who will own the API key
-service_user = await auth.user_service.create_user(
-    email="service@example.com",
-    password="service-password",
-    name="Service Account"
-)
-
-# Create API key for production service
-raw_key, api_key_model = await auth.api_key_service.create_api_key(
-    name="Production Service",
-    owner_id=service_user.id,
-    scopes=["user:read", "entity:read"],
-    ip_whitelist=["10.0.1.0/24", "192.168.1.100"],  # Optional IP whitelist
-    rate_limit_per_minute=60,
-    expires_in_days=90,  # 90-day expiry
-    prefix_type="sk_live"  # sk_live_ prefix
-)
-
-# CRITICAL: raw_key is only shown ONCE - store securely!
-print(f"API Key: {raw_key}")  # sk_live_abc123...
-print(f"Store this key securely - it won't be shown again!")
-
-# Key is now hashed with SHA-256 in database (fast for high-entropy secrets)
-# Only the prefix (first 12 chars) is stored in plaintext for identification
+# raw_key is only returned once — store it securely.
+print(raw_key)  # sk_live_<64 hex chars>
 ```
+
+Everything after `session` is keyword-only. Exactly one of `owner_id` or
+`integration_principal_id` identifies who the key belongs to.
+
+**How keys are stored**: the full key is hashed with SHA-256 and only the hash is
+persisted. The first 16 characters (`prefix`) are stored in the clear for
+identification. SHA-256 — rather than a password hash like argon2id — is the
+deliberate choice here: an API key is 32 bytes of CSPRNG output, so it has no
+brute-forceable structure and a slow hash would only add latency to every request.
 
 ### Example 2: API Keys for Different Environments
 
 ```python
-# Production key (most restrictive)
-prod_key, prod_model = await auth.api_key_service.create_api_key(
-    name="Production API",
+prod_key, _ = await auth.api_key_service.create_api_key(
+    session,
     owner_id=user.id,
+    name="Production API",
     scopes=["user:read", "entity:read"],
     ip_whitelist=["10.0.1.0/24"],
     rate_limit_per_minute=60,
-    prefix_type="sk_live"
+    prefix_type="sk_live",
 )
 
-# Test key (more permissive)
-test_key, test_model = await auth.api_key_service.create_api_key(
-    name="Test API",
+test_key, _ = await auth.api_key_service.create_api_key(
+    session,
     owner_id=user.id,
+    name="Test API",
     scopes=["user:read", "user:create", "entity:read"],
-    ip_whitelist=None,  # No IP restrictions for testing
+    ip_whitelist=None,
     rate_limit_per_minute=120,
-    prefix_type="sk_test"
+    prefix_type="sk_test",
 )
-
-# Note: Use different prefixes to distinguish environments
-# Common prefixes: sk_live (production), sk_test (testing)
 ```
+
+`prefix_type` is free-form and is simply the literal prefix on the generated key —
+use it to tell environments apart.
 
 ### Example 3: Using API Keys in Routes
 
+You do not have to verify keys by hand. The API-key backend is part of the normal
+authentication chain, so `require_auth()` and `require_permission()` already accept
+an API key on the `X-API-Key` header, and enforce scope, IP whitelist, and rate
+limits for you.
+
 ```python
-from fastapi import FastAPI, Header, HTTPException
-from typing import Optional
-
-app = FastAPI()
-
 @app.get("/api/users")
-async def list_users(x_api_key: Optional[str] = Header(None)):
-    """Public API endpoint authenticated with API key"""
-    if not x_api_key:
-        raise HTTPException(401, "API key required")
+async def list_users(
+    ctx: dict = Depends(auth.require_permission("user:read")),
+    session: AsyncSession = Depends(auth.session),
+):
+    # Works for a user JWT or an API key. Check which one was used:
+    if ctx["source"] == "api_key":
+        ...
+    return await auth.user_service.list_users(session)
 
-    # Authenticate API key
-    try:
-        api_key_model = await auth.api_key_service.authenticate_api_key(x_api_key)
-    except Exception:
-        raise HTTPException(401, "Invalid API key")
 
-    # Check permission
-    if "user:read" not in api_key_model.permissions:
-        raise HTTPException(403, "API key lacks user:read permission")
+# Restrict an endpoint to API keys only
+@app.post("/webhook")
+async def webhook(ctx: dict = Depends(auth.deps.require_source("api_key"))):
+    return {"received": True}
+```
 
-    # Check IP whitelist (if configured)
-    client_ip = request.client.host
-    if not await auth.api_key_service.check_ip_whitelist(api_key_model, client_ip):
-        raise HTTPException(403, "IP not whitelisted")
+If you do need the primitive, it is `verify_api_key`, which returns a
+`(APIKey | None, usage_count)` tuple rather than raising:
 
-    # Check rate limit
-    try:
-        await auth.api_key_service.check_rate_limit(api_key_model)
-    except RateLimitExceededException:
-        raise HTTPException(429, "Rate limit exceeded")
-
-    # API key is valid - return users
-    users = await auth.user_service.list_users()
-    return users
+```python
+api_key, usage = await auth.api_key_service.verify_api_key(
+    session,
+    api_key_string=raw_key,
+    required_scope="user:read",
+    ip_address=request.client.host,
+)
+if api_key is None:
+    raise HTTPException(401, "Invalid API key")
 ```
 
 ### Example 4: API Key Management Endpoints
 
+The library ships these as router factories — mount them instead of writing the CRUD:
+
 ```python
-from outlabs_auth.schemas import CreateAPIKeyRequest, RotateAPIKeyRequest
+from outlabs_auth.routers import get_api_keys_router, get_api_key_admin_router
 
-# Create API key endpoint
-@app.post("/api-keys")
-async def create_api_key(
-    data: CreateAPIKeyRequest,
-    user=Depends(auth.require_permission("api_key:create"))
-):
-    """Create new API key (returns raw key once)"""
-    raw_key, api_key_model = await auth.api_key_service.create_api_key(
-        name=data.name,
-        permissions=data.permissions,
-        environment=data.environment,
-        allowed_ips=data.allowed_ips,
-        rate_limit_per_minute=data.rate_limit_per_minute,
-        expires_at=data.expires_at,
-        created_by=user.id
+# Self-service: callers manage their own keys
+app.include_router(get_api_keys_router(auth, prefix="/api-keys", tags=["API Keys"]))
+
+# Admin: manage keys across owners
+app.include_router(
+    get_api_key_admin_router(auth, prefix="/admin/api-keys", tags=["API Key Admin"])
+)
+```
+
+The underlying service methods, if you want your own routes:
+
+```python
+async with auth.get_session() as session:
+    # Rotate — returns (new_raw_key, new_key)
+    new_raw_key, new_key = await auth.api_key_service.rotate_api_key(
+        session, key_id=key_id, actor_user_id=user.id
     )
 
-    return {
-        "raw_key": raw_key,  # ONLY returned once!
-        "key_prefix": api_key_model.key_prefix,
-        "message": "Store this key securely - it won't be shown again"
-    }
-
-# List API keys endpoint
-@app.get("/api-keys")
-async def list_api_keys(user=Depends(auth.require_permission("api_key:read"))):
-    """List all API keys (without raw keys)"""
-    keys = await auth.api_key_service.list_api_keys()
-    return {
-        "keys": [
-            {
-                "id": str(key.id),
-                "name": key.name,
-                "key_prefix": key.key_prefix,  # First 8 chars only
-                "environment": key.environment,
-                "is_active": key.is_active,
-                "usage_count": key.usage_count,
-                "created_at": key.created_at,
-                "expires_at": key.expires_at
-            }
-            for key in keys
-        ]
-    }
-
-# Rotate API key endpoint
-@app.post("/api-keys/{key_id}/rotate")
-async def rotate_api_key(
-    key_id: str,
-    user=Depends(auth.require_permission("api_key:rotate"))
-):
-    """Rotate API key (creates new, schedules old for revocation)"""
-    new_raw_key, new_api_key = await auth.api_key_service.rotate_api_key(key_id)
-
-    return {
-        "raw_key": new_raw_key,  # ONLY returned once!
-        "key_prefix": new_api_key.key_prefix,
-        "message": "Old key will be revoked in 24 hours. Update your services with the new key.",
-        "grace_period_hours": 24
-    }
-
-# Revoke API key endpoint
-@app.delete("/api-keys/{key_id}")
-async def revoke_api_key(
-    key_id: str,
-    user=Depends(auth.require_permission("api_key:revoke"))
-):
-    """Immediately revoke API key"""
+    # Revoke
     await auth.api_key_service.revoke_api_key(
+        session,
         key_id=key_id,
-        reason="Revoked by administrator"
+        actor_user_id=user.id,
+        reason="Revoked by administrator",
     )
-    return {"message": "API key revoked"}
+    await session.commit()
 ```
 
 ### Example 5: Entity-Scoped API Keys (EnterpriseRBAC)
 
 ```python
-from outlabs_auth import EnterpriseRBAC
-
-auth = EnterpriseRBAC(database=db)
-
-# Create hierarchy
-org = await auth.entity_service.create_entity(
-    name="acme_corp",
-    entity_type="organization",
-    entity_class="STRUCTURAL"
-)
-
-dept = await auth.entity_service.create_entity(
-    name="engineering",
-    entity_type="department",
-    entity_class="STRUCTURAL",
-    parent_entity_id=org.id
-)
-
-# Create API key scoped to department
 raw_key, api_key = await auth.api_key_service.create_api_key(
+    session,
+    owner_id=user.id,
     name="Engineering Service",
-    permissions=["entity:read", "entity:update", "user:read"],
-    environment="production",
-    entity_id=dept.id,  # Scoped to engineering department
-    inherit_from_tree=True,  # Can access child entities
-    created_by=user.id
+    scopes=["entity:read", "entity:update", "user:read"],
+    entity_id=dept.id,          # Scope the key to one entity
+    inherit_from_tree=True,     # ...and its descendants
 )
-
-# This API key can only access:
-# - The engineering department (entity:read, entity:update)
-# - Any teams under engineering (via tree permissions)
-# - Users in engineering and its sub-entities
-
-# Use in routes
-@app.get("/entities/{entity_id}/data")
-async def get_entity_data(
-    entity_id: str,
-    x_api_key: str = Header(...)
-):
-    # Authenticate API key
-    api_key_model = await auth.api_key_service.authenticate_api_key(x_api_key)
-
-    # Check if API key has access to this entity
-    if api_key_model.entity_id:
-        # Entity-scoped key - verify access
-        has_access = await auth.permission_service.check_entity_access(
-            api_key=api_key_model,
-            target_entity_id=entity_id,
-            permission="entity:read"
-        )
-        if not has_access:
-            raise HTTPException(403, "API key does not have access to this entity")
-
-    # Return data
-    return await entity_service.get_data(entity_id)
 ```
+
+Enforcement is automatic: pass `entity_id` to `verify_api_key`, or use
+`auth.require_entity_permission(...)` on the route and the API-key path checks the
+key's entity scope as part of the permission check.
 
 ### Example 6: Client-Side API Key Usage
 
 ```python
 # Python client
-import requests
+import httpx
 
-API_KEY = "sk_prod_AbCdEfGh..."
-BASE_URL = "https://api.example.com"
-
-# Use API key in header
-response = requests.get(
-    f"{BASE_URL}/api/users",
-    headers={"X-API-Key": API_KEY}
+response = httpx.get(
+    "https://api.example.com/api/users",
+    headers={"X-API-Key": "sk_live_..."},
 )
-
-if response.status_code == 200:
-    users = response.json()
-else:
-    print(f"Error: {response.status_code}")
 ```
 
 ```javascript
 // JavaScript client
-const API_KEY = 'sk_prod_AbCdEfGh...';
-const BASE_URL = 'https://api.example.com';
-
-// Use API key in header
-fetch(`${BASE_URL}/api/users`, {
-  headers: {
-    'X-API-Key': API_KEY
-  }
+fetch('https://api.example.com/api/users', {
+  headers: { 'X-API-Key': 'sk_live_...' }
 })
   .then(response => response.json())
-  .then(users => console.log(users))
-  .catch(error => console.error('Error:', error));
+  .then(users => console.log(users));
 ```
 
 ```bash
 # cURL
 curl -X GET https://api.example.com/api/users \
-  -H "X-API-Key: sk_prod_AbCdEfGh..."
+  -H "X-API-Key: sk_live_..."
 ```
 
 ---
 
 ## JWT Service Tokens
 
-**NEW in v1.4 (DD-034)**: JWT service tokens provide zero-database authentication for internal microservices with sub-millisecond validation times.
+Service tokens are self-contained JWTs for internal service-to-service calls. They
+embed their permissions, so validating one costs a signature check and no database
+round trip.
 
-### Why JWT Service Tokens?
+### Example 1: Creating a Service Token
 
-- **Performance**: ~0.5ms validation vs ~0.5-1ms for API keys (similar but no DB lookup)
-- **Stateless**: Pure JWT validation, no database queries
-- **Perfect for**: High-frequency internal service-to-service communication
-- **Complements API Keys**: Use API keys for external partners, JWT tokens for internal services
-
-### Example 1: Creating JWT Service Tokens
+`ServiceTokenService` is synchronous and stateless — it signs and validates, it does
+not touch the database.
 
 ```python
-from outlabs_auth import SimpleRBAC
-from datetime import timedelta
-
-auth = SimpleRBAC(database=db)
-
-# Create JWT service token (short-lived, self-contained)
-service_token = await auth.service_token_service.create_token(
-    service_name="payment_processor",
+token: str = auth.service_token_service.create_service_token(
+    service_id="payment-processor",
+    service_name="Payment Processor",
     permissions=["invoice:read", "invoice:update", "payment:create"],
-    expires_in=timedelta(hours=24)  # Short-lived: 1-24 hours recommended
+    expires_days=30,
+    metadata={"environment": "prod"},
 )
-
-print(f"Service Token: {service_token}")
-# eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZXJ2aWNlX25hbWUiOiJwYXltZW50X...
-
-# Token is a JWT containing:
-# - service_name: "payment_processor"
-# - permissions: ["invoice:read", "invoice:update", "payment:create"]
-# - iat (issued at), exp (expiration)
-# - Cryptographically signed (cannot be forged)
 ```
 
-### Example 2: Service-to-Service Communication with JWT
+`expires_days` must be between 1 and `service_token_max_expire_days`, or it raises
+`ValueError`. Convenience wrappers exist for common shapes:
+`create_api_service_token` and `create_worker_service_token`.
+
+Service tokens are signed with a key derived from `secret_key` for domain separation.
+Set `service_token_secret_key` explicitly (min 32 characters) if you want to rotate
+service credentials independently of user JWTs.
+
+### Example 2: Consuming a Service Token
 
 ```python
-# Service A (caller) - using JWT service token
-import requests
+# Caller — service tokens travel on the standard Authorization: Bearer header,
+# the same transport as user JWTs.
+import httpx
 
-SERVICE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-response = requests.post(
+httpx.post(
     "https://service-b.example.com/api/process-payment",
-    headers={"X-Service-Token": SERVICE_TOKEN},
-    json={"invoice_id": "inv_123", "amount": 1000}
+    headers={"Authorization": f"Bearer {token}"},
+    json={"invoice_id": "inv_123", "amount": 1000},
 )
 
-# Service B (receiver) - validates JWT (no DB lookup!)
-from outlabs_auth.dependencies import AuthDeps
-
-deps = AuthDeps(auth=auth)
-
+# Receiver — restrict the endpoint to service tokens
 @app.post("/api/process-payment")
 async def process_payment(
     data: dict,
-    ctx: AuthContext = deps.require_source(AuthSource.SERVICE)
+    ctx: dict = Depends(auth.deps.require_source("service_token")),
 ):
-    """
-    Fast internal endpoint using JWT service tokens.
-
-    Validation: ~0.5ms (pure JWT validation, no DB)
-    vs API keys: ~0.5-1ms (DB lookup + SHA-256 verification)
-    """
-
-    # Service name from JWT payload
-    service_name = ctx.metadata["service"]
-    print(f"Request from service: {service_name}")
-
-    # Permissions from JWT payload (no DB lookup!)
-    if not ctx.has_permission("payment:create"):
-        raise HTTPException(403, "Service lacks payment:create permission")
-
-    # Process payment
-    result = await payment_service.process(data)
-    return {"result": result}
+    # For a service token, ctx["user"] and ctx["user_id"] are None. The context
+    # instead carries "service_id" and "service_name", with the full JWT payload
+    # (including any metadata you embedded) under ctx["metadata"].
+    return {"processed_by": ctx["service_name"]}
 ```
 
-### Example 3: API Keys vs JWT Service Tokens
+To require a permission rather than just the source, use
+`auth.require_permission("payment:create")` — the service-token path resolves the
+permission from the token payload with no database lookup.
 
-```python
-# Comparison of authentication methods
+### Example 3: API Keys vs Service Tokens
 
-# API Keys (external partners, persistent)
-# - Use: External integrations, third-party services
-# - Storage: MongoDB (hashed with SHA-256)
-# - Validation: ~0.5-1ms (DB lookup + hash verification)
-# - Lifespan: Long-lived (90-365 days)
-# - Rotation: Manual via API
-# - Rate Limiting: Per-key limits in Redis
-# - Security: SHA-256 hashing (fast for high-entropy), temp locks after 10 failures
+| | API Keys | JWT Service Tokens |
+|---|---|---|
+| Use for | External integrations, third-party services | Internal microservices |
+| Storage | Postgres row, SHA-256 hash of the key | None — stateless JWT |
+| Validation | DB lookup + hash compare (Redis-cached snapshot on the hot path) | Signature verification only |
+| Lifespan | Long-lived, optional expiry | Short-lived (`expires_days`, capped by config) |
+| Rotation | `rotate_api_key()` | Mint a new token |
+| Revocation | Immediate, via `revoke_api_key()` | Not revocable before expiry — keep them short |
+| Rate limiting | Per-key limits, enforced by the library | Not rate limited by the library |
 
-api_key = await auth.api_key_service.create_api_key(
-    name="Partner API",
-    permissions=["invoice:read"],
-    environment="production",
-    expires_in_days=90
-)
-# Returns: sk_prod_abc1def2_x3y4z5...
-
-
-# JWT Service Tokens (internal services, faster, ephemeral)
-# - Use: Internal microservices, high-frequency requests
-# - Storage: None (stateless JWT)
-# - Validation: ~0.5ms (pure cryptographic verification)
-# - Lifespan: Short-lived (1-24 hours)
-# - Rotation: Automatic (create new token when needed)
-# - Rate Limiting: Higher limits (trusted internal services)
-# - Security: Cryptographic signatures, short expiration
-
-service_token = await auth.service_token_service.create_token(
-    service_name="internal_processor",
-    permissions=["invoice:read", "invoice:update"],
-    expires_in=timedelta(hours=12)
-)
-# Returns: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-### Example 4: Automatic Token Rotation
-
-```python
-# Internal service with automatic token rotation
-
-import asyncio
-from datetime import timedelta
-
-class ServiceClient:
-    """Client for internal service communication with auto-rotation"""
-
-    def __init__(self, auth, service_name: str):
-        self.auth = auth
-        self.service_name = service_name
-        self.token = None
-        self.token_expires_at = None
-
-    async def get_token(self) -> str:
-        """Get valid token, rotating if needed"""
-        if self.token and self.token_expires_at > datetime.utcnow():
-            return self.token
-
-        # Token expired or doesn't exist - create new one
-        self.token = await self.auth.service_token_service.create_token(
-            service_name=self.service_name,
-            permissions=["invoice:read", "invoice:update", "payment:create"],
-            expires_in=timedelta(hours=12)
-        )
-        self.token_expires_at = datetime.utcnow() + timedelta(hours=12)
-
-        return self.token
-
-    async def make_request(self, url: str, data: dict):
-        """Make authenticated request with auto-rotating token"""
-        token = await self.get_token()
-
-        response = await httpx.post(
-            url,
-            headers={"X-Service-Token": token},
-            json=data
-        )
-        return response
-
-# Usage
-client = ServiceClient(auth=auth, service_name="payment_processor")
-
-# Token automatically rotates every 12 hours
-await client.make_request("/api/process", {"invoice_id": "inv_123"})
-await client.make_request("/api/process", {"invoice_id": "inv_456"})
-# ... token seamlessly rotates in background
-```
-
-### Example 5: Multi-Environment Service Tokens
-
-```python
-# Different tokens for different environments
-
-# Production service token (strict permissions)
-prod_token = await auth.service_token_service.create_token(
-    service_name="prod_payment_service",
-    permissions=["invoice:read", "payment:create"],  # Read-only + create
-    environment="production",
-    expires_in=timedelta(hours=24)
-)
-
-# Staging service token (more permissive)
-staging_token = await auth.service_token_service.create_token(
-    service_name="staging_payment_service",
-    permissions=["invoice:read", "invoice:update", "payment:create", "payment:refund"],
-    environment="staging",
-    expires_in=timedelta(hours=48)
-)
-
-# Development service token (most permissive)
-dev_token = await auth.service_token_service.create_token(
-    service_name="dev_payment_service",
-    permissions=["invoice:*", "payment:*"],  # All permissions
-    environment="development",
-    expires_in=timedelta(days=7)
-)
-```
-
-### Example 6: Service Token Health Checks
-
-```python
-# Fast health check endpoint using service tokens
-
-@app.get("/health")
-async def health_check(
-    ctx: AuthContext = deps.require_source(AuthSource.SERVICE)
-):
-    """
-    Health check endpoint for internal monitoring.
-
-    Uses JWT service token validation (~0.5ms).
-    Perfect for high-frequency health checks.
-    """
-
-    service_name = ctx.metadata["service"]
-
-    return {
-        "status": "healthy",
-        "service": service_name,
-        "timestamp": datetime.utcnow().isoformat(),
-        "auth_source": "jwt_service_token"
-    }
-
-# Called by monitoring service every 5 seconds
-# Validation: ~0.5ms per request (no DB load!)
-```
+The revocation row is the reason to keep service-token lifetimes short: there is no
+deny-list, so a leaked token is valid until it expires.
 
 ### Best Practices
 
-1. **Short Lifespan**: Keep tokens short-lived (1-24 hours max)
-2. **Internal Only**: Never expose service tokens to external clients
-3. **Rotate Frequently**: Create new tokens automatically before expiration
-4. **Minimal Permissions**: Grant only required permissions per service
-5. **Use API Keys for External**: Reserve JWT tokens for internal services only
+1. **Short lifespan**: service tokens cannot be revoked — keep `expires_days` low.
+2. **Internal only**: never hand a service token to an external client.
+3. **Minimal permissions**: embed only what the calling service needs.
+4. **Use API keys for external parties**: they can be revoked and rate limited.
 
 ---
 
 ## Multi-Source Authentication
 
-Multi-source authentication allows your API to accept authentication from multiple sources with a priority chain: **Superuser > JWT Service Token > API Key > User > Anonymous**.
+A single dependency accepts every configured credential type. The backends are tried
+in order and the first one that produces a result wins.
 
-**Updated in v1.4**: Now uses unified `AuthDeps` class instead of separate `MultiSourceDeps` class.
+Three backends are wired, in this order:
+
+| Source (`ctx["source"]`) | Transport | Wired when |
+|---|---|---|
+| `jwt` | `Authorization: Bearer <token>` | always |
+| `api_key` | `X-API-Key: sk_live_...` | an API-key service exists |
+| `service_token` | `Authorization: Bearer <token>` | a service-token service exists |
+
+User JWTs and service tokens share the `Authorization: Bearer` header. They are told
+apart by their payloads: the JWT backend is tried first, and a service token falls
+through it to the service-token backend.
+
+There is no "superuser" or "anonymous" source. A superuser is an ordinary `jwt`-
+authenticated user with `is_superuser=True` on their record — which is what
+`require_superuser()` checks. Anonymous access is expressed by
+`require_auth(optional=True)` returning `None`, not by an anonymous context.
+
+Note that `is_superuser=True` bypasses every permission check unconditionally —
+`check_permission` returns `True` before evaluating roles or ABAC conditions, and
+`get_user_permissions` returns `["*:*"]`. It is total access, not a senior role.
 
 ### Example 1: Basic Multi-Source Setup
 
+Dependencies return a **plain dict**, not a context object. Its keys:
+
+- `user` — the `User` model, or `None` for service tokens and principal-owned API keys
+- `user_id` — string UUID, or `None`
+- `source` — `"jwt"`, `"api_key"`, or `"service_token"`
+- `metadata` — the JWT payload, or API-key metadata
+- `api_key` — the `APIKey` model (API-key source only)
+- `integration_principal_id` — set when an API key belongs to a principal, not a user
+- `service_id`, `service_name` — service-token source only
+
+Not every key is present on every source, so reach for `.get()` when you are handling
+more than one.
+
 ```python
-from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import MultiSourceDeps
-from outlabs_auth.models import AuthContext, AuthSource
-
-auth = SimpleRBAC(database=db)
-
-# Create multi-source dependency factory
-deps = MultiSourceDeps(auth=auth)
-
 @app.get("/api/users")
-async def list_users(context: AuthContext = Depends(deps.get_context)):
-    """
-    Accepts authentication from:
-    - User JWT (Authorization: Bearer <token>)
-    - API Key (X-API-Key: sk_prod_...)
-    - Service Token (X-Service-Token: <token>)
-    - Superuser Token (X-Superuser-Token: <token>)
-    - Anonymous (no auth - if allowed)
-    """
+async def list_users(ctx: dict = Depends(auth.deps.require_auth())):
+    """Accepts a user JWT, an API key, or a service token."""
+    if ctx["source"] == "jwt":
+        print(f"Authenticated as user: {ctx['user_id']}")
+    elif ctx["source"] == "api_key":
+        print(f"Authenticated with API key: {ctx['api_key'].prefix}")
+    elif ctx["source"] == "service_token":
+        print(f"Authenticated as service: {ctx['service_name']}")
 
-    # Check which auth source was used
-    if context.source == AuthSource.USER:
-        print(f"Authenticated as user: {context.identity}")
-    elif context.source == AuthSource.API_KEY:
-        print(f"Authenticated with API key: {context.identity}")
-    elif context.source == AuthSource.SERVICE:
-        print(f"Authenticated as service: {context.identity}")
-    elif context.source == AuthSource.SUPERUSER:
-        print(f"Authenticated as superuser: {context.identity}")
-    elif context.source == AuthSource.ANONYMOUS:
-        print("Anonymous access")
-
-    # Check permissions (works across all auth sources)
-    if not context.has_permission("user:read"):
-        raise HTTPException(403, "Permission denied")
-
-    # Return users
-    users = await auth.user_service.list_users()
-    return users
+    return {"source": ctx["source"]}
 ```
 
-### Example 2: Auth Source Priority Chain
+### Example 2: Optional and Filtered Authentication
 
 ```python
-from outlabs_auth.dependencies import MultiSourceDeps
-
-deps = MultiSourceDeps(auth=auth)
-
-@app.get("/api/data")
-async def get_data(context: AuthContext = Depends(deps.get_context)):
-    """
-    Priority chain (highest to lowest):
-    1. Superuser Token (X-Superuser-Token) - Admin operations
-    2. Service Token (X-Service-Token) - Internal services
-    3. API Key (X-API-Key) - External services
-    4. User JWT (Authorization: Bearer) - End users
-    5. Anonymous (no auth) - Public access
-    """
-
-    # If multiple auth methods are provided, highest priority wins
-    # Example: If both API key and user JWT are provided, API key is used
-
-    if context.is_superuser:
-        # Superuser has all permissions
-        return await get_all_data()
-
-    elif context.source == AuthSource.SERVICE:
-        # Internal service - trusted
-        return await get_service_data()
-
-    elif context.source == AuthSource.API_KEY:
-        # External service - check permissions
-        if context.has_permission("data:read"):
-            return await get_api_data()
-        raise HTTPException(403)
-
-    elif context.source == AuthSource.USER:
-        # End user - check user-specific permissions
-        if context.has_permission("data:read"):
-            return await get_user_data(context.identity)
-        raise HTTPException(403)
-
-    else:
-        # Anonymous - very limited access
+# Optional — returns None instead of raising 401 when no credentials are present
+@app.get("/public")
+async def public(ctx: dict | None = Depends(auth.deps.require_auth(optional=True))):
+    if ctx is None:
         return await get_public_data()
+    return await get_personalized_data(ctx["user_id"])
+
+
+# Require a verified email
+@app.post("/comments")
+async def comment(ctx: dict = Depends(auth.deps.require_auth(verified=True))):
+    ...
+
+
+# Restrict to one source
+@app.post("/internal/job")
+async def run_job(ctx: dict = Depends(auth.deps.require_source("service_token"))):
+    ...
+
+
+# Superuser only
+@app.post("/system/dangerous")
+async def dangerous(ctx: dict = Depends(auth.deps.require_superuser())):
+    ...
 ```
 
-### Example 3: Simple vs Multi-Source Dependencies
+`require_auth()` takes `active` (default `True`, requires the user to be able to
+authenticate), `verified` (default `False`, requires a verified email), and `optional`
+(default `False`).
+
+### Example 3: Permission Checking Across Sources
+
+`require_permission` works the same whichever source authenticated the request — a
+user's permissions come from their roles, an API key's from its scopes, a service
+token's from its payload.
 
 ```python
-from outlabs_auth.dependencies import SimpleDeps, MultiSourceDeps
-
-# SimpleDeps - Basic authentication (JWT only)
-simple_deps = SimpleDeps(auth=auth)
-
-@app.get("/simple")
-async def simple_route(user=Depends(simple_deps.authenticated())):
-    """Only accepts JWT tokens (Authorization: Bearer)"""
-    return {"user": user.email}
-
-# MultiSourceDeps - Flexible authentication
-multi_deps = MultiSourceDeps(auth=auth)
-
-@app.get("/multi")
-async def multi_route(context: AuthContext = Depends(multi_deps.get_context)):
-    """Accepts JWT, API keys, service tokens, superuser tokens"""
-    return {
-        "source": context.source.value,
-        "identity": context.identity,
-        "permissions": context.permissions
-    }
-```
-
-### Example 4: Permission Checking with Multi-Source
-
-```python
-from outlabs_auth.dependencies import MultiSourceDeps
-
-deps = MultiSourceDeps(auth=auth)
-
-# Require specific permission (any auth source)
 @app.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    context: AuthContext = Depends(deps.requires("user:delete"))
+    ctx: dict = Depends(auth.deps.require_permission("user:delete")),
 ):
-    """Requires user:delete permission from any auth source"""
-    await auth.user_service.delete_user(user_id)
-    return {"message": "User deleted"}
+    ...
 
-# Require multiple permissions
-@app.post("/admin/reset-database")
-async def reset_database(
-    context: AuthContext = Depends(deps.requires("admin:reset", "admin:confirm"))
+# Both permissions required
+@app.post("/admin/reset")
+async def reset(
+    ctx: dict = Depends(
+        auth.deps.require_permission("admin:reset", "admin:confirm", require_all=True)
+    ),
 ):
-    """Requires BOTH admin:reset AND admin:confirm permissions"""
-    await database.reset()
-    return {"message": "Database reset"}
+    ...
 
-# Require ANY of multiple permissions
+# Either permission is enough (the default)
 @app.get("/reports/{report_id}")
 async def get_report(
     report_id: str,
-    context: AuthContext = Depends(deps.requires_any("report:view", "report:export"))
+    ctx: dict = Depends(auth.deps.require_permission("report:view", "report:export")),
 ):
-    """Requires report:view OR report:export permission"""
-    return await report_service.get(report_id)
+    ...
 ```
 
-### Example 5: API Key + User JWT Combined
+### Example 4: Using the Context in Business Logic
+
+Because the context is a dict, business logic can take it without importing anything
+from the library:
 
 ```python
-@app.post("/api/user-actions")
-async def user_action(
-    action: str,
-    context: AuthContext = Depends(deps.get_context)
-):
-    """
-    Can be called by:
-    1. User with JWT token (personal action)
-    2. Service with API key on behalf of user (automated action)
-    """
+async def approve_invoice(session, invoice_id: str, ctx: dict):
+    invoice = await invoice_service.get(session, invoice_id)
 
-    if context.source == AuthSource.USER:
-        # Direct user action
-        user_id = context.identity  # User email
-        print(f"User {user_id} performed action: {action}")
-
-    elif context.source == AuthSource.API_KEY:
-        # Service action on behalf of user
-        # Service must pass user ID in request body
-        user_id = request.body.get("user_id")
-        print(f"Service performed action {action} for user {user_id}")
-
-        # Verify API key has permission to act on behalf of users
-        if not context.has_permission("user:impersonate"):
-            raise HTTPException(403, "API key cannot act on behalf of users")
-
-    else:
-        raise HTTPException(401, "Authentication required")
-
-    # Perform action
-    await perform_action(user_id, action)
-    return {"message": "Action completed"}
-```
-
-### Example 6: Rate Limiting Per Auth Source
-
-```python
-from outlabs_auth.dependencies import MultiSourceDeps
-from slowapi import Limiter
-
-limiter = Limiter(key_func=lambda: "global")
-deps = MultiSourceDeps(auth=auth)
-
-@app.get("/api/data")
-async def get_data(context: AuthContext = Depends(deps.get_context)):
-    """Different rate limits per auth source"""
-
-    # Get rate limit from context metadata
-    rate_limit = context.rate_limit_remaining
-
-    if context.source == AuthSource.API_KEY:
-        # API key has its own rate limit (configured in key)
-        if rate_limit is not None and rate_limit <= 0:
-            raise HTTPException(429, f"API key rate limit exceeded")
-
-    elif context.source == AuthSource.USER:
-        # User JWT - apply per-user rate limit
-        # Rate limit is enforced by slowapi middleware
-        pass
-
-    elif context.source == AuthSource.ANONYMOUS:
-        # Anonymous - strict rate limit
-        # Enforced by IP address
-        pass
-
-    return {"data": "..."}
-```
-
-### Example 7: Service-to-Service Communication
-
-```python
-# Service A (caller)
-import requests
-
-SERVICE_API_KEY = "sk_prod_ServiceA..."
-
-response = requests.post(
-    "https://service-b.example.com/api/process",
-    headers={"X-API-Key": SERVICE_API_KEY},
-    json={"data": "..."}
-)
-
-# Service B (receiver)
-@app.post("/api/process")
-async def process_data(
-    data: dict,
-    context: AuthContext = Depends(deps.get_context)
-):
-    """Internal service endpoint"""
-
-    # Verify caller is a trusted service
-    if context.source != AuthSource.API_KEY:
-        raise HTTPException(401, "API key required for service access")
-
-    # Verify specific service permissions
-    if not context.has_permission("service:process"):
-        raise HTTPException(403, "API key lacks service:process permission")
-
-    # Process data
-    result = await process(data)
-    return {"result": result}
-```
-
-### Example 8: AuthContext in Business Logic
-
-```python
-from outlabs_auth.models import AuthContext
-
-async def approve_invoice(invoice_id: str, context: AuthContext):
-    """Business logic that works with any auth source"""
-
-    # Get invoice
-    invoice = await invoice_service.get(invoice_id)
-
-    # Check approval permission
-    if not context.has_permission("invoice:approve"):
-        raise PermissionError("Cannot approve invoice")
-
-    # Additional ABAC checks (if enabled)
-    if invoice.amount > 50000 and not context.has_permission("invoice:approve_high_value"):
-        raise PermissionError("Invoice amount exceeds approval limit")
-
-    # Audit log - record who approved
-    await audit_log.record(
-        action="invoice_approved",
-        invoice_id=invoice_id,
-        auth_source=context.source.value,
-        identity=context.identity,
-        metadata=context.metadata
+    allowed = await auth.permission_service.check_permission(
+        session,
+        user_id=UUID(ctx["user_id"]) if ctx["user_id"] else None,
+        permission="invoice:approve",
     )
+    if not allowed:
+        raise PermissionDeniedError("Cannot approve invoice")
 
-    # Approve invoice
-    await invoice_service.approve(invoice_id, context.identity)
-    return invoice
+    return await invoice_service.approve(session, invoice_id, ctx["user_id"])
 
-# Use from route
+
 @app.post("/invoices/{invoice_id}/approve")
 async def approve_invoice_endpoint(
     invoice_id: str,
-    context: AuthContext = Depends(deps.get_context)
+    ctx: dict = Depends(auth.deps.require_auth()),
+    session: AsyncSession = Depends(auth.uow),
 ):
-    invoice = await approve_invoice(invoice_id, context)
-    return invoice
+    return await approve_invoice(session, invoice_id, ctx)
 ```
 
 ---
@@ -1474,123 +914,119 @@ async def approve_invoice_endpoint(
 
 ### Pattern 1: Global Auth Instance
 
+The auth instance is a long-lived object that owns an engine and a connection pool.
+Build exactly one, at import, and reuse it.
+
 ```python
 # app/core/auth.py
+import os
 from outlabs_auth import EnterpriseRBAC
-from app.core.database import get_database
 
-auth = EnterpriseRBAC(database=get_database())
+auth = EnterpriseRBAC(
+    database_url=os.environ["DATABASE_URL"],
+    secret_key=os.environ["SECRET_KEY"],
+)
+auth.prime_fastapi_routing()
 
 # app/api/routes/users.py
 from app.core.auth import auth
 
 @router.get("/users/me")
-async def get_me(user=Depends(auth.get_current_user)):
-    return user
+async def get_me(ctx: dict = Depends(auth.deps.require_auth())):
+    return ctx["user"]
 ```
 
-### Pattern 2: Dependency Injection with FastAPI Depends
+Do **not** construct the auth instance inside a FastAPI dependency — that would build
+a new engine and pool per request.
+
+### Pattern 2: Getting a Session in Your Own Routes
+
+Two dependencies, with different transaction semantics:
 
 ```python
-# app/core/auth.py
-from fastapi import Depends
-from outlabs_auth import SimpleRBAC
+from sqlalchemy.ext.asyncio import AsyncSession
 
-def get_auth() -> SimpleRBAC:
-    """Dependency that provides auth instance"""
-    return SimpleRBAC(database=get_database())
+# auth.session — a plain session. You commit.
+@app.get("/things")
+async def list_things(session: AsyncSession = Depends(auth.session)):
+    return await thing_service.list(session)
 
-# app/api/routes/users.py
-from app.core.auth import get_auth
 
-@router.get("/users/me")
-async def get_me(
-    auth: SimpleRBAC = Depends(get_auth),
-    user = Depends(lambda auth=Depends(get_auth): auth.get_current_user)
+# auth.uow — unit of work. Commits automatically on success for write methods
+# (POST/PUT/PATCH/DELETE), rolls back on error. Requires instrument_fastapi(app),
+# which installs the middleware that commits before the response is sent.
+@app.post("/things")
+async def create_thing(
+    data: ThingCreate,
+    session: AsyncSession = Depends(auth.uow),
+    ctx: dict = Depends(auth.deps.require_auth()),
 ):
-    return user
+    return await thing_service.create(session, data, owner_id=ctx["user_id"])
 ```
 
-### Pattern 3: Custom Permission Decorator
+Prefer `auth.uow` for writes: it commits before the response starts, so a client that
+immediately reads back what it just created does not race the commit.
+
+### Pattern 3: Combining Requirements
+
+Stack dependencies — each is checked independently.
 
 ```python
-# app/core/permissions.py
-from functools import wraps
-from fastapi import HTTPException
-
-def require_permissions(*permissions: str):
-    """Decorator for requiring multiple permissions"""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, user, **kwargs):
-            for perm in permissions:
-                has_perm = await auth.permission_service.check_permission(
-                    user.id, perm
-                )
-                if not has_perm:
-                    raise HTTPException(403, f"Missing permission: {perm}")
-            return await func(*args, user=user, **kwargs)
-        return wrapper
-    return decorator
-
-# Usage
-@app.delete("/users/{user_id}")
-@require_permissions("user:delete", "user:purge")
-async def delete_user(user_id: str, user=Depends(auth.get_current_user)):
-    await user_service.delete(user_id)
-    return {"message": "User deleted"}
-```
-
-### Pattern 4: Entity Context Middleware
-
-```python
-# app/middleware/entity_context.py
-from starlette.middleware.base import BaseHTTPMiddleware
-
-class EntityContextMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        # Extract entity_id from path, query, or header
-        entity_id = request.path_params.get("entity_id")
-        if not entity_id:
-            entity_id = request.query_params.get("entity_id")
-
-        # Store in request state
-        request.state.entity_id = entity_id
-
-        response = await call_next(request)
-        return response
-
-# Add to app
-app.add_middleware(EntityContextMiddleware)
-
-# Use in routes
-@app.get("/entities/{entity_id}/data")
-async def get_entity_data(
-    request: Request,
-    user=Depends(auth.get_current_user)
+@app.post("/entities/{entity_id}/admin/action")
+async def complex_action(
+    entity_id: str,
+    ctx: dict = Depends(auth.require_entity_permission("admin:write", "entity_id")),
+    _user_only: dict = Depends(auth.deps.require_source("jwt")),
 ):
-    entity_id = request.state.entity_id
-    # Check permission with entity context
-    has_perm = await auth.permission_service.check_permission(
-        user.id, "data:read", entity_id
-    )
-    if not has_perm:
-        raise HTTPException(403)
-    return {"data": "..."}
+    return {"performed": True}
+```
+
+Authentication is memoized on `request.state` for default-parameter dependencies, so
+two dependencies on one route do not authenticate twice.
+
+### Pattern 4: Resource Ownership
+
+The library authorizes against users, roles, entities, and ABAC attributes. Row-level
+ownership ("is this *your* invoice?") is your app's concern — do it in the handler,
+or feed the resource attributes into ABAC via a `resource_context_provider`.
+
+```python
+@app.put("/invoices/{invoice_id}")
+async def update_invoice(
+    invoice_id: str,
+    data: InvoiceUpdate,
+    ctx: dict = Depends(auth.deps.require_auth()),
+    session: AsyncSession = Depends(auth.uow),
+):
+    invoice = await invoice_service.get(session, invoice_id)
+
+    if str(invoice.owner_id) != ctx["user_id"]:
+        allowed = await auth.permission_service.check_permission(
+            session, user_id=invoice.owner_id, permission="invoice:admin"
+        )
+        if not allowed:
+            raise HTTPException(403, "Not the owner")
+
+    return await invoice_service.update(session, invoice, data)
 ```
 
 ---
 
 ## Configuration
 
+Configuration is passed as keyword arguments to the preset constructor. The preset
+builds its own `AuthConfig` internally — there is **no** `config=` parameter.
+
 ### SimpleRBAC Configuration
 
 ```python
-from outlabs_auth import SimpleRBAC, SimpleConfig
+from outlabs_auth import SimpleRBAC
 
-config = SimpleConfig(
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+
     # JWT settings
-    secret_key="your-secret-key-change-in-production",
+    secret_key=os.environ["SECRET_KEY"],  # >= 32 chars for HS256
     algorithm="HS256",
     access_token_expire_minutes=15,
     refresh_token_expire_days=30,
@@ -1605,181 +1041,215 @@ config = SimpleConfig(
     max_login_attempts=5,
     lockout_duration_minutes=30,
 )
-
-auth = SimpleRBAC(database=db, config=config)
 ```
+
+SimpleRBAC force-disables `enable_entity_hierarchy`, `enable_context_aware_roles`, and
+`enable_abac`; passing them is ignored rather than an error.
 
 ### EnterpriseRBAC Configuration
 
 ```python
-from outlabs_auth import EnterpriseRBAC, EnterpriseConfig
+from outlabs_auth import EnterpriseRBAC
 
-# Basic configuration (entity hierarchy always enabled)
-config = EnterpriseConfig(
-    # Inherit all SimpleConfig options
-    secret_key="your-secret-key",
-    access_token_expire_minutes=15,
-    refresh_token_expire_days=30,
+auth = EnterpriseRBAC(
+    database_url=os.environ["DATABASE_URL"],
+    secret_key=os.environ["SECRET_KEY"],
 
-    # Entity settings (always enabled)
+    # Entity settings (hierarchy is always on for this preset)
     max_entity_depth=5,
     allowed_entity_types=["company", "department", "team", "project"],
     allow_access_groups=True,
-)
 
-auth = EnterpriseRBAC(database=db, config=config)
-```
-
-```python
-# Full configuration with all optional features
-config = EnterpriseConfig(
-    # Inherit all SimpleConfig options
-    secret_key="your-secret-key",
-    max_entity_depth=5,
-
-    # Optional features (opt-in via feature flags)
+    # Optional features
     enable_context_aware_roles=True,
     enable_abac=True,
+    enable_audit_log=True,
 
-    # Redis counters + permission cache
-    redis_url="redis://localhost:6379",
-    cache_ttl_seconds=300,  # 5 minutes
+    # Redis: counters, rate limits, permission cache
+    redis_url="redis://localhost:6379/0",
+    redis_key_prefix="myapp:production",  # required when Redis is enabled
+    cache_ttl_seconds=300,
 )
-
-auth = EnterpriseRBAC(database=db, config=config)
 ```
+
+`SimpleConfig` and `EnterpriseConfig` are exported and are the Pydantic models behind
+`auth.config`. Read them to discover defaults and field docs; they are not an input to
+the constructor.
 
 ### Environment-Based Configuration
 
 ```python
-# config.py
+# app/core/auth.py
 import os
-from outlabs_auth import SimpleConfig
-
-class Settings:
-    def __init__(self):
-        self.auth_config = SimpleConfig(
-            secret_key=os.getenv("SECRET_KEY"),
-            access_token_expire_minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE", "15")),
-            redis_url=os.getenv("REDIS_URL"),
-        )
-
-settings = Settings()
-
-# app.py
-from config import settings
 from outlabs_auth import SimpleRBAC
 
-auth = SimpleRBAC(database=db, config=settings.auth_config)
+auth = SimpleRBAC(
+    database_url=os.environ["DATABASE_URL"],
+    secret_key=os.environ["SECRET_KEY"],
+    access_token_expire_minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE", "15")),
+    redis_url=os.getenv("REDIS_URL"),
+    redis_key_prefix=os.getenv("REDIS_KEY_PREFIX"),
+    auto_migrate=False,
+)
 ```
+
+### Production Defaults
+
+- Keep `auto_migrate=False` and run `outlabs-auth migrate` as a deploy step.
+- Use a dedicated schema: `database_schema="outlabs_auth"`.
+- Provide Redis for API-key counters, rate limits, and the permission cache.
+- Mount the library under an app-owned prefix such as `/iam`.
+- `background_job_mode` defaults to `"disabled"`; only set `"embedded"` for
+  single-process development.
 
 ---
 
 ## Testing Your App
 
+Tests need a real PostgreSQL database — the library is Postgres-only and the schema is
+managed by Alembic. See `docs/TESTING_GUIDE.md` for the full harness.
+
 ### Test Fixtures
 
 ```python
 # conftest.py
-import pytest
+import pytest_asyncio
 from outlabs_auth import SimpleRBAC
 
-@pytest.fixture
-async def auth(mongo_db):
-    """Auth instance for testing"""
-    auth = SimpleRBAC(database=mongo_db)
+
+@pytest_asyncio.fixture
+async def auth(postgres_url):
+    auth = SimpleRBAC(
+        database_url=postgres_url,
+        secret_key="test-secret-key-at-least-32-characters-long",
+        auto_migrate=True,
+    )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
-@pytest.fixture
+
+@pytest_asyncio.fixture
 async def test_user(auth):
-    """Create test user"""
-    return await auth.user_service.create_user(
-        email="test@example.com",
-        password="Test123!@#"
-    )
+    async with auth.get_session() as session:
+        user = await auth.user_service.create_user(
+            session,
+            email="test@example.com",
+            password="Test123!@#",
+        )
+        await session.commit()
+        return user
 
-@pytest.fixture
+
+@pytest_asyncio.fixture
 async def admin_user(auth):
-    """Create admin user with full permissions"""
-    user = await auth.user_service.create_user(
-        email="admin@example.com",
-        password="Admin123!@#"
-    )
+    async with auth.get_session() as session:
+        user = await auth.user_service.create_user(
+            session,
+            email="admin@example.com",
+            password="Admin123!@#",
+        )
+        admin_role = await auth.role_service.create_role(
+            session,
+            name="admin",
+            display_name="Administrator",
+            permission_names=["user:create", "user:delete", "role:manage"],
+        )
+        await auth.role_service.assign_role_to_user(
+            session, user_id=user.id, role_id=admin_role.id
+        )
+        await session.commit()
+        return user
 
-    admin_role = await auth.role_service.create_role(
-        name="admin",
-        permissions=["user:create", "user:delete", "role:manage"]
-    )
 
-    await auth.user_service.assign_role(user.id, admin_role.id)
-    return user
-
-@pytest.fixture
+@pytest_asyncio.fixture
 async def auth_headers(auth, test_user):
-    """Get auth headers for test user"""
-    tokens = await auth.auth_service.login(
-        email="test@example.com",
-        password="Test123!@#"
-    )
+    async with auth.get_session() as session:
+        user, tokens = await auth.auth_service.login(
+            session, email="test@example.com", password="Test123!@#"
+        )
+        await session.commit()
     return {"Authorization": f"Bearer {tokens.access_token}"}
 ```
+
+Note `auth_service.login` returns a `(User, TokenPair)` tuple.
 
 ### Unit Tests
 
 ```python
-# test_auth.py
 import pytest
+
 
 @pytest.mark.asyncio
 async def test_user_can_login(auth, test_user):
-    tokens = await auth.auth_service.login(
-        email="test@example.com",
-        password="Test123!@#"
-    )
+    async with auth.get_session() as session:
+        user, tokens = await auth.auth_service.login(
+            session, email="test@example.com", password="Test123!@#"
+        )
     assert tokens.access_token
     assert tokens.refresh_token
 
+
 @pytest.mark.asyncio
 async def test_user_with_permission_can_access(auth, admin_user):
-    has_perm = await auth.permission_service.check_permission(
-        user_id=admin_user.id,
-        permission="user:delete"
-    )
-    assert has_perm is True
+    async with auth.get_session() as session:
+        allowed = await auth.permission_service.check_permission(
+            session, user_id=admin_user.id, permission="user:delete"
+        )
+    assert allowed is True
+
 
 @pytest.mark.asyncio
 async def test_user_without_permission_cannot_access(auth, test_user):
-    has_perm = await auth.permission_service.check_permission(
-        user_id=test_user.id,
-        permission="user:delete"
-    )
-    assert has_perm is False
+    async with auth.get_session() as session:
+        allowed = await auth.permission_service.check_permission(
+            session, user_id=test_user.id, permission="user:delete"
+        )
+    assert allowed is False
 ```
+
+### Overriding Auth in Route Tests
+
+Because dependencies return plain dicts, faking one is just returning a dict:
+
+```python
+def override_auth(app, user, source="jwt", permissions=None):
+    dependency = auth.deps.require_auth()
+
+    async def _fake():
+        return {
+            "user": user,
+            "user_id": str(user.id),
+            "source": source,
+            "metadata": {},
+        }
+
+    app.dependency_overrides[dependency] = _fake
+```
+
+Override the exact dependency object you mounted the route with — `require_auth()`
+builds a new function each call, so keep a reference to the one the route uses.
 
 ### Integration Tests
 
 ```python
-# test_api.py
 from fastapi.testclient import TestClient
+
 
 def test_protected_route_requires_auth(client: TestClient):
     response = client.get("/users/me")
     assert response.status_code == 401
+
 
 def test_protected_route_with_valid_token(client: TestClient, auth_headers):
     response = client.get("/users/me", headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["email"] == "test@example.com"
 
+
 def test_permission_required_route(client: TestClient, auth_headers):
-    # Test user doesn't have permission
     response = client.delete("/users/other-user-id", headers=auth_headers)
     assert response.status_code == 403
-
-def test_admin_can_delete_user(client: TestClient, admin_headers):
-    response = client.delete("/users/user-id", headers=admin_headers)
-    assert response.status_code == 200
 ```
 
 ---
@@ -1789,87 +1259,79 @@ def test_admin_can_delete_user(client: TestClient, admin_headers):
 ### 1. Always Use Environment Variables for Secrets
 
 ```python
-# ❌ Bad
-config = SimpleConfig(secret_key="hardcoded-secret")
+# Bad
+auth = SimpleRBAC(database_url=DB_URL, secret_key="hardcoded-secret")
 
-# ✅ Good
-config = SimpleConfig(secret_key=os.getenv("SECRET_KEY"))
+# Good
+auth = SimpleRBAC(database_url=DB_URL, secret_key=os.environ["SECRET_KEY"])
 ```
 
-### 2. Initialize Database on Startup
+The 32-character minimum for HS256 is enforced at construction, so a short
+placeholder fails fast rather than at first login.
+
+### 2. Initialize Once, in the Lifespan
 
 ```python
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await auth.initialize()
-    # Creates indexes and initializes collections
+    yield
+    await auth.shutdown()
 ```
 
-### 3. Use Specific Permissions
+`initialize()` is idempotent and does the async work — migrations (if
+`auto_migrate=True`), Redis connections, service wiring. `shutdown()` closes the pool
+and stops background jobs. If you mount routers at import, call
+`prime_fastapi_routing()` first.
+
+### 3. Use `instrument_fastapi`, Not Just the Exception Handlers
 
 ```python
-# ❌ Avoid overly broad permissions
-permissions = ["admin:all"]
+# Handlers only — no UnitOfWork or RequestCache middleware
+from outlabs_auth import register_exception_handlers
+register_exception_handlers(app)
 
-# ✅ Use specific permissions
-permissions = [
-    "user:read",
-    "user:create",
-    "user:update",
-    "role:manage"
-]
+# Handlers AND middleware
+auth.instrument_fastapi(app)
 ```
 
-### 4. Implement Proper Error Handling
+Call it before the app starts serving; middleware cannot be added afterwards.
+
+### 4. Use Specific Permissions
 
 ```python
-from fastapi import HTTPException
+# Avoid overly broad permissions
+permission_names = ["admin:all"]
 
+# Prefer specific ones
+permission_names = ["user:read", "user:create", "user:update", "role:manage"]
+```
+
+### 5. Let the Library's Exceptions Surface
+
+Library exceptions subclass `OutlabsAuthException` and carry their own status code and
+response shape. With `instrument_fastapi(app)` installed, they are rendered
+consistently — do not wrap service calls in a bare `except Exception`.
+
+```python
 @app.post("/users")
-async def create_user(data: UserCreate):
-    try:
-        user = await auth.user_service.create_user(
-            email=data.email,
-            password=data.password
-        )
-        return user
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        logger.error(f"User creation failed: {e}")
-        raise HTTPException(500, "Internal server error")
-```
-
-### 5. Cache Permission Checks When Appropriate
-
-```python
-# For frequently checked permissions, use caching
-result = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="resource:action",
-    use_cache=True  # Default in FullFeatured
-)
-
-# For critical security checks, skip cache
-result = await auth.permission_service.check_permission(
-    user_id=user.id,
-    permission="admin:delete_everything",
-    use_cache=False  # Force fresh check
-)
+async def create_user(
+    data: UserCreate,
+    session: AsyncSession = Depends(auth.uow),
+):
+    # UserAlreadyExistsError, InvalidInputError, etc. become correct HTTP
+    # responses via the registered handlers.
+    return await auth.user_service.create_user(
+        session, email=data.email, password=data.password
+    )
 ```
 
 ---
 
 ## Next Steps
 
-- Review [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for development phases
-- Check [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md) to choose the right preset
-- See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) if migrating from centralized API
-
----
-
-**Last Updated**: 2025-01-14 (v1.4: JWT service tokens, unified AuthDeps, Redis counters, temp locks, 12-char prefixes)
-**Next Review**: After Phase 1 implementation
-**Related Documents**:
-- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - Unified AuthDeps implementation
-- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) - DD-028, DD-033, DD-034, DD-035
+- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - `AuthDeps` in depth
+- [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md) - choosing a preset
+- [TESTING_GUIDE.md](TESTING_GUIDE.md) - testing strategies
+- [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - running it in production
+- `examples/simple_rbac/main.py`, `examples/enterprise_rbac/main.py` - runnable apps

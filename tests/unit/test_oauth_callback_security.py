@@ -45,6 +45,81 @@ async def oauth_secure_auth_instance(test_engine) -> SimpleRBAC:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_oauth_callback_require_existing_user_rejects_unknown_email(
+    oauth_auth_instance: SimpleRBAC,
+):
+    async with oauth_auth_instance.get_session() as session:
+        with pytest.raises(HTTPException) as exc_info:
+            await oauth_callback(
+                auth=oauth_auth_instance,
+                session=session,
+                provider="google",
+                access_token="provider-access-token",
+                account_id="google-user-unknown",
+                account_email=f"unknown-{uuid4().hex[:8]}@example.com",
+                account_email_verified=True,
+                associate_by_email=True,
+                is_verified_by_default=True,
+                require_existing_user=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "No account found for this email"
+
+    async with oauth_auth_instance.get_session() as session:
+        users = (
+            await session.execute(
+                select(User).where(User.email.like("unknown-%@example.com"))
+            )
+        ).scalars().all()
+        assert users == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_oauth_callback_require_existing_user_links_existing_account(
+    oauth_auth_instance: SimpleRBAC,
+):
+    email = f"existing-{uuid4().hex[:8]}@example.com"
+    async with oauth_auth_instance.get_session() as session:
+        user = await oauth_auth_instance.user_service.create_user(
+            session=session,
+            email=email,
+            password="ExistingUserPass123!",
+        )
+        await session.commit()
+        user_id = user.id
+
+    async with oauth_auth_instance.get_session() as session:
+        linked = await oauth_callback(
+            auth=oauth_auth_instance,
+            session=session,
+            provider="google",
+            access_token="provider-access-token",
+            account_id="google-user-existing",
+            account_email=email,
+            account_email_verified=True,
+            associate_by_email=True,
+            is_verified_by_default=True,
+            require_existing_user=True,
+        )
+        await session.commit()
+
+    assert linked.id == user_id
+    async with oauth_auth_instance.get_session() as session:
+        social = (
+            await session.execute(
+                select(SocialAccount).where(
+                    SocialAccount.user_id == user_id,
+                    SocialAccount.provider == "google",
+                )
+            )
+        ).scalar_one()
+        assert social.provider_user_id == "google-user-existing"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_oauth_callback_rejects_unverified_email_association(
     oauth_auth_instance: SimpleRBAC,
 ):

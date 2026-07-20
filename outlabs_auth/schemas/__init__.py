@@ -63,6 +63,7 @@ from outlabs_auth.schemas.oauth import (
     OAuthCallbackError,
     SocialAccountResponse,
 )
+from outlabs_auth.schemas.session import UserSessionResponse
 
 # Permission schemas
 from outlabs_auth.schemas.permission import (
@@ -82,6 +83,7 @@ from outlabs_auth.schemas.role import (
 # User schemas
 from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
+    PhoneVerifyCodeRequest,
     UserCreateRequest,
     UserResponse,
     UserUpdateRequest,
@@ -119,6 +121,7 @@ __all__ = [
     "UserCreateRequest",
     "UserUpdateRequest",
     "ChangePasswordRequest",
+    "PhoneVerifyCodeRequest",
     "UserAuditEventResponse",
     # Role
     "RoleResponse",
@@ -160,4 +163,6 @@ __all__ = [
     "OAuthAuthorizeResponse",
     "OAuthCallbackError",
     "SocialAccountResponse",
+    # Sessions
+    "UserSessionResponse",
 ]

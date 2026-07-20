@@ -1,27 +1,62 @@
 # OutlabsAuth
 
-Open-source FastAPI authentication and authorization for RBAC, ABAC, API keys, and Postgres-backed permission models.
+**Library-first authentication and authorization for FastAPI** — RBAC, optional ABAC, API keys, and Postgres-backed permissions that live inside your app.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Stage: Alpha](https://img.shields.io/badge/stage-alpha-red.svg)](#status)
+[![PyPI](https://img.shields.io/pypi/v/outlabs-auth.svg)](https://pypi.org/project/outlabs-auth/)
 
-> **Alpha release** - Public PyPI packaging is supported, but the API surface is still settling before 1.0.
+> **Alpha** — packaged on PyPI; the public API is still settling before 1.0.
 
-## Status
+## Why OutlabsAuth
 
-**Current Library Version**: 0.1.0a24
+Most auth products push you into a separate IdP or a black-box service. OutlabsAuth is the opposite: a **Python library** you mount into your FastAPI app, with your Postgres, your routes, and your deployment.
 
-**Release Stage**: Alpha
+| You get | Details |
+|---------|---------|
+| Two presets | **SimpleRBAC** (flat roles) or **EnterpriseRBAC** (entity hierarchy + tree permissions) |
+| Auth surface | JWT access/refresh, API keys, service tokens, invitations, optional OAuth / magic link / access codes |
+| Admin console | Optional sister app [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) — point it at any host that mounts this library |
+| Ops | Packaged Alembic migrations, CLI bootstrap, Redis when needed, optional in-process permission cache (`cache_backend="memory"`) |
 
-## What It Does
+## Documentation
 
-OutlabsAuth is a library-first auth system for FastAPI applications that want to keep authentication and authorization inside the app instead of outsourcing it to a separate service.
+**Implementers** start in the [OutlabsAuth Handbook](./docs-library/)
+(`docs-library/`) — human-readable guides written for people integrating the
+library. A Nuxt docs site lives beside this repo at
+[`../outlabsAuth-docs`](../outlabsAuth-docs) (Nuxt UI docs template); re-port
+with `python3 scripts/port_handbook.py` from that project.
 
-- SimpleRBAC and EnterpriseRBAC presets
-- JWT auth, refresh tokens, API keys, service tokens, and OAuth hooks
-- Postgres-backed users, roles, permissions, entities, and audit history
-- FastAPI router factories, middleware, and CLI migrations
+| Guide | What it covers |
+|-------|----------------|
+| [Handbook home](./docs-library/) | Reading paths, full guide index |
+| [Introduction](./docs-library/00-Introduction.md) | Mental model in a few minutes |
+| [Getting Started](./docs-library/01-Getting-Started.md) | Install → migrate → mount → login → optional UI |
+| [Choosing a Preset](./docs-library/07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
+| [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
+| [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
+| [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
+| [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
+| [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |
+
+**Maintainers** (design decisions, audits, release process): [`docs/`](./docs/).
+Deep host DX / feature matrix when you need them:
+[API design](./docs/API_DESIGN.md),
+[Comparison matrix](./docs/COMPARISON_MATRIX.md).
+
+## Choose a Preset
+
+```
+Need departments / teams / org tree?
+  NO  → SimpleRBAC
+  YES → EnterpriseRBAC
+```
+
+| Need | Preset |
+|------|--------|
+| Flat users → roles → permissions | **SimpleRBAC** |
+| Hierarchy, memberships, tree permissions | **EnterpriseRBAC** |
 
 ## Install
 
@@ -29,63 +64,97 @@ OutlabsAuth is a library-first auth system for FastAPI applications that want to
 pip install outlabs-auth
 ```
 
-You will also need a PostgreSQL database available to the consuming app.
+You need PostgreSQL. Provide at least:
 
-The consuming app owns its own configuration. In practice that means you provide:
-
-- a PostgreSQL connection URL
-- a JWT signing secret
-- any app-specific entity, membership, or host-query integrations you want on top of the base library
+- a `postgresql+asyncpg://...` URL
+- a JWT `secret_key` (≥ 32 characters for HS256)
 
 ## Quickstart
 
 ```python
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from outlabs_auth import SimpleRBAC, register_exception_handlers
+from outlabs_auth import SimpleRBAC
 from outlabs_auth.routers import get_auth_router
 
 auth = SimpleRBAC(
     database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/app",
-    secret_key="change-me",
-    auto_migrate=True,
+    # Must be at least 32 characters when signing with HS256, or construction
+    # fails. Generate one with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key=os.environ["SECRET_KEY"],
 )
+
+# Builds the engine, services and dependencies synchronously. Required *before*
+# any router factory runs: they dereference `auth.deps`, which otherwise only
+# exists after `initialize()` — and that's async, so it cannot run at import.
+auth.prime_fastapi_routing()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await auth.initialize()
+    await auth.initialize()  # async work: migrations, Redis, service wiring
     yield
     await auth.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
-register_exception_handlers(app)
+
+# Installs the exception handlers *and* the UnitOfWork/RequestCache middleware.
+# Prefer this over bare register_exception_handlers(): the middleware commits
+# before the response is sent, which is what makes a create immediately readable.
+auth.instrument_fastapi(app)
+
 app.include_router(get_auth_router(auth, prefix="/auth"))
 ```
 
-This example uses `auto_migrate=True` for convenience. For production, run migrations explicitly with the packaged CLI instead of relying on startup migration.
+`tests/unit/test_readme_quickstart.py` executes this block, so it cannot rot.
+
+Deliberate details:
+
+- **`prime_fastapi_routing()` before mounting** — otherwise `ConfigurationError: Dependencies not initialized`
+- **Real `secret_key`** — placeholders under 32 characters fail at construction under HS256
+
+You can also mount inside `lifespan()` after `initialize()` (no priming) — see `examples/simple_rbac/main.py`.
+
+For production, run migrations with the CLI (`auto_migrate=False`). Continue with [Getting Started](./docs-library/01-Getting-Started.md) and [Configuration](./docs-library/03-Configuration.md).
+
+## OutlabsAuth UI
+
+Optional sister repository: a **Vite/React** admin console that plugs into any app hosting this library. It reads `GET {authApiPrefix}/auth/config` and adapts to Simple vs Enterprise.
+
+```bash
+# Terminal 1 — Enterprise example API
+cd examples/enterprise_rbac
+uv sync && uv run outlabs-auth migrate && uv run python reset_test_env.py
+uv run uvicorn main:app --reload --port 8004
+
+# Terminal 2 — from the outlabsAuth repo root
+cd ../OutlabsAuthUI   # https://github.com/outlabsio/OutlabsAuthUI
+bun install
+cp public/app-config.template.json public/app-config.json
+# apiBaseUrl: http://localhost:8004   authApiPrefix: /v1
+bun run dev
+```
+
+Sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
 
 ## CLI Bootstrap
 
-After installation, the package exposes an `outlabs-auth` CLI for schema setup and initial seeding.
-
 ```bash
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
-# optional: export OUTLABS_AUTH_SCHEMA=auth
+# optional: export OUTLABS_AUTH_SCHEMA=outlabs_auth
 
 outlabs-auth migrate
 outlabs-auth seed-system
-outlabs-auth bootstrap-admin --email admin@example.com --password change-me
+outlabs-auth bootstrap-admin --email admin@example.com --password 'ChangeMe_now1!'
 ```
 
-## Recommended Production Defaults
+Useful operators: `outlabs-auth doctor` (read-only preflight), `outlabs-auth bootstrap` (idempotent first-boot). See [Configuration](./docs-library/03-Configuration.md) and [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
 
-For real deployments, use the library with explicit, optimized baseline
-settings rather than the convenience quickstart defaults.
-
-### App configuration baseline
+## Production Snapshot
 
 ```python
 from outlabs_auth import EnterpriseRBAC
@@ -93,49 +162,16 @@ from outlabs_auth import EnterpriseRBAC
 auth = EnterpriseRBAC(
     database_url="postgresql+asyncpg://user:password@db-host/app?ssl=require",
     database_schema="outlabs_auth",
-    secret_key="replace-me",
+    secret_key="replace-me-with-a-long-secret",
     auto_migrate=False,
-    redis_url="redis://cache-host:6379/0",  # Enables Redis counters + permission cache
+    redis_url="redis://cache-host:6379/0",
 )
 ```
 
-Recommended defaults:
-
-- use an explicit auth schema such as `outlabs_auth`
-- keep `auto_migrate=False` in normal runtime
-- provide Redis for production API-key counters, rate limits, and permission caching
-- mount the library under an app-owned prefix such as `/iam`
-
-### Database connection guidance
-
-For managed Postgres providers that offer both direct and transaction-pooler
-URLs, prefer the direct runtime URL for auth-heavy apps.
-
-Why:
-
-- OutlabsAuth already uses SQLAlchemy connection pooling
-- auth and permission checks often perform multiple small round trips
-- transaction-pooler endpoints add measurable latency for those query patterns
-- non-public auth schemas depend on reliable per-connection schema resolution
-
-Use:
-
-- `postgresql+asyncpg://...`
-
-Avoid as the primary runtime URL when you can:
-
-- transaction-pooler URLs such as provider `-pooler` endpoints
-
-### Bootstrap and worker startup
-
-Do not rely on `auto_migrate=True` inside a multi-worker application runtime.
-
-Recommended pattern:
-
-1. Run the packaged CLI in a single-process release or prestart step.
-2. Start the application workers only after that step succeeds.
-
-Example:
+- Prefer a **direct** Postgres URL over transaction-pooler endpoints for auth-heavy apps
+- Migrate in a **single-process** prestart step; then start workers
+- Mount under an app-owned prefix such as `/iam`
+- Point OutlabsAuth UI `authApiPrefix` at that same prefix
 
 ```bash
 export DATABASE_URL='postgresql+asyncpg://user:password@db-host/app?ssl=require'
@@ -143,44 +179,14 @@ export OUTLABS_AUTH_SCHEMA='outlabs_auth'
 
 outlabs-auth migrate
 outlabs-auth seed-system
-
 exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
-This avoids worker races and keeps schema ownership explicit.
+## Status
 
-### Current operator workflow
+**Current Library Version**: 0.1.0a24
 
-Today, the recommended operational commands are:
-
-- `outlabs-auth migrate`
-- `outlabs-auth seed-system`
-- `outlabs-auth bootstrap-admin`
-- `outlabs-auth tables`
-- `outlabs-auth current`
-- `outlabs-auth doctor` — read-only preflight diagnostics. Runs five checks
-  (connectivity, target schema, Alembic version table, revision matches code,
-  core auth tables) against `DATABASE_URL` + `OUTLABS_AUTH_SCHEMA`. Supports
-  `--format text` (default) and `--format json`. Exit codes: `0` healthy, `1`
-  one or more checks failed, `2` `DATABASE_URL` not set. Passwords in the URL
-  are redacted in all output. Safe to run against production — it issues no
-  writes.
-- `outlabs-auth bootstrap` — idempotent first-boot orchestrator. Classifies
-  the schema, builds a deterministic plan (migrate → seed → optional admin),
-  and executes it. Aborts explicitly on drift, partially-bootstrapped, or
-  missing-schema states rather than auto-repairing. Flags: `--dry-run`,
-  `--skip-seed`, `--admin-email`/`--admin-password` (also via
-  `OUTLABS_AUTH_BOOTSTRAP_*` env vars), `--format text|json`. Same exit-code
-  semantics as doctor. Runs a final doctor pass on success to confirm the
-  healthy end state.
-
-## More
-
-The repository includes deeper examples, packaged CLI flows, and design notes:
-
-- GitHub: https://github.com/outlabsio/outlabsAuth
-- Examples: [`examples/`](/Users/macbookm3/Documents/projects/outlabsAuth/examples)
-- Maintainer release guide: [`docs/PRIVATE_RELEASE.md`](/Users/macbookm3/Documents/projects/outlabsAuth/docs/PRIVATE_RELEASE.md)
+**Release Stage**: Alpha
 
 ## License
 

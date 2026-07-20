@@ -1,7 +1,14 @@
-"""Transactional mail wiring for the EnterpriseRBAC example app."""
+"""Transactional mail wiring for the EnterpriseRBAC example app.
+
+Host-owned recipe: pick a provider via OUTLABS_AUTH_MAIL_PROVIDER (or auto-detect),
+compose branded invite/reset copy, optionally sandbox-redirect recipients.
+
+Library owns intents + provider transports; this module owns selection + branding.
+"""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import replace
 from html import escape
@@ -18,7 +25,12 @@ from outlabs_auth.mail import (
     MailDeliveryResult,
     MailgunMailProvider,
     PasswordResetConfirmationMailIntent,
+    PostmarkMailProvider,
+    ResendMailProvider,
+    SMTPMailProvider,
+    SendGridMailProvider,
     TransactionalMailProvider,
+    WebhookMailProvider,
 )
 
 APP_NAME = "Outlabs Auth"
@@ -30,6 +42,14 @@ DEFAULT_MAILGUN_API_BASE_URL = "https://api.mailgun.net"
 
 def _trim_trailing_slash(value: str) -> str:
     return value.rstrip("/")
+
+
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    value = os.getenv(name, default)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def build_frontend_token_link(frontend_url: str, path: str, token: str) -> str:
@@ -201,53 +221,158 @@ class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
         )
 
 
+def resolve_mail_provider_name(explicit: Optional[str] = None) -> str:
+    """Resolve provider name: explicit arg, OUTLABS_AUTH_MAIL_PROVIDER, or auto."""
+    name = (explicit or _env("OUTLABS_AUTH_MAIL_PROVIDER") or "auto").strip().lower()
+    if name in {"", "auto"}:
+        if _env("MAILGUN_DOMAIN") and _env("MAILGUN_API_KEY") and (
+            _env("MAILGUN_FROM_EMAIL") or _env("MAIL_FROM")
+        ):
+            return "mailgun"
+        if _env("SENDGRID_API_KEY") and (_env("MAIL_FROM") or _env("SENDGRID_FROM_EMAIL")):
+            return "sendgrid"
+        if _env("POSTMARK_SERVER_TOKEN") and (_env("MAIL_FROM") or _env("POSTMARK_FROM_EMAIL")):
+            return "postmark"
+        if _env("RESEND_API_KEY") and (_env("MAIL_FROM") or _env("RESEND_FROM_EMAIL")):
+            return "resend"
+        if _env("SMTP_HOST") and (_env("MAIL_FROM") or _env("SMTP_FROM_EMAIL")):
+            return "smtp"
+        if _env("OUTLABS_AUTH_MAIL_WEBHOOK_URL"):
+            return "webhook"
+        return "console"
+    return name
+
+
 def build_enterprise_example_transactional_mail_service(
     *,
     frontend_url: str,
+    mail_provider: Optional[str] = None,
     mailgun_api_base_url: str = DEFAULT_MAILGUN_API_BASE_URL,
     mailgun_domain: Optional[str] = None,
     mailgun_api_key: Optional[str] = None,
     mailgun_from_email: Optional[str] = None,
     mailgun_from_name: str = APP_NAME,
     mailgun_recipient_override: Optional[str] = None,
+    recipient_override: Optional[str] = None,
     provider_override: Optional[TransactionalMailProvider] = None,
     console_output: Callable[[str], None] = print,
 ) -> ComposedAuthMailService:
+    provider_name = resolve_mail_provider_name(mail_provider)
+    from_email = (
+        mailgun_from_email
+        or _env("MAIL_FROM")
+        or _env("MAILGUN_FROM_EMAIL")
+        or _env("SENDGRID_FROM_EMAIL")
+        or _env("POSTMARK_FROM_EMAIL")
+        or _env("RESEND_FROM_EMAIL")
+        or _env("SMTP_FROM_EMAIL")
+    )
+    from_name = (
+        _env("MAIL_FROM_NAME")
+        or mailgun_from_name
+        or APP_NAME
+    )
+
     provider = provider_override or _build_mail_provider(
+        provider_name=provider_name,
         mailgun_api_base_url=mailgun_api_base_url,
-        mailgun_domain=mailgun_domain,
-        mailgun_api_key=mailgun_api_key,
-        mailgun_from_email=mailgun_from_email,
-        mailgun_from_name=mailgun_from_name,
+        mailgun_domain=mailgun_domain or _env("MAILGUN_DOMAIN"),
+        mailgun_api_key=mailgun_api_key or _env("MAILGUN_API_KEY"),
+        from_email=from_email,
+        from_name=from_name,
         console_output=console_output,
     )
-    if mailgun_recipient_override:
+
+    override = (
+        recipient_override
+        or mailgun_recipient_override
+        or _env("MAIL_RECIPIENT_OVERRIDE")
+        or _env("MAILGUN_RECIPIENT_OVERRIDE")
+    )
+    if override:
         provider = RecipientOverrideMailProvider(
             provider=provider,
-            override_email=mailgun_recipient_override,
+            override_email=override,
         )
+
     composer = EnterpriseExampleMailComposer(
         frontend_url=frontend_url,
-        support_email=mailgun_from_email,
+        support_email=from_email,
     )
     return ComposedAuthMailService(provider=provider, composer=composer)
 
 
+def _require(value: Optional[str], name: str) -> str:
+    if not value:
+        raise RuntimeError(f"{name} must be configured for the selected mail provider")
+    return value
+
+
 def _build_mail_provider(
     *,
+    provider_name: str,
     mailgun_api_base_url: str,
     mailgun_domain: Optional[str],
     mailgun_api_key: Optional[str],
-    mailgun_from_email: Optional[str],
-    mailgun_from_name: str,
+    from_email: Optional[str],
+    from_name: str,
     console_output: Callable[[str], None],
 ) -> TransactionalMailProvider:
-    if mailgun_domain and mailgun_api_key and mailgun_from_email:
+    if provider_name in {"none", "disabled", "off", "console"}:
+        return ConsoleMailProvider(output=console_output)
+
+    if provider_name == "mailgun":
         return MailgunMailProvider(
-            api_key=mailgun_api_key,
-            domain=mailgun_domain,
-            from_email=mailgun_from_email,
-            from_name=mailgun_from_name,
-            base_url=_trim_trailing_slash(mailgun_api_base_url),
+            api_key=_require(mailgun_api_key, "MAILGUN_API_KEY"),
+            domain=_require(mailgun_domain, "MAILGUN_DOMAIN"),
+            from_email=_require(from_email, "MAILGUN_FROM_EMAIL or MAIL_FROM"),
+            from_name=from_name,
+            base_url=_trim_trailing_slash(
+                _env("MAILGUN_API_BASE_URL") or mailgun_api_base_url
+            ),
         )
-    return ConsoleMailProvider(output=console_output)
+
+    if provider_name == "sendgrid":
+        return SendGridMailProvider(
+            api_key=_require(_env("SENDGRID_API_KEY"), "SENDGRID_API_KEY"),
+            from_email=_require(from_email, "MAIL_FROM or SENDGRID_FROM_EMAIL"),
+            from_name=from_name,
+        )
+
+    if provider_name == "postmark":
+        return PostmarkMailProvider(
+            server_token=_require(_env("POSTMARK_SERVER_TOKEN"), "POSTMARK_SERVER_TOKEN"),
+            from_email=_require(from_email, "MAIL_FROM or POSTMARK_FROM_EMAIL"),
+            from_name=from_name,
+            message_stream=_env("POSTMARK_MESSAGE_STREAM") or "outbound",
+        )
+
+    if provider_name == "resend":
+        return ResendMailProvider(
+            api_key=_require(_env("RESEND_API_KEY"), "RESEND_API_KEY"),
+            from_email=_require(from_email, "MAIL_FROM or RESEND_FROM_EMAIL"),
+            from_name=from_name,
+        )
+
+    if provider_name == "smtp":
+        return SMTPMailProvider(
+            host=_require(_env("SMTP_HOST"), "SMTP_HOST"),
+            port=int(_env("SMTP_PORT") or "587"),
+            user=_require(_env("SMTP_USER"), "SMTP_USER"),
+            password=_require(_env("SMTP_PASSWORD"), "SMTP_PASSWORD"),
+            from_email=_require(from_email, "MAIL_FROM or SMTP_FROM_EMAIL"),
+            from_name=from_name,
+            use_starttls=(_env("SMTP_USE_STARTTLS") or "true").lower() in {"1", "true", "yes", "on"},
+            use_ssl_tls=(_env("SMTP_USE_SSL_TLS") or "false").lower() in {"1", "true", "yes", "on"},
+        )
+
+    if provider_name == "webhook":
+        return WebhookMailProvider(
+            url=_require(_env("OUTLABS_AUTH_MAIL_WEBHOOK_URL"), "OUTLABS_AUTH_MAIL_WEBHOOK_URL"),
+            secret=_env("OUTLABS_AUTH_MAIL_WEBHOOK_SECRET"),
+        )
+
+    raise RuntimeError(
+        f"Unsupported OUTLABS_AUTH_MAIL_PROVIDER={provider_name!r}. "
+        "Use auto|mailgun|sendgrid|postmark|resend|smtp|webhook|console."
+    )

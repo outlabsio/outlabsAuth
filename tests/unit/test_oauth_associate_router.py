@@ -212,7 +212,6 @@ async def test_oauth_associate_callback_rejects_invalid_state_and_invalid_authen
             request=SimpleNamespace(),
             response=Response(),
             session=DummySession(),
-            auth_context={"user_id": str(uuid4())},
             access_token_state=(
                 {"access_token": "provider-access-token"},
                 "not-a-valid-state",
@@ -234,7 +233,6 @@ async def test_oauth_associate_callback_rejects_invalid_state_and_invalid_authen
             request=SimpleNamespace(),
             response=Response(),
             session=DummySession(),
-            auth_context={"user_id": bad_user_id},
             access_token_state=(
                 {"access_token": "provider-access-token"},
                 state,
@@ -281,7 +279,6 @@ async def test_oauth_associate_callback_rejects_missing_user(
             request=SimpleNamespace(),
             response=Response(),
             session=DummySession(),
-            auth_context={"user_id": user_id},
             access_token_state=(
                 {"access_token": "provider-access-token"},
                 generate_state_token(
@@ -341,7 +338,6 @@ async def test_oauth_associate_callback_updates_existing_linked_account_for_same
         request=SimpleNamespace(),
         response=Response(),
         session=session,
-        auth_context={"user_id": str(user_id)},
         access_token_state=(
             {
                 "access_token": "provider-access-token",
@@ -418,7 +414,6 @@ async def test_oauth_associate_callback_rejects_different_existing_account_for_s
             request=SimpleNamespace(),
             response=Response(),
             session=session,
-            auth_context={"user_id": str(user_id)},
             access_token_state=(
                 {"access_token": "provider-access-token"},
                 generate_state_token(
@@ -483,7 +478,6 @@ async def test_oauth_associate_callback_updates_existing_provider_account_branch
         request=SimpleNamespace(),
         response=Response(),
         session=session,
-        auth_context={"user_id": str(user_id)},
         access_token_state=(
             {
                 "access_token": "provider-access-token",
@@ -503,3 +497,57 @@ async def test_oauth_associate_callback_updates_existing_provider_account_branch
     assert "GITHUB" in user.auth_methods
     auth.user_service.on_after_oauth_associate.assert_awaited_once()
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_oauth_associate_callback_redirects_when_success_url_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    oauth_client = DummyOAuthClient("github")
+    auth = _make_auth()
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, auth_methods=["PASSWORD"])
+    auth.user_service.get_user_by_id.return_value = user
+    router = get_oauth_associate_router(
+        oauth_client,
+        auth,
+        state_secret="oauth-associate-secret",
+        prefix="/v1/oauth-associate/github",
+        redirect_url="https://api.example.com/oauth/associate/github/callback",
+        success_redirect_url="https://app.example.com/app/account",
+    )
+    callback = _endpoint(router, "/v1/oauth-associate/github/callback", "GET")
+    session = DummySession(execute_results=[ScalarResult(None), ScalarResult(None)])
+
+    async def fake_get_oauth_user_info(oauth_client, token):
+        return SimpleNamespace(
+            provider_user_id="provider-user-redirect",
+            email="redirect@example.com",
+            email_verified=True,
+        )
+
+    monkeypatch.setattr(
+        oauth_associate_module,
+        "get_oauth_user_info",
+        fake_get_oauth_user_info,
+    )
+
+    response = await callback(
+        request=SimpleNamespace(),
+        response=Response(),
+        session=session,
+        access_token_state=(
+            {"access_token": "provider-access-token"},
+            generate_state_token(
+                {"sub": str(user_id)},
+                "oauth-associate-secret",
+                lifetime_seconds=600,
+            ),
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == (
+        "https://app.example.com/app/account?linked=github"
+    )

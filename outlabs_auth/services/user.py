@@ -7,7 +7,7 @@ Handles user management operations with PostgreSQL/SQLAlchemy.
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import Request, Response
@@ -31,13 +31,17 @@ from outlabs_auth.mail.types import (
     PasswordResetConfirmationMailIntent,
     coerce_metadata,
 )
+from outlabs_auth.messaging.types import (
+    AuthChallengeDeliveryIntent,
+    DeliveryRecipient,
+)
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
-from outlabs_auth.utils.validation import validate_email, validate_name
+from outlabs_auth.utils.validation import validate_email, validate_name, validate_phone
 
 
 class UserService(BaseService[User]):
@@ -62,6 +66,7 @@ class UserService(BaseService[User]):
         api_key_service: Optional[Any] = None,
         user_audit_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
+        transactional_messaging_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -69,6 +74,9 @@ class UserService(BaseService[User]):
         Args:
             config: Authentication configuration
             notification_service: Optional notification service for events
+            transactional_mail_service: Optional invite/reset mail service
+            transactional_messaging_service: Optional challenge delivery service
+                (email and/or WhatsApp via host-owned providers)
         """
         super().__init__(User)
         self.config = config
@@ -79,6 +87,7 @@ class UserService(BaseService[User]):
         self.api_key_service = api_key_service
         self.user_audit_service = user_audit_service
         self.transactional_mail_service = transactional_mail_service
+        self.transactional_messaging_service = transactional_messaging_service
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -127,8 +136,13 @@ class UserService(BaseService[User]):
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
     ) -> None:
-        """Hook called after a magic-link token is generated. Override to send email."""
-        pass
+        """Hook called after a magic-link token is generated. Override or use messaging service."""
+        await self.send_magic_link_delivery(
+            user,
+            token,
+            request=request,
+            redirect_url=redirect_url,
+        )
 
     async def on_after_access_code_requested(
         self,
@@ -136,9 +150,19 @@ class UserService(BaseService[User]):
         code: str,
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
+        *,
+        delivery_channel: str = "email",
+        challenge_type: str = "access_code",
     ) -> None:
-        """Hook called after an access code is generated. Override to send email."""
-        pass
+        """Hook called after an access code is generated. Override or use messaging service."""
+        await self.send_access_code_delivery(
+            user,
+            code,
+            request=request,
+            redirect_url=redirect_url,
+            delivery_channel=delivery_channel,  # type: ignore[arg-type]
+            challenge_type=challenge_type,  # type: ignore[arg-type]
+        )
 
     async def on_failed_login(
         self,
@@ -157,6 +181,161 @@ class UserService(BaseService[User]):
 
     async def on_after_oauth_associate(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
+
+    async def send_magic_link_delivery(
+        self,
+        user: User,
+        token: str,
+        *,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver a magic-link secret via the configured transactional messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.magic_link_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type="magic_link",
+            recipient=self._build_delivery_recipient(user),
+            secret=token,
+            expires_at=expires_at,
+            delivery_channel="email",
+            redirect_url=redirect_url,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
+
+    async def send_access_code_delivery(
+        self,
+        user: User,
+        code: str,
+        *,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+        delivery_channel: Literal["email", "sms", "whatsapp"] = "email",
+        challenge_type: Literal[
+            "access_code", "whatsapp_otp", "sms_otp"
+        ] = "access_code",
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver an access-code / OTP secret via the configured messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.access_code_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type=challenge_type,
+            recipient=self._build_delivery_recipient(user),
+            secret=code,
+            expires_at=expires_at,
+            delivery_channel=delivery_channel,
+            redirect_url=redirect_url,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
+
+    async def send_phone_verify_delivery(
+        self,
+        user: User,
+        code: str,
+        *,
+        request: Optional[Request] = None,
+        delivery_channel: Literal["sms", "whatsapp"] = "whatsapp",
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver a phone-verify secret via the configured transactional messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.access_code_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type="phone_verify",
+            recipient=self._build_delivery_recipient(user),
+            secret=code,
+            expires_at=expires_at,
+            delivery_channel=delivery_channel,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
+
+    async def request_phone_verification(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        request: Optional[Request] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> tuple[User, str]:
+        """Generate and deliver a phone verification code for the current user."""
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+        if not (user.phone or "").strip():
+            raise InvalidInputError(
+                message="Add a phone number before requesting verification",
+                details={"field": "phone"},
+            )
+        if self.auth_service is None:
+            raise InvalidInputError(
+                message="Phone verification is unavailable",
+                details={"reason": "auth_service_missing"},
+            )
+
+        code = await self.auth_service.generate_phone_verify_code(
+            session,
+            user,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        await self.send_phone_verify_delivery(user, code, request=request)
+        return user, code
+
+    async def confirm_phone_verification(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        code: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> User:
+        """Confirm a phone verification code and mark the phone verified."""
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+        if self.auth_service is None:
+            raise InvalidInputError(
+                message="Phone verification is unavailable",
+                details={"reason": "auth_service_missing"},
+            )
+        return await self.auth_service.verify_phone_verify_code(
+            session,
+            user,
+            code=code,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
 
     async def send_invitation_email(
         self,
@@ -377,6 +556,23 @@ class UserService(BaseService[User]):
         email = validate_email(email)
         return await self.get_one(session, User.email == email)
 
+    async def get_user_by_verified_phone(
+        self,
+        session: AsyncSession,
+        phone: str,
+    ) -> Optional[User]:
+        """
+        Get user by verified E.164 WhatsApp phone.
+
+        Unverified phones never match — WhatsApp login requires prior verification.
+        """
+        normalized = validate_phone(phone)
+        return await self.get_one(
+            session,
+            User.phone == normalized,
+            User.phone_verified == True,  # noqa: E712
+        )
+
     async def update_user(
         self,
         session: AsyncSession,
@@ -423,12 +619,18 @@ class UserService(BaseService[User]):
         email: Optional[str] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
+        phone: Optional[str] = None,
+        phone_provided: bool = False,
         changed_by_id: Optional[UUID] = None,
     ) -> User:
         """
         Update user fields (email and/or profile).
 
         This is a convenience wrapper used by the HTTP routers.
+
+        Pass ``phone_provided=True`` when the client included ``phone`` in the
+        request body (including null/empty to clear). Changing phone resets
+        ``phone_verified`` so hosts can re-run verification before WhatsApp OTP.
         """
         user = await self.get_by_id(session, user_id)
         if not user:
@@ -441,7 +643,10 @@ class UserService(BaseService[User]):
         previous_email_verified = user.email_verified
         previous_first_name = user.first_name
         previous_last_name = user.last_name
+        previous_phone = user.phone
+        previous_phone_verified = user.phone_verified
         email_changed = False
+        phone_changed = False
         changed_profile_fields: List[str] = []
 
         if email is not None:
@@ -472,6 +677,17 @@ class UserService(BaseService[User]):
                 changed_profile_fields.append("last_name")
             user.last_name = validated_last_name
 
+        if phone_provided:
+            if phone is None or (isinstance(phone, str) and not phone.strip()):
+                next_phone = None
+            else:
+                next_phone = validate_phone(phone)
+            if next_phone != user.phone:
+                user.phone = next_phone
+                user.phone_verified = False
+                phone_changed = True
+                changed_profile_fields.append("phone")
+
         await self.update(session, user)
 
         if self.user_audit_service and email_changed:
@@ -496,6 +712,20 @@ class UserService(BaseService[User]):
             )
 
         if self.user_audit_service and changed_profile_fields:
+            before_profile: Dict[str, Any] = {
+                "first_name": previous_first_name,
+                "last_name": previous_last_name,
+            }
+            after_profile: Dict[str, Any] = {
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+            }
+            if phone_changed:
+                before_profile["phone"] = previous_phone
+                before_profile["phone_verified"] = previous_phone_verified
+                after_profile["phone"] = user.phone
+                after_profile["phone_verified"] = user.phone_verified
+
             await self.user_audit_service.record_event(
                 session,
                 event_category="profile",
@@ -505,14 +735,8 @@ class UserService(BaseService[User]):
                 subject_user_id=user.id,
                 subject_email_snapshot=user.email,
                 root_entity_id=user.root_entity_id,
-                before={
-                    "first_name": previous_first_name,
-                    "last_name": previous_last_name,
-                },
-                after={
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                },
+                before=before_profile,
+                after=after_profile,
                 metadata={"changed_fields": changed_profile_fields},
             )
 
@@ -1387,6 +1611,19 @@ class UserService(BaseService[User]):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
+            phone=getattr(user, "phone", None),
+            phone_verified=bool(getattr(user, "phone_verified", False)),
+        )
+
+    @staticmethod
+    def _build_delivery_recipient(user: User) -> DeliveryRecipient:
+        return DeliveryRecipient(
+            user_id=str(user.id),
+            email=user.email,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            phone=getattr(user, "phone", None),
+            phone_verified=bool(getattr(user, "phone_verified", False)),
         )
 
     @staticmethod

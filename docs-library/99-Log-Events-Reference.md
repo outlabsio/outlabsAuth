@@ -1,24 +1,26 @@
-# 99. Log Events Reference
+# Log Events Reference
 
-> **Quick Reference**: Complete catalog of all structured log events emitted by OutlabsAuth. Use this for log searching, filtering, and building alerts.
+> **Handbook · Reference** — structured log event catalog.  
+> Part of the [OutlabsAuth Handbook](./README.md). Setup:
+> [Observability](./97-Observability.md).
+
+Lookup page — jump to the `event` name you need. For integration modes and host
+ownership rules, start with [97](./97-Observability.md).
 
 ## Overview
 
-OutlabsAuth emits structured log events for all critical authentication and authorization operations. Each event has a consistent schema with standard fields plus event-specific data.
+OutlabsAuth emits structured log events for auth-domain operations. Each event
+has a consistent schema plus event-specific fields.
 
-**Standard Fields (All Events):**
-- `timestamp` - ISO 8601 timestamp (UTC)
-- `level` - Log level (debug, info, warning, error, critical)
-- `event` - Event name (e.g., `user_login_success`)
-- `correlation_id` - Request correlation ID for distributed tracing
-- `service` - Service name (always `outlabs_auth`)
+**Standard fields (most events):**
+- `timestamp` — ISO 8601 UTC
+- `level` — debug / info / warning / error / critical
+- `event` — event name (e.g. `user_login_success`)
+- `correlation_id` — request correlation id when present
+- `service` — typically `outlabs_auth`
 
-**Optional Fields (When Available):**
-- `user_id` - User's ID
-- `email` - User's email address (if not redacted)
-- `ip_address` - Client IP address
-- `user_agent` - Client user agent string
-- `duration_ms` - Operation duration in milliseconds
+**Often present:** `user_id`, `email` (if not redacted), `ip_address`,
+`user_agent`, `duration_ms`.
 
 ---
 
@@ -47,7 +49,7 @@ OutlabsAuth emits structured log events for all critical authentication and auth
   "event": "user_login_success",
   "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "email": "john@example.com",
   "method": "password",
   "duration_ms": 145.3,
@@ -59,7 +61,7 @@ OutlabsAuth emits structured log events for all critical authentication and auth
 **Search Examples:**
 ```bash
 # Find all logins by specific user
-jq 'select(.event == "user_login_success" and .user_id == "507f...")' app.log
+jq 'select(.event == "user_login_success" and .user_id == "3f8a1c2e-...")' app.log
 
 # Find all Google OAuth logins
 jq 'select(.event == "user_login_success" and .method == "google")' app.log
@@ -147,7 +149,7 @@ jq 'select(.event == "user_login_failed") | .email' app.log | sort | uniq -c | s
   "event": "user_logout",
   "correlation_id": "c3d4e5f6-a7b8-9012-cdef-34567890abcd",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "email": "john@example.com",
   "method": "explicit",
   "session_duration_seconds": 7892
@@ -175,7 +177,7 @@ jq 'select(.event == "user_login_failed") | .email' app.log | sort | uniq -c | s
   "event": "token_refreshed",
   "correlation_id": "d4e5f6a7-b8c9-0123-def4-567890abcdef",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "duration_ms": 12.5
 }
 ```
@@ -230,7 +232,7 @@ jq 'select(.event == "user_login_failed") | .email' app.log | sort | uniq -c | s
   "event": "account_locked",
   "correlation_id": "f6a7b8c9-d0e1-2345-f678-90abcdef0123",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "email": "john@example.com",
   "failed_attempts": 5,
   "locked_until": "2025-01-24T11:20:00.000Z",
@@ -273,7 +275,7 @@ jq 'select(.event == "account_locked") | .ip_address' app.log | sort | uniq -c
   "event": "permission_check_granted",
   "correlation_id": "a7b8c9d0-e1f2-3456-789a-bcdef0123456",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "permission": "user:read",
   "duration_ms": 2.3
 }
@@ -309,7 +311,7 @@ jq 'select(.event == "account_locked") | .ip_address' app.log | sort | uniq -c
   "event": "permission_check_denied",
   "correlation_id": "b8c9d0e1-f2a3-4567-890b-cdef01234567",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "email": "john@example.com",
   "permission": "user:delete",
   "reason": "no_permission",
@@ -354,7 +356,7 @@ jq 'select(.event == "permission_check_denied") | .email' app.log | sort | uniq 
   "event": "permission_check_slow",
   "correlation_id": "c9d0e1f2-a3b4-5678-901c-def012345678",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "permission": "lead:read_tree",
   "entity_id": "ent_workspace_abc123",
   "duration_ms": 156.7,
@@ -536,7 +538,7 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
   "event": "session_hijack_suspected",
   "correlation_id": "b4c5d6e7-f8a9-0123-456b-234567890123",
   "service": "outlabs_auth",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "email": "john@example.com",
   "reason": "ip_changed",
   "original_ip": "192.168.1.1",
@@ -572,41 +574,48 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
   "correlation_id": "c5d6e7f8-a9b0-1234-567c-345678901234",
   "service": "outlabs_auth",
   "cache_type": "permission",
-  "cache_key": "perm:507f1f77bcf86cd799439011:user:read",
+  "cache_key": "perm:3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47:user:read",
   "reason": "update"
 }
 ```
 
 ---
 
-### slow_database_query
+### db_query
 
-**Level:** WARNING
-**When:** Database query takes >100ms
-**Frequency:** Should be rare
+**Level:** DEBUG
+**When:** Every SQL statement executed, when `log_db_queries=True`
+**Frequency:** Very high - enabled only in development/debug presets
+
+Emitted by the SQLAlchemy cursor-event instrumentation
+(`ObservabilityService.instrument_sqlalchemy_engine`), which times each
+statement at the DBAPI level.
 
 **Fields:**
-- `operation` (string) - Operation type: `find`, `insert`, `update`, `delete`
-- `collection` (string) - MongoDB collection
-- `duration_ms` (float) - Query duration
-- `query_filter` (object, optional) - Query filter (sanitized)
+- `operation` (string) - First word of the SQL statement, lowercased: `select`, `insert`, `update`, `delete`, `begin`, ...
+- `duration_ms` (float) - Statement duration
+- `collection` (string or null) - Always `null` from engine instrumentation; accepted by `log_db_query()` for callers that pass a table name
+- `executemany` (bool) - Whether the statement ran as a batch execute
+
+Query parameters are **never** logged - they may contain secrets or PII.
 
 **Example:**
 ```json
 {
   "timestamp": "2025-01-24T10:24:00.123Z",
-  "level": "warning",
-  "event": "slow_database_query",
+  "level": "debug",
+  "event": "db_query",
   "correlation_id": "d6e7f8a9-b0c1-2345-678d-456789012345",
   "service": "outlabs_auth",
-  "operation": "find",
-  "collection": "users",
+  "operation": "select",
   "duration_ms": 156.3,
-  "query_filter": {
-    "email": "***REDACTED***"
-  }
+  "collection": null,
+  "executemany": false
 }
 ```
+
+Also observed into the `outlabs_auth_db_query_duration_seconds` histogram,
+labelled by `operation`.
 
 ---
 
@@ -634,7 +643,7 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
   "correlation_id": "e7f8a9b0-c1d2-3456-789e-567890123456",
   "service": "outlabs_auth",
   "error_type": "DatabaseConnectionError",
-  "error_message": "Unable to connect to MongoDB",
+  "error_message": "Unable to connect to PostgreSQL",
   "method": "password"
 }
 ```
@@ -663,7 +672,7 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
   "service": "outlabs_auth",
   "error_type": "ABACEvaluationError",
   "error_message": "Failed to evaluate ABAC condition",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "permission": "lead:read"
 }
 ```
@@ -707,9 +716,9 @@ except Exception as e:
   "service": "outlabs_auth",
   "endpoint": "/v1/users",
   "error_class": "DatabaseConnectionError",
-  "error_message": "Unable to connect to MongoDB",
+  "error_message": "Unable to connect to PostgreSQL",
   "method": "GET",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "stack_trace": "Traceback (most recent call last):\n  File..."
 }
@@ -758,9 +767,9 @@ jq 'select(.event == "http_500_internal_server_error") | {timestamp, endpoint, e
   "router": "users",
   "endpoint": "/v1/users",
   "operation": "list_users",
-  "error_type": "MongoDBError",
+  "error_type": "OperationalError",
   "error_message": "Connection timeout",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "stack_trace": "Traceback..."
 }
 ```
@@ -805,7 +814,7 @@ jq 'select(.event == "router_error") | .operation' app.log | sort | uniq -c | so
   "operation": "login",
   "error_type": "DatabaseError",
   "error_message": "Failed to query users collection",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "stack_trace": "Traceback..."
 }
 ```
@@ -848,7 +857,7 @@ jq 'select(.event == "service_error" and .error_type == "DatabaseError")' app.lo
   "error_type": "ValueError",
   "error_message": "Invalid user ID format",
   "context": "users_router.get_user",
-  "user_id": "507f1f77bcf86cd799439011",
+  "user_id": "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47",
   "stack_trace": "Traceback..."
 }
 ```
@@ -1080,7 +1089,7 @@ jq 'select(.event == "notification_delivery_failure" and .channel == "email")' a
 
 ```bash
 # All events for specific user
-jq 'select(.user_id == "507f1f77bcf86cd799439011")' app.log
+jq 'select(.user_id == "3f8a1c2e-7b4d-4e19-9a52-8c6f0d1b3e47")' app.log
 
 # All events with specific correlation ID
 jq 'select(.correlation_id == "a1b2c3d4-...")' app.log

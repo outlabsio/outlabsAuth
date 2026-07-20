@@ -5,6 +5,7 @@ Request/response schemas for OAuth authentication endpoints.
 """
 
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,6 +50,7 @@ class SocialAccountResponse(BaseModel):
     Returns basic info about a linked OAuth account (without sensitive tokens).
     """
 
+    id: UUID = Field(description="Social account row id")
     provider: str = Field(description="OAuth provider name (google, facebook, etc.)")
     provider_user_id: str = Field(description="User ID from the OAuth provider")
     email: str = Field(description="Email address from provider")
@@ -67,6 +69,7 @@ class SocialAccountResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "id": "11111111-1111-4111-8111-111111111111",
                 "provider": "google",
                 "provider_user_id": "1234567890",
                 "email": "user@example.com",

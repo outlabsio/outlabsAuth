@@ -1,9 +1,9 @@
 # OutlabsAuth Library - Technical Architecture
 
-**Version**: 2.0
-**Date**: 2025-01-14
-**Status**: PostgreSQL Migration Complete
-**Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
+
+**Database**: PostgreSQL — SQLModel + SQLAlchemy (async) + asyncpg
+**Source of truth**: `outlabs_auth/` and `examples/`. Where this document and the
+code disagree, the code is right.
 
 ---
 
@@ -15,11 +15,12 @@
 4. [Data Models](#data-models)
 5. [Service Layer](#service-layer)
 6. [Authentication System (API Keys & Multi-Source Auth)](#authentication-system-api-keys--multi-source-auth)
-7. [Authentication Extensions (v1.1-v1.4, Optional)](#authentication-extensions-v11-v14-optional)
+7. [Authentication Extensions (Optional)](#authentication-extensions-optional)
 8. [Dependency Injection](#dependency-injection)
 9. [Host Integration Queries](#host-integration-queries)
 10. [Configuration System](#configuration-system)
 11. [Testing Strategy](#testing-strategy)
+12. [Performance Considerations](#performance-considerations)
 
 ---
 
@@ -50,69 +51,94 @@ OutlabsAuth (Single Core Implementation)
 ```
 outlabs_auth/
 ├── __init__.py                 # Public API exports
+├── fastapi.py                  # register_exception_handlers, instrument_fastapi
+├── bootstrap.py                # first-run bootstrap
+├── cli.py                      # `outlabs-auth` CLI (migrate, bootstrap, doctor, ...)
+├── response_builders.py
 ├── core/
-│   ├── __init__.py
-│   ├── base.py                 # Base OutlabsAuth class
-│   ├── config.py               # Configuration management
-│   ├── engine.py               # SQLAlchemy async engine
-│   └── exceptions.py           # Custom exceptions
+│   ├── auth.py                 # OutlabsAuth — the unified core class
+│   ├── config.py               # AuthConfig, SimpleConfig, EnterpriseConfig
+│   ├── exceptions.py           # exception hierarchy
+│   └── uow.py                  # unit of work
+├── database/
+│   ├── base.py                 # BaseModel (UUID pk + created_at/updated_at)
+│   ├── engine.py               # SQLAlchemy async engine + session factory
+│   └── registry.py             # ModelRegistry — preset → models mapping
 ├── models/
-│   ├── __init__.py
-│   └── sql/                    # PostgreSQL models (SQLModel)
-│       ├── base.py             # Base SQL model
-│       ├── user.py             # User model
-│       ├── role.py             # Role model
-│       ├── permission.py       # Permission model
-│       ├── entity.py           # Entity model (EnterpriseRBAC)
-│       ├── entity_closure.py   # Closure table for tree queries
-│       ├── entity_membership.py # User-entity memberships
-│       └── api_key.py          # API key model
-├── services/
-│   ├── __init__.py
-│   ├── auth.py                 # AuthService
-│   ├── user.py                 # UserService
-│   ├── role.py                 # RoleService
-│   ├── permission.py           # PermissionService
-│   ├── entity.py               # EntityService (enterprise only)
-│   └── membership.py           # MembershipService (enterprise only)
-├── presets/
-│   ├── __init__.py
-│   ├── simple.py               # SimpleRBAC preset
-│   └── enterprise.py           # EnterpriseRBAC preset
+│   └── sql/                    # 33 SQLModel tables
+│       ├── user.py             # User
+│       ├── role.py             # Role, RolePermission, RoleCondition, ...
+│       ├── permission.py       # Permission, PermissionTag, PermissionCondition
+│       ├── entity.py           # Entity                    (EnterpriseRBAC)
+│       ├── closure.py          # EntityClosure             (EnterpriseRBAC)
+│       ├── entity_membership.py        # EntityMembership  (EnterpriseRBAC)
+│       ├── entity_membership_history.py
+│       ├── user_role_membership.py     # UserRoleMembership (SimpleRBAC)
+│       ├── api_key.py          # APIKey, APIKeyScope, APIKeyIPWhitelist
+│       ├── api_key_usage_sync_batch.py
+│       ├── integration_principal.py
+│       ├── auth_challenge.py   # magic links / access codes / OTP
+│       ├── social_account.py   # OAuth-linked accounts
+│       ├── oauth_state.py
+│       ├── token.py            # RefreshToken
+│       ├── activity_metric.py  # ActivityMetric, UserActivity, LoginHistory
+│       ├── user_audit_event.py
+│       ├── system_config.py
+│       ├── condition.py
+│       └── enums.py
+├── services/                   # all take an AsyncSession as first arg
+│   ├── auth.py, user.py, role.py, permission.py
+│   ├── entity.py, membership.py            # EnterpriseRBAC only
+│   ├── api_key.py, api_key_policy.py, integration_principal.py
+│   ├── service_token.py, access_scope.py, policy_engine.py
+│   ├── activity_tracker.py, notification.py, config.py
+│   ├── cache.py, redis_client.py, request_cache.py
+│   └── user_audit.py, role_history.py, permission_history.py
+├── authentication/             # Transport/Strategy split (DD-038)
+│   ├── transport.py            # Bearer, ApiKey, Header, Cookie, QueryParam
+│   ├── strategy.py             # JWT, ApiKey, ServiceToken, Superuser, Anonymous
+│   └── backend.py              # AuthBackend = Transport + Strategy
 ├── dependencies/
-│   ├── __init__.py
-│   ├── auth.py                 # FastAPI auth dependencies
-│   ├── permissions.py          # Permission checking dependencies
-│   └── entities.py             # Entity context dependencies (enterprise only)
-├── integrations/
-│   ├── __init__.py
-│   └── host_queries.py         # Host-facing read facade for embedded apps
+│   └── __init__.py             # AuthDeps, create_auth_deps
+├── presets/
+│   ├── simple.py               # SimpleRBAC
+│   └── enterprise.py           # EnterpriseRBAC
+├── routers/                    # mountable FastAPI routers
+│   ├── auth.py, users.py, roles.py, permissions.py
+│   ├── entities.py, memberships.py
+│   ├── api_keys.py, api_key_admin.py, integration_principals.py
+│   ├── oauth.py, oauth_associate.py
+│   └── audit.py, config.py, self_service.py, session.py
+├── oauth/                      # see Authentication Extensions
+├── mail/                       # transactional auth mail
+├── messaging/                  # WhatsApp / SMS challenge delivery
+├── observability/              # structured logs + Prometheus metrics
+│   ├── config.py, service.py, middleware.py, router.py, dependencies.py
 ├── middleware/
-│   ├── __init__.py
-│   ├── auth.py                 # JWT middleware
-│   └── entity_context.py       # Entity context middleware (optional)
-├── utils/
-│   ├── __init__.py
-│   ├── password.py             # Password hashing
-│   ├── jwt.py                  # JWT utilities
-│   └── validation.py           # Input validation
-└── schemas/
-    ├── __init__.py
-    ├── auth.py                 # Auth request/response schemas
-    ├── user.py                 # User schemas
-    ├── role.py                 # Role schemas
-    ├── permission.py           # Permission schemas
-    └── entity.py               # Entity schemas (enterprise only)
+│   ├── uow.py                  # commit-before-response
+│   ├── request_cache.py
+│   └── resource_context.py
+├── integrations/
+│   └── host_queries.py         # host-facing read facade for embedded apps
+├── workers/
+│   ├── api_key_sync.py         # durable usage-counter sync
+│   └── token_cleanup.py
+├── migrations/                 # packaged Alembic migrations
+│   └── env.py                  # version table: outlabs_auth_alembic_version
+├── schemas/                    # Pydantic request/response models
+└── utils/
+    ├── password.py             # argon2id
+    ├── jwt.py, crypto.py, rate_limit.py, validation.py
 
-examples/                       # Example applications
-├── simple_app/
-├── enterprise_app/             # EnterpriseRBAC with various configurations
-└── migration_example/
+examples/                       # the only integration reference kept honest by tests
+├── simple_rbac/
+├── enterprise_rbac/
+├── abac_cookbook/
+└── notifications/
 
-tests/                          # Comprehensive test suite
-├── unit/
-├── integration/
-└── examples/
+tests/
+├── unit/                       # incl. test_readme_quickstart.py — executes the README
+└── integration/
 ```
 
 ---
@@ -254,7 +280,7 @@ class SimpleRBAC(OutlabsAuth):
 - JWT authentication
 - API key authentication
 - Service token authentication
-- Multi-source auth via AuthContext
+- Multi-source auth via the AuthDeps backend list (JWT / API key / service token)
 
 **Example Usage**:
 ```python
@@ -384,13 +410,24 @@ await auth.membership_service.add_member(
     role_ids=[manager_role.id, developer_role.id]
 )
 
-# Entity-scoped permission check
+# Entity-scoped permission check. `require_permission` picks the entity context
+# up from the `entity_id` path param automatically.
+async def require_entity_update(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    dep_fn = auth.deps.require_permission("entity:update")
+    return await dep_fn(request=request, session=session)
+
+
 @app.put("/entities/{entity_id}")
 async def update_entity(
-    entity_id: str,
-    ctx: AuthContext = Depends(deps.require_entity_permission(entity_id, "entity:update"))
+    entity_id: UUID,
+    data: EntityUpdate,
+    auth_result: dict = Depends(require_entity_update),
+    session: AsyncSession = Depends(get_session),
 ):
-    return await auth.entity_service.update(entity_id, data)
+    return await auth.entity_service.update_entity(session, entity_id, data)
 ```
 
 **Example - Full Configuration** (all optional features enabled):
@@ -461,241 +498,253 @@ result = await auth.permission_service.check_permission_with_context(
 
 ## Data Models
 
+All models are **SQLModel** classes deriving from `outlabs_auth.database.base.BaseModel`,
+which supplies a UUID v4 primary key plus `created_at` / `updated_at`. There are
+33 tables; the authoritative definitions live in `outlabs_auth/models/sql/` and
+the preset-to-model mapping in `outlabs_auth/database/registry.py`. The sketches
+below name fields and constraints — read the source for exact column types.
+
+### Which models each preset registers
+
+`ModelRegistry.get_models(enable_entity_hierarchy=...)` decides this.
+
+**Core (always registered)** — `User`, `Role`, `Permission`, `RefreshToken`,
+`IntegrationPrincipal`, `APIKey`, `SocialAccount`, `OAuthState`, `ActivityMetric`,
+`RoleDefinitionHistory`, `PermissionDefinitionHistory`, `UserAuditEvent`.
+
+**SimpleRBAC adds** — `UserRoleMembership`.
+
+**EnterpriseRBAC adds** — `Entity`, `EntityMembership`, `EntityMembershipRole`,
+`EntityClosure`, `EntityMembershipHistory`.
+
+Note the class names are `User` / `Role` / `Permission`, not `UserModel` /
+`RoleModel` / `PermissionModel`.
+
 ### Core Models (All Presets)
 
-#### UserModel
+#### User → `users`
 ```python
 class UserStatus(str, Enum):
     ACTIVE = "active"
-    INACTIVE = "inactive"
-    SUSPENDED = "suspended"
-    BANNED = "banned"
-    TERMINATED = "terminated"
+    INVITED = "invited"      # invited but hasn't set a password yet
+    SUSPENDED = "suspended"  # temporary, can be auto-lifted
+    BANNED = "banned"        # permanent, manual lift required
+    DELETED = "deleted"      # soft-deleted (GDPR)
 
-class UserModel(BaseDocument):
+
+class User(BaseModel, table=True):
+    __tablename__ = "users"
+
+    # Optional root-entity scoping
+    root_entity_id: Optional[UUID]
+
     # Authentication
-    email: EmailStr
-    hashed_password: str
+    email: str
+    hashed_password: Optional[str]   # None for OAuth-only users
+    auth_methods: List[str]
 
-    # Profile
-    profile: UserProfile
+    # Profile (flat — there is no embedded UserProfile)
+    first_name: Optional[str]
+    last_name: Optional[str]
+    avatar_url: Optional[str]
+    phone: Optional[str]
+    locale: Optional[str]
+    timezone: Optional[str]
 
     # Status
     status: UserStatus = UserStatus.ACTIVE
-    is_system_user: bool = False
+    is_superuser: bool = False
     email_verified: bool = False
+    phone_verified: bool = False
+    suspended_until: Optional[datetime]
+    deleted_at: Optional[datetime]
 
     # Security
-    last_login: Optional[datetime] = None
+    last_login: Optional[datetime]
+    last_activity: Optional[datetime]
+    last_password_change: Optional[datetime]
     failed_login_attempts: int = 0
-    locked_until: Optional[datetime] = None
+    locked_until: Optional[datetime]
+
+    # Token flows: password reset, email verification, invite
+    # (see outlabs_auth/models/sql/user.py)
 ```
 
-#### RoleModel
+`full_name` is a property that combines the names and falls back to the email.
+
+#### Role → `roles`
+Role permissions are **join tables**, not embedded lists:
+
+- `RolePermission` → `role_permissions` (role ↔ permission)
+- `RoleCondition` → `role_conditions` (ABAC conditions on a role)
+- `RoleEntityTypePermission` → `role_entity_type_permissions` (context-aware roles:
+  permissions that vary by entity type)
+- `ConditionGroup` → `condition_groups`
+
+Role scoping fields (`scope_entity_id`, `scope`, `is_auto_assigned`) implement
+DD-050 / DD-053. See `outlabs_auth/models/sql/role.py`.
+
+#### Permission → `permissions`
+Named `resource:action` (e.g. `user:create`), with `resource` and `action` parsed
+out. Related tables:
+
+- `PermissionCondition` → `permission_conditions` (ABAC)
+- `PermissionTag` / `PermissionTagLink` → `permission_tags`, `permission_tag_links`
+
+#### UserRoleMembership → `user_role_memberships` (SimpleRBAC only)
 ```python
-class RoleModel(BaseDocument):
-    # Identity
-    name: str
-    display_name: str
-    description: Optional[str] = None
+class UserRoleMembership(BaseModel, table=True):
+    """User-role membership for SimpleRBAC (flat, no entity context). DD-047."""
+    __tablename__ = "user_role_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "role_id", name="uq_user_role_membership"),
+        Index("ix_urm_role_id", "role_id"),
+        Index("ix_urm_user_status", "user_id", "status"),
+    )
 
-    # Permissions (default for all contexts)
-    permissions: List[str] = Field(default_factory=list)
+    user_id: UUID   # FK → users.id
+    role_id: UUID   # FK → roles.id
 
-    # Context-aware permissions (EnterpriseRBAC only - optional feature)
-    entity_type_permissions: Optional[Dict[str, List[str]]] = None
-
-    # Configuration
-    is_system_role: bool = False
-```
-
-#### PermissionModel
-```python
-class PermissionModel(BaseDocument):
-    # Identity
-    name: str  # e.g., "user:create"
-    display_name: str
-    description: str
-
-    # Structure (auto-parsed from name)
-    resource: str  # "user"
-    action: str    # "create"
-
-    # ABAC conditions (EnterpriseRBAC only - optional feature)
-    conditions: List[Condition] = Field(default_factory=list)
-
-    # Status
-    is_active: bool = True
-```
-
-#### UserRoleMembership (SimpleRBAC only)
-```python
-class UserRoleMembership(BaseDocument):
-    """
-    User-role membership for SimpleRBAC (flat, no entity context).
-
-    Provides audit trail and consistency with EnterpriseRBAC's membership pattern.
-    See DD-047 for rationale.
-    """
-
-    # Relationships
-    user: Link[UserModel]
-    role: Link[RoleModel]
-
-    # Audit trail
-    assigned_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    assigned_by: Optional[Link[UserModel]] = None
+    status: MembershipStatus
 
     # Time-based assignment (optional)
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
-
-    # Status
-    is_active: bool = True
-
-    # Indexes
-    class Settings:
-        name = "user_role_memberships"
-        indexes = [
-            [("user", 1), ("role", 1)],  # Unique constraint
-            "user",                       # Get user's roles
-            "role",                       # Get users with role
-            "is_active",                  # Filter active memberships
-            [("root_entity_id", 1)]       # Entity isolation support
-        ]
+    valid_from: Optional[datetime]
+    valid_until: Optional[datetime]
 ```
 
-**Why Membership Table for SimpleRBAC?**
-- **Audit Trail**: Track who assigned roles and when
-- **Time-Based Roles**: Optional validity periods
-- **Consistent Pattern**: Same approach as EnterpriseRBAC, just without entities
-- **Easy Migration**: Trivial upgrade path to EnterpriseRBAC
-- **Industry Standard**: Django, Keycloak, etc. all use membership tables
+The unique constraint is on `(user_id, role_id)`, so **a SimpleRBAC user may hold
+multiple roles** — the membership row is the grant, not a single-role field.
 
-**vs Direct Links** (`user.roles = [...]`):
-- ✅ Membership table: Audit trail, time-based, consistent
-- ❌ Direct links: No audit, no time-based, inconsistent with Enterprise
+**Why a membership table for SimpleRBAC?**
+- **Audit trail**: track who assigned a role and when
+- **Time-based roles**: optional validity window
+- **Consistent pattern**: same shape as EnterpriseRBAC, minus entities
+- **Easy migration**: trivial upgrade path to EnterpriseRBAC
+- **Industry standard**: Django, Keycloak, etc. all use membership tables
 
 ### Enterprise Models (EnterpriseRBAC only)
 
-#### EntityModel
+#### Entity → `entities`
 ```python
 class EntityClass(str, Enum):
-    STRUCTURAL = "structural"      # Organizational hierarchy
-    ACCESS_GROUP = "access_group"  # Cross-cutting groups
+    STRUCTURAL = "structural"      # organizational units (company, department, team)
+    ACCESS_GROUP = "access_group"  # permission groupings (project, resource pool)
 
-class EntityModel(BaseDocument):
+
+class Entity(BaseModel, table=True):
+    __tablename__ = "entities"
+
     # Identity
     name: str
     display_name: str
     slug: str
-    description: Optional[str] = None
+    description: Optional[str]
 
     # Classification
     entity_class: EntityClass
-    entity_type: str  # Flexible: "department", "team", etc.
+    entity_type: str  # flexible: "department", "team", ...
 
-    # Hierarchy
-    parent_entity: Optional[Link["EntityModel"]] = None
-
-    # Optional: root-entity scoping
-    root_entity_id: Optional[str] = None
+    # Hierarchy — a plain FK, plus denormalised depth/path
+    parent_id: Optional[UUID]   # FK → entities.id
+    depth: int
+    path: Optional[str]
 
     # Status
     status: str = "active"
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
+    valid_from: Optional[datetime]
+    valid_until: Optional[datetime]
 
-    # Configuration
-    allowed_child_classes: List[EntityClass] = []
-    allowed_child_types: List[str] = []
-    max_members: Optional[int] = None
+    # Limits
+    max_members: Optional[int]
+    max_depth: Optional[int]
 ```
 
-`Entity.metadata` is future design intent only. It is intentionally absent from the current persisted SQL model and live API contract.
+`Entity.metadata` is future design intent only. It is intentionally absent from the
+current persisted SQL model and live API contract.
 
-#### EntityMembershipModel
+#### EntityMembership → `entity_memberships`
 ```python
-class EntityMembershipModel(BaseDocument):
-    """User's membership in an entity with roles"""
+class EntityMembership(BaseModel, table=True):
+    __tablename__ = "entity_memberships"
 
-    user: Link[UserModel]
-    entity: Link[EntityModel]
+    user_id: UUID     # FK → users.id
+    entity_id: UUID   # FK → entities.id
 
-    # Multiple roles per membership
-    roles: List[Link[RoleModel]] = Field(default_factory=list)
+    joined_at: datetime
+    joined_by_id: Optional[UUID]
 
     # Time-based membership
-    joined_at: datetime
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
+    valid_from: Optional[datetime]
+    valid_until: Optional[datetime]
 
-    # Status
-    is_active: bool = True
+    status: MembershipStatus
 ```
 
-#### EntityClosureModel (NEW)
+Multiple roles per membership are carried by the junction table
+`EntityMembershipRole` → `entity_membership_roles`, not by a list field on the
+membership.
+
+#### EntityClosure → `entity_closure`
 ```python
-class EntityClosureModel(BaseDocument):
-    """
-    Stores all ancestor-descendant relationships for O(1) queries.
+class EntityClosure(BaseModel, table=True):
+    """Stores every ancestor-descendant relationship for O(1) tree queries."""
+    __tablename__ = "entity_closure"
+    __table_args__ = (
+        UniqueConstraint("ancestor_id", "descendant_id", name="uq_entity_closure"),
+        Index("ix_closure_ancestor_depth", "ancestor_id", "depth"),
+        Index("ix_closure_descendant_depth", "descendant_id", "depth"),
+    )
 
-    Uses the closure table pattern for efficient tree permission checks.
-    """
-
-    ancestor_id: str      # Ancestor entity ID
-    descendant_id: str    # Descendant entity ID
-    depth: int           # Distance (0 = self, 1 = direct child, etc.)
-
-    class Settings:
-        name = "entity_closure"
-        indexes = [
-            [("ancestor_id", 1), ("descendant_id", 1)],  # Unique constraint
-            [("descendant_id", 1), ("depth", 1)],        # Find ancestors
-            [("ancestor_id", 1), ("depth", 1)]           # Find descendants
-        ]
+    ancestor_id: UUID    # FK → entities.id
+    descendant_id: UUID  # FK → entities.id
+    depth: int           # 0 = self, 1 = direct child, ...
 ```
 
-**Closure Table Benefits**:
-- **O(1) Ancestor Queries**: Single database query to get all ancestors
-- **O(1) Descendant Queries**: Single query to get all descendants
-- **Tree Permission Performance**: 20x faster than recursive queries
-- **Unlimited Depth**: No performance degradation with deep hierarchies
-- **Simple Maintenance**: Auto-maintained on entity create/move/delete
+For the hierarchy `Platform → Org → Dept → Team`, the stored rows are
+`(Platform, Platform, 0)`, `(Platform, Org, 1)`, `(Platform, Dept, 2)`,
+`(Platform, Team, 3)`, `(Org, Org, 0)`, `(Org, Dept, 1)`, and so on.
 
-**Example Queries**:
+**Closure table benefits**:
+- **O(1) ancestor queries**: one query for all ancestors
+- **O(1) descendant queries**: one query for all descendants
+- **Tree permission performance**: 20x faster than recursive queries (DD-036)
+- **Unlimited depth**: no degradation on deep hierarchies
+- **Simple maintenance**: auto-maintained on entity create/move/delete
+
+The composite `(id, depth)` indexes cover single-column lookups via their leading
+prefix, so the redundant single-column btrees were dropped. Inserts cost
+O(depth x subtree) rows per entity create/move — that is the trade for the O(1)
+reads.
+
+**Example queries** (SQLAlchemy):
 ```python
-# Get all ancestors (single query)
-ancestors = await EntityClosure.find(
-    {"descendant_id": entity_id, "depth": {"$gt": 0}}
-).sort("depth").to_list()
+# All ancestors, nearest first
+ancestors = (await session.execute(
+    select(EntityClosure)
+    .where(EntityClosure.descendant_id == entity_id, EntityClosure.depth > 0)
+    .order_by(EntityClosure.depth)
+)).scalars().all()
 
-# Get all descendants (single query)
-descendants = await EntityClosure.find(
-    {"ancestor_id": entity_id, "depth": {"$gt": 0}}
-).to_list()
+# All descendants
+descendants = (await session.execute(
+    select(EntityClosure)
+    .where(EntityClosure.ancestor_id == entity_id, EntityClosure.depth > 0)
+)).scalars().all()
 
-# Check if A is ancestor of B (single query)
-is_ancestor = await EntityClosure.find_one({
-    "ancestor_id": A,
-    "descendant_id": B
-}) is not None
+# Is A an ancestor of B?
+is_ancestor = (await session.execute(
+    select(EntityClosure.id)
+    .where(EntityClosure.ancestor_id == a_id, EntityClosure.descendant_id == b_id)
+    .limit(1)
+)).first() is not None
 ```
 
-### Model Changes from Current System
+### Isolation model
 
-#### Removed Fields
-- ❌ `platform_id` (no longer needed)
-- ❌ Platform-specific isolation logic
-
-#### Added Fields
-- ✅ `root_entity_id` (optional, for entity-scoped isolation)
-
-#### Preserved Fields
-- ✅ All entity hierarchy logic
-- ✅ Tree permission support
-- ✅ Context-aware role support
-- ✅ Time-based validity
+There is no `platform_id` and no tenant mode. Isolation is entity-based:
+`root_entity_id` scopes users and roles to a root entity (an organization), and
+DD-056 scopes user-management routes to the actor's trees. See
+`docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`.
 
 ---
 
@@ -835,13 +884,12 @@ class EntityService:
 
 ## Authentication System (API Keys & Multi-Source Auth)
 
-**Status**: Core v1.0 Feature
-**Timeline**: Phase 2 (SimpleRBAC - Week 2)
 **Compatibility**: Both SimpleRBAC and EnterpriseRBAC
+**Source**: `outlabs_auth/authentication/`, `outlabs_auth/services/api_key.py`
 
 ### Overview
 
-The authentication system provides multi-source authentication supporting users (JWT), API keys (service-to-service), service accounts (internal), superusers (admin overrides), and anonymous access. All authentication sources are unified through a consistent `AuthContext` abstraction.
+The authentication system provides multi-source authentication supporting users (JWT), API keys (owned by a user or by an integration principal), and service tokens for internal service-to-service calls. Every source resolves through the same ordered list of `AuthBackend`s on `AuthDeps` and yields the same plain-`dict` result shape, so one route dependency serves all of them.
 
 **Auth Sources** (priority order):
 1. **Superuser** - Admin override tokens
@@ -850,61 +898,79 @@ The authentication system provides multi-source authentication supporting users 
 4. **Users** - JWT-based user authentication
 5. **Anonymous** - Optional public access
 
-### AuthContext Model
+### Authentication Result
 
-Universal authentication context that works across all auth sources:
+There is **no `AuthContext` class** and no `outlabs_auth/auth_context.py`.
+Authentication returns a **plain `dict`**, and permission enforcement happens in
+the dependency (`require_permission`), not through helper methods on a context
+object.
+
+The pipeline follows the Transport/Strategy split (DD-038, borrowed from
+FastAPI-Users):
+
+- **Transport** (`outlabs_auth/authentication/transport.py`) — *how* credentials
+  arrive: Bearer header, `X-API-Key` header, cookie.
+- **Strategy** (`outlabs_auth/authentication/strategy.py`) — *how* they are
+  validated: JWT decode, API-key lookup, service-token verify.
+- **AuthBackend** (`outlabs_auth/authentication/backend.py`) — pairs one Transport
+  with one Strategy under a name.
+
+`AuthDeps` holds an ordered list of backends and tries each in turn. A cheap
+`has_credentials(request)` hint lets it skip the whole pipeline for unauthenticated
+requests.
+
+The returned dict always carries `user`, `user_id`, `source`, and `metadata`. The
+remaining keys depend on the source:
 
 ```python
-# outlabs_auth/auth_context.py
-from enum import Enum
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+# source="jwt"
+{
+    "user": User,          # ORM instance
+    "user_id": "…",
+    "source": "jwt",
+    "metadata": {...},     # decoded JWT payload
+    "jti": "…",            # token id, used for logout
+}
 
-class AuthSource(str, Enum):
-    """Where the authentication came from"""
-    USER = "user"
-    API_KEY = "api_key"
-    SERVICE = "service"
-    SUPERUSER = "superuser"
-    IMPERSONATION = "impersonation"
-    ANONYMOUS = "anonymous"
+# source="api_key", key owned by a user
+{
+    "user": User,
+    "user_id": "…",
+    "source": "api_key",
+    "api_key": APIKey,
+    "metadata": {...},
+}
 
-class AuthContext(BaseModel):
-    """Universal authentication context for all auth sources"""
+# source="api_key", key owned by an integration principal (no user account)
+{
+    "user": None,
+    "user_id": None,
+    "integration_principal": IntegrationPrincipal,
+    "integration_principal_id": "…",
+    "source": "api_key",
+    "api_key": APIKey,
+    "metadata": {...},
+}
 
-    # Core identity
-    source: AuthSource
-    identity: str  # user_id, api_key_id, service_name, etc.
-
-    # Permissions & access
-    permissions: List[str] = []
-    roles: List[str] = []
-    groups: List[str] = []
-    entities: Dict[str, List[str]] = {}
-
-    # Special flags
-    is_superuser: bool = False
-    is_service_account: bool = False
-    is_impersonating: bool = False
-
-    # Metadata
-    metadata: Dict[str, Any] = {}
-
-    # Rate limiting
-    rate_limit: Optional[int] = None
-    rate_limit_remaining: Optional[int] = None
-
-    # Helper methods
-    def has_permission(self, permission: str) -> bool:
-        if self.is_superuser:
-            return True
-        return permission in self.permissions
-
-    def has_all_permissions(self, *permissions: str) -> bool:
-        if self.is_superuser:
-            return True
-        return all(p in self.permissions for p in permissions)
+# source="service_token"
+{
+    "user": None,          # services have no user account
+    "user_id": None,
+    "source": "service_token",
+    "service_id": "…",
+    "service_name": "…",
+    "metadata": {...},     # decoded JWT payload
+}
 ```
+
+**Always check `user` for `None`** before touching it — API keys held by an
+integration principal and service tokens both authenticate successfully with no
+user attached.
+
+`require_auth(active=True, verified=False, optional=False)` applies the post-auth
+gates: `active` rejects users failing `can_authenticate()`, `verified` requires
+`email_verified`, and `optional` returns `None` instead of raising when no
+credentials are present.
 
 ### API Key Models
 
@@ -914,1184 +980,542 @@ from enum import Enum
 from typing import List, Optional
 from datetime import datetime
 
-class APIKeyScope(str, Enum):
-    READ = "read"
-    WRITE = "write"
-    DELETE = "delete"
-    ADMIN = "admin"
+class APIKeyStatus(str, Enum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"  # temporarily disabled
+    REVOKED = "revoked"      # permanently disabled
+    EXPIRED = "expired"      # past expiration date
 
-class APIKeyModel(BaseDocument):
-    """API keys for service-to-service authentication"""
+
+class APIKeyKind(str, Enum):
+    PERSONAL = "personal"
+    SYSTEM_INTEGRATION = "system_integration"
+
+
+class APIKey(BaseModel, table=True):
+    """API keys for service-to-service authentication. Table: api_keys"""
+    __tablename__ = "api_keys"
 
     # Identification
     name: str
-    description: Optional[str] = None
-    key_hash: str  # argon2id hash (NOT SHA256)
-    key_prefix: str  # First 8 chars (sk_prod_)
+    description: Optional[str]
+    prefix: str      # first 16 chars of the key, stored for lookup/display
+    key_hash: str    # SHA-256 hex digest of the full key
 
-    # Access control
-    permissions: List[str] = []
-    scopes: List[APIKeyScope] = []
-    is_superuser: bool = False
+    # Ownership — exactly one of these
+    owner_id: Optional[UUID]                   # FK → users.id
+    integration_principal_id: Optional[UUID]   # FK → integration_principals.id
 
-    # Restrictions
-    allowed_ips: List[str] = []  # Empty = all IPs
-    allowed_origins: List[str] = []
-    allowed_endpoints: List[str] = []
-
-    # Rate limiting
-    rate_limit_per_minute: Optional[int] = 60
-    rate_limit_per_hour: Optional[int] = 1000
-
-    # Metadata
-    service_name: Optional[str] = None
-    environment: str = "production"  # production, staging, development
-    created_by: str  # User ID who created it
+    key_kind: APIKeyKind
+    status: APIKeyStatus
 
     # Lifecycle
-    last_used_at: Optional[datetime] = None
-    last_used_ip: Optional[str] = None
-    expires_at: Optional[datetime] = None
-    revoked_at: Optional[datetime] = None
-    revoked_by: Optional[str] = None
-    revoked_reason: Optional[str] = None
+    expires_at: Optional[datetime]
+    last_used_at: Optional[datetime]
+    usage_count: int
 
-    # Status
-    is_active: bool = True
+    # Rate limiting
+    rate_limit_per_minute: int = 60
+    rate_limit_per_hour: Optional[int]
+    rate_limit_per_day: Optional[int]
 
-    # Stats
-    usage_count: int = 0
-    error_count: int = 0
+    # Entity scoping (EnterpriseRBAC)
+    entity_id: Optional[UUID]
+    inherit_from_tree: bool = False
 ```
+
+Scopes and IP whitelists are **separate tables**, not list columns:
+
+- `APIKeyScope` → `api_key_scopes`
+- `APIKeyIPWhitelist` → `api_key_ip_whitelist`
+- `APIKeyUsageSyncBatch` → `api_key_usage_sync_batches` (idempotency receipts for
+  durable usage-counter sync)
+
+Access control is **scope-based**, not permission-based — see DD-028.
+
+#### Key generation and hashing
+
+```python
+@staticmethod
+def generate_key(prefix_type: str = "sk_live") -> tuple[str, str]:
+    """Returns (full_key, prefix). Store the prefix, hash the full key."""
+    key_material = secrets.token_hex(32)
+    full_key = f"{prefix_type}_{key_material}"
+    prefix = full_key[:16]
+    return full_key, prefix
+
+@staticmethod
+def hash_key(full_key: str) -> str:
+    """Hash an API key using SHA-256 (hex-encoded for storage)."""
+    return hashlib.sha256(full_key.encode()).hexdigest()
+```
+
+**Why SHA-256 and not argon2id?** API keys are 32 bytes of CSPRNG output, not
+user-chosen secrets. There is no dictionary to attack, so a slow KDF buys nothing
+and would put ~100ms on every authenticated request. Argon2id is used for **user
+passwords** (`outlabs_auth/utils/password.py`, tunable via `argon2_time_cost` /
+`argon2_memory_cost_kib` / `argon2_parallelism`), where it does matter. See DD-028.
 
 ### API Key Service
 
-```python
-# outlabs_auth/services/api_key_service.py
-from passlib.hash import argon2
-import secrets
-
-class APIKeyService:
-    """Manage API key lifecycle"""
-
-    KEY_PREFIX_MAP = {
-        "production": "sk_prod",
-        "staging": "sk_stag",
-        "development": "sk_dev",
-        "test": "sk_test"
-    }
-
-    @staticmethod
-    def generate_key(environment: str = "production") -> str:
-        """Generate new API key with 8-char prefix + 32 bytes random"""
-        prefix = APIKeyService.KEY_PREFIX_MAP.get(environment, "sk_prod")
-        random_part = secrets.token_urlsafe(32)
-        return f"{prefix}_{random_part}"
-
-    @staticmethod
-    def hash_key(key: str) -> str:
-        """
-        Hash key using argon2id (NOT SHA256).
-
-        Security: argon2id with recommended parameters:
-        - time_cost=2
-        - memory_cost=102400 (100 MB)
-        - parallelism=8
-        """
-        return argon2.using(
-            time_cost=2,
-            memory_cost=102400,
-            parallelism=8
-        ).hash(key)
-
-    async def create_api_key(
-        self,
-        name: str,
-        created_by: str,
-        permissions: List[str] = None,
-        **kwargs
-    ) -> Tuple[str, APIKeyModel]:
-        """
-        Create new API key.
-
-        Returns: (raw_key, key_model)
-
-        ⚠️  The raw key is ONLY returned once - it cannot be recovered!
-        """
-        raw_key = self.generate_key(kwargs.get("environment", "production"))
-
-        api_key = APIKeyModel(
-            name=name,
-            key_hash=self.hash_key(raw_key),
-            key_prefix=raw_key[:8],
-            permissions=permissions or [],
-            created_by=created_by,
-            **kwargs
-        )
-
-        await api_key.save()
-
-        # Current runtime does not expose a generic audit_service here.
-        # API key lifecycle is retained through status changes plus
-        # service-level notification/observability hooks.
-
-        return raw_key, api_key
-
-    async def validate(
-        self,
-        key: str,
-        required_permissions: List[str] = None
-    ) -> Optional[APIKeyModel]:
-        """Validate API key and check permissions"""
-        if not key or len(key) < 8:
-            return None
-
-        prefix = key[:8]
-        api_key = await APIKeyModel.find_one(
-            APIKeyModel.key_prefix == prefix,
-            APIKeyModel.is_active == True
-        )
-
-        if not api_key:
-            return None
-
-        # Verify hash (constant-time comparison via argon2)
-        if not argon2.verify(key, api_key.key_hash):
-            api_key.error_count += 1
-            await api_key.save()
-
-            # Auto-revoke after 10 failures
-            if api_key.error_count >= 10:
-                await self.revoke(
-                    str(api_key.id),
-                    "system",
-                    "Too many failed validation attempts"
-                )
-            return None
-
-        # Check expiration
-        if api_key.expires_at and api_key.expires_at < datetime.utcnow():
-            return None
-
-        # Check permissions
-        if required_permissions and not api_key.is_superuser:
-            missing = set(required_permissions) - set(api_key.permissions)
-            if missing:
-                return None
-
-        # Update usage stats
-        api_key.last_used_at = datetime.utcnow()
-        api_key.usage_count += 1
-        await api_key.save()
-
-        return api_key
-
-    async def rotate(
-        self,
-        old_key_id: str,
-        rotated_by: str
-    ) -> Tuple[str, APIKeyModel]:
-        """Rotate API key (revoke old, create new with same permissions)"""
-        old_key = await APIKeyModel.get(old_key_id)
-        if not old_key:
-            raise ValueError("API key not found")
-
-        # Create new with same permissions
-        new_raw_key, new_key = await self.create_api_key(
-            name=f"{old_key.name} (rotated)",
-            created_by=rotated_by,
-            permissions=old_key.permissions,
-            service_name=old_key.service_name,
-            environment=old_key.environment,
-            allowed_ips=old_key.allowed_ips
-        )
-
-        # Revoke old
-        await self.revoke(old_key_id, rotated_by, "Key rotation")
-
-        return new_raw_key, new_key
-
-    async def revoke(
-        self,
-        key_id: str,
-        revoked_by: str,
-        reason: str = "Manual revocation"
-    ) -> bool:
-        """Revoke API key"""
-        api_key = await APIKeyModel.get(key_id)
-        if not api_key:
-            return False
-
-        api_key.is_active = False
-        api_key.revoked_at = datetime.utcnow()
-        api_key.revoked_by = revoked_by
-        api_key.revoked_reason = reason
-        await api_key.save()
-
-        # Current runtime does not expose a generic audit_service here.
-        # API key revocation is represented by status lifecycle on the key.
-
-        return True
-```
-
-### Service Account Model & Service
+`outlabs_auth/services/api_key.py`. Every method takes an `AsyncSession` as its
+first argument — the service does not own a session.
 
 ```python
-# outlabs_auth/models/service_account.py
-class ServiceAccountModel(BaseDocument):
-    """Internal service account for microservices"""
+raw_key, api_key = await auth.api_key_service.create_api_key(
+    session,
+    name="production_api",
+    owner_id=user_id,
+    scopes=["user:read", "entity:read"],
+    rate_limit_per_minute=100,
+    ip_whitelist=["10.0.0.0/8"],     # optional
+    entity_id=dept.id,               # optional, EnterpriseRBAC
+    inherit_from_tree=True,          # key also covers descendants
+    key_kind=APIKeyKind.PERSONAL,
+    expires_in_days=90,
+    prefix_type="sk_live",
+)
+# raw_key is returned ONCE and cannot be recovered.
 
-    name: str  # "email_service", "notification_service", etc.
-    description: Optional[str] = None
-    token_hash: str  # argon2id hash
-
-    permissions: List[str] = []
-    is_active: bool = True
-
-    created_at: datetime
-    last_used_at: Optional[datetime] = None
-
-# outlabs_auth/services/service_account_service.py
-class ServiceAccountService:
-    """Manage service accounts for internal services"""
-
-    async def create(
-        self,
-        name: str,
-        permissions: List[str]
-    ) -> Tuple[str, ServiceAccountModel]:
-        """Create service account and return token"""
-        token = secrets.token_urlsafe(32)
-
-        service = ServiceAccountModel(
-            name=name,
-            token_hash=argon2.hash(token),
-            permissions=permissions,
-            created_at=datetime.utcnow()
-        )
-
-        await service.save()
-        return token, service
-
-    async def validate_token(self, token: str) -> Optional[ServiceAccountModel]:
-        """Validate service account token"""
-        # Similar validation logic as API keys
-        pass
+api_key, usage_count = await auth.api_key_service.verify_api_key(
+    session,
+    api_key_string=raw_key,
+    required_scope="user:read",
+    entity_id=dept.id,
+    ip_address=request.client.host,
+)
 ```
+
+`verify_api_key` returns `(APIKey | None, usage_count)`. Usage is tracked through
+Redis `INCR` counters and synced to PostgreSQL in batches with an idempotency
+receipt, so a worker failure loses neither counts nor double-counts (DD-033).
+
+Repeated verification failures put the key in a **temporary lock** (30-minute
+cooldown) rather than permanently revoking it (DD-028) — a leaked-key probe
+should not let an attacker deny service to a legitimate integration.
+
+**Fails closed**: when Redis rate limiting is configured but unavailable,
+verification raises `AuthenticationInfrastructureError` (503) rather than
+silently bypassing the configured limit.
+
+### Integration Principals
+
+There is no `ServiceAccountModel`. Non-human callers are modelled as
+`IntegrationPrincipal` → `integration_principals`:
+
+```python
+class IntegrationPrincipal(BaseModel, table=True):
+    __tablename__ = "integration_principals"
+
+    name: str
+    description: Optional[str]
+    status: IntegrationPrincipalStatus
+    scope_kind: IntegrationPrincipalScopeKind
+    anchor_entity_id: Optional[UUID]   # FK → entities.id
+    inherit_from_tree: bool
+    allowed_scopes: List[str]
+    created_by_user_id: Optional[UUID]
+```
+
+Roles attach via `IntegrationPrincipalRole` → `integration_principal_roles`. An
+`APIKey` belongs to *either* a `User` (`owner_id`) or an `IntegrationPrincipal`
+(`integration_principal_id`).
 
 ### Multi-Source Authentication
 
-```python
-# outlabs_auth/services/multi_source_auth.py
-class MultiSourceAuthService:
-    """Resolve authentication from multiple sources"""
+There is no `MultiSourceAuthService` and no `outlabs_auth/services/multi_source_auth.py`.
+Multi-source auth is the ordered **backend list** on `AuthDeps`, assembled in
+`OutlabsAuth._init_backends()` (`outlabs_auth/core/auth.py`):
 
-    def __init__(self, auth: OutlabsAuth):
-        self.auth = auth
+| Backend | Transport | Strategy | Registered when |
+|---------|-----------|----------|-----------------|
+| `jwt` | `BearerTransport` | `JWTStrategy` | always |
+| `api_key` | `ApiKeyTransport(header_name="X-API-Key")` | `ApiKeyStrategy` | `api_key_service` is present |
+| `service_token` | `BearerTransport` | `ServiceTokenStrategy` | `service_token_service` is present |
 
-    async def get_context(
-        self,
-        request: Request,
-        authorization: Optional[str] = Header(None),
-        x_api_key: Optional[str] = Header(None),
-        x_service_token: Optional[str] = Header(None),
-        x_superuser_token: Optional[str] = Header(None),
-        api_key: Optional[str] = Query(None),
-    ) -> AuthContext:
-        """
-        Extract auth context from any source.
+`AuthDeps` tries each backend in order and returns the first result, so ordering is
+precedence. Additional strategies exist in `outlabs_auth/authentication/strategy.py`
+(`SuperuserStrategy`, `AnonymousStrategy`) alongside further transports
+(`HeaderTransport`, `CookieTransport`, `QueryParamTransport`) — pair them into an
+`AuthBackend` to use them.
 
-        Priority: Superuser > Service > API Key > User > Anonymous
-        """
-
-        # 1. Superuser token (admin override)
-        if x_superuser_token:
-            if await self._validate_superuser_token(x_superuser_token):
-                return AuthContext(
-                    source=AuthSource.SUPERUSER,
-                    identity="superuser",
-                    is_superuser=True,
-                    metadata={"ip": request.client.host}
-                )
-
-        # 2. Service account (internal services)
-        if x_service_token:
-            service = await self.auth.service_account_service.validate_token(
-                x_service_token
-            )
-            if service:
-                return AuthContext(
-                    source=AuthSource.SERVICE,
-                    identity=service.name,
-                    permissions=service.permissions,
-                    is_service_account=True,
-                    metadata={"service": service.name}
-                )
-
-        # 3. API key (external integrations)
-        api_key_value = x_api_key or api_key
-        if api_key_value:
-            key = await self.auth.api_key_service.validate(api_key_value)
-            if key:
-                # Check IP restrictions
-                if key.allowed_ips and request.client.host not in key.allowed_ips:
-                    raise HTTPException(403, "IP not allowed for this API key")
-
-                return AuthContext(
-                    source=AuthSource.API_KEY,
-                    identity=str(key.id),
-                    permissions=key.permissions,
-                    rate_limit=key.rate_limit_per_minute,
-                    metadata={
-                        "key_name": key.name,
-                        "service": key.service_name
-                    }
-                )
-
-        # 4. User JWT token
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization.replace("Bearer ", "")
-            try:
-                user = await self.auth.get_current_user(token)
-                perms = await self.auth.permission_service.get_user_permissions(
-                    user.id
-                )
-
-                return AuthContext(
-                    source=AuthSource.USER,
-                    identity=str(user.id),
-                    permissions=perms,
-                    is_superuser=user.is_superuser,
-                    metadata={"user": user}
-                )
-            except:
-                pass
-
-        # 5. Anonymous
-        return AuthContext(
-            source=AuthSource.ANONYMOUS,
-            identity="anonymous"
-        )
-```
+`JWTStrategy` also enforces token blacklisting through Redis when
+`enable_token_blacklist` is set, and rejects tokens issued before the user's last
+password change (`jwt_stale_password_change`).
 
 ### Dependency Patterns
 
-See [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) for comprehensive dependency injection patterns.
+There is no `SimpleDeps` and no `MultiSourceDeps` — there is one `AuthDeps` class
+(DD-035), reachable as `auth.deps` after `await auth.initialize()`.
 
 ```python
-# outlabs_auth/dependencies/simple.py
-class SimpleDeps:
-    """Simple authentication dependencies"""
+from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
-    def __init__(self, auth: OutlabsAuth):
-        self.auth = auth
+# `auth.deps` does not exist until initialize() has run, so build the dependency
+# inside a function rather than at import time.
+async def require_post_create(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    dep_fn = auth.deps.require_permission("post:create")
+    return await dep_fn(request=request, session=session)
 
-    def authenticated(self):
-        """Require any authentication"""
-        async def get_user(authorization: Optional[str] = Header(None)):
-            if not authorization:
-                raise HTTPException(401, "Not authenticated")
-            token = authorization.replace("Bearer ", "")
-            return await self.auth.get_current_user(token)
-        return Depends(get_user)
 
-    def requires(self, *permissions: str):
-        """Require all listed permissions"""
-        async def check(user = Depends(self.authenticated())):
-            for perm in permissions:
-                if not await self.auth.permission_service.check_permission(
-                    user.id, perm
-                ):
-                    raise HTTPException(403, f"Missing permission: {perm}")
-            return user
-        return Depends(check)
-
-    @property
-    def user(self):
-        """Shortcut for authenticated user"""
-        return self.authenticated()
-
-    @property
-    def admin(self):
-        """Shortcut for admin role"""
-        return self.role("admin", "superuser")
-
-# outlabs_auth/dependencies/multi_source.py
-class MultiSourceDeps:
-    """Handle authentication from all sources"""
-
-    def __init__(self, auth: OutlabsAuth):
-        self.auth = auth
-        self.multi_source = MultiSourceAuthService(auth)
-
-    async def get_context(self, request: Request, ...) -> AuthContext:
-        """Extract AuthContext from any source"""
-        return await self.multi_source.get_context(request, ...)
-
-    def permission(self, *perms: str):
-        """Require permissions (works with all auth sources)"""
-        async def check(ctx: AuthContext = Depends(self.get_context)):
-            if ctx.source == AuthSource.ANONYMOUS:
-                raise HTTPException(401, "Authentication required")
-            if not ctx.has_all_permissions(*perms):
-                raise HTTPException(403, f"Missing permissions: {perms}")
-            return ctx
-        return Depends(check)
-
-    def source(self, *allowed_sources: AuthSource):
-        """Restrict to specific auth sources"""
-        async def check(ctx: AuthContext = Depends(self.get_context)):
-            if ctx.source not in allowed_sources:
-                raise HTTPException(
-                    403,
-                    f"Auth source {ctx.source} not allowed"
-                )
-            return ctx
-        return Depends(check)
+@app.post("/posts")
+async def create_post(
+    payload: PostCreate,
+    auth_result: dict = Depends(require_post_create),
+    session: AsyncSession = Depends(get_session),
+):
+    user = auth_result["user"]      # may be None for API-key/service callers
+    ...
 ```
+
+Key `AuthDeps` methods:
+
+- `require_auth(active=True, verified=False, optional=False)` — authenticate only
+- `require_permission(*permissions, require_all=False, allow_entity_context_header=False, resource_context_provider=None)`
+  — authenticate **and** enforce permissions. Entity context is read from the
+  `entity_id` path or query param, and from the `X-Entity-Context` header only when
+  `allow_entity_context_header=True` (the header is untrusted by default; see
+  `trust_resource_context_header`).
+- `require_in_entity(*permissions, entity_id)` — entity-scoped check
+- `require_superuser()` — superuser gate (DD-051)
+
+This is a real pattern from `examples/simple_rbac/main.py`, which is exercised by
+tests.
 
 ### Rate Limiting
 
+Two separate mechanisms, often confused:
+
+**1. `RateLimiter`** (`outlabs_auth/utils/rate_limit.py`) — a simple in-memory
+sliding window used by the challenge/password-reset request paths. It takes no
+Redis client; it is per-process and therefore per-instance.
+
 ```python
-# outlabs_auth/services/rate_limiter.py
 class RateLimiter:
-    """In-memory rate limiter with optional Redis backend"""
+    """Simple in-memory rate limiter with sliding window. Async-safe."""
 
-    def __init__(self, redis: Optional[Redis] = None):
-        self.redis = redis
-        self.memory_store: Dict[str, List[datetime]] = {}
+    def __init__(self):
+        self._requests: Dict[str, list] = defaultdict(list)
+        self._lock = asyncio.Lock()
 
-    async def check_rate_limit(
+    async def is_rate_limited(
         self,
-        key: str,
-        limit: int,
-        window: int = 60
+        key: str,                  # e.g. email address or IP
+        max_requests: int = 3,
+        window_seconds: int = 300,
     ) -> Tuple[bool, int]:
-        """
-        Check rate limit.
-        Returns (allowed, remaining)
-        """
-        if self.redis:
-            # Use Redis for distributed rate limiting
-            current = await self.redis.incr(key)
-            if current == 1:
-                await self.redis.expire(key, window)
-            allowed = current <= limit
-            remaining = max(0, limit - current)
-        else:
-            # Fallback to in-memory
-            now = datetime.utcnow()
-            window_start = now - timedelta(seconds=window)
-
-            # Clean old entries
-            if key in self.memory_store:
-                self.memory_store[key] = [
-                    ts for ts in self.memory_store[key]
-                    if ts > window_start
-                ]
-            else:
-                self.memory_store[key] = []
-
-            current_count = len(self.memory_store[key])
-            allowed = current_count < limit
-
-            if allowed:
-                self.memory_store[key].append(now)
-
-            remaining = limit - current_count - (1 if allowed else 0)
-
-        return allowed, remaining
-
-class RateLimitDeps:
-    """Rate limiting based on auth source"""
-
-    def __init__(self, auth: OutlabsAuth, redis: Optional[Redis] = None):
-        self.auth = auth
-        self.limiter = RateLimiter(redis)
-
-    def rate_limit(self, default_limit: int = 60, window: int = 60):
-        """Apply rate limits based on auth source"""
-        async def check(ctx: AuthContext = Depends(multi.get_context)):
-            # Different limits by source
-            limits = {
-                AuthSource.ANONYMOUS: 10,
-                AuthSource.USER: default_limit,
-                AuthSource.API_KEY: ctx.rate_limit or default_limit,
-                AuthSource.SERVICE: 1000,
-                AuthSource.SUPERUSER: float('inf')
-            }
-
-            limit = limits.get(ctx.source, default_limit)
-
-            if limit != float('inf'):
-                key = f"rate_limit:{ctx.source}:{ctx.identity}"
-                allowed, remaining = await self.limiter.check_rate_limit(
-                    key, limit, window
-                )
-
-                if not allowed:
-                    raise HTTPException(429, "Rate limit exceeded")
-
-                ctx.rate_limit_remaining = remaining
-
-            return ctx
-        return Depends(check)
+        """Returns (is_limited, seconds_until_reset)."""
 ```
+
+Note the return contract: `(is_limited, seconds_until_reset)` — **not**
+`(allowed, remaining)`. `cleanup()` drops keys idle for over an hour and should be
+called periodically.
+
+For multi-instance deployments this in-memory window is per-instance, so the
+effective limit is `max_requests x instance_count`. Size accordingly.
+
+**2. API-key rate limiting** — Redis-backed counters (`rate_limit_per_minute`,
+`rate_limit_per_hour`, `rate_limit_per_day` on `APIKey`), enforced inside
+`verify_api_key`. This one is distributed and **fails closed**: if Redis is
+configured but unreachable, verification raises
+`AuthenticationInfrastructureError` (503) instead of letting the request through.
+
+There is no `RateLimitDeps`, no per-auth-source limit table, and no
+`outlabs_auth/services/rate_limiter.py`.
 
 ### Usage Examples
 
 ```python
+from fastapi import Depends, FastAPI, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import SimpleDeps, MultiSourceDeps, RateLimitDeps
 
 app = FastAPI()
-auth = SimpleRBAC(database=db)
-
-# Simple usage - users only
-require = SimpleDeps(auth)
-
-@app.delete("/users/{id}")
-async def delete_user(id: str, user = require.requires("user:delete")):
-    return await service.delete(id)
-
-# Multi-source - users, API keys, services
-multi = MultiSourceDeps(auth)
-
-@app.get("/api/data")
-async def get_data(ctx: AuthContext = multi.permission("data:read")):
-    if ctx.source == AuthSource.API_KEY:
-        await log_api_usage(ctx)
-    return data
-
-# Rate limiting
-rate_limit = RateLimitDeps(auth, redis=redis_client)
-
-@app.post("/expensive")
-async def expensive_op(ctx: AuthContext = rate_limit.rate_limit(10, 60)):
-    return {"remaining": ctx.rate_limit_remaining}
-
-# Create API key
-raw_key, key = await auth.api_key_service.create_api_key(
-    name="production_api",
-    created_by=user_id,
-    permissions=["api:read", "api:write"],
-    environment="production",
-    rate_limit_per_minute=100
+auth = SimpleRBAC(
+    database_url=os.getenv("DATABASE_URL"),
+    secret_key=os.getenv("SECRET_KEY"),   # >=32 chars
+    redis_url=os.getenv("REDIS_URL"),     # optional
 )
 
-# Use API key (external service)
-headers = {"X-API-Key": raw_key}
-response = requests.get("/api/data", headers=headers)
+
+@app.on_event("startup")
+async def startup():
+    await auth.initialize()          # `auth.deps` exists only after this
+
+
+async def require_user_delete(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    dep_fn = auth.deps.require_permission("user:delete")
+    return await dep_fn(request=request, session=session)
+
+
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: UUID,
+    auth_result: dict = Depends(require_user_delete),
+    session: AsyncSession = Depends(get_session),
+):
+    # Accepts a JWT, an API key, or a service token — same dependency.
+    if auth_result["source"] == "api_key":
+        await log_api_usage(auth_result["api_key"])
+    return await auth.user_service.delete_user(session, user_id)
 ```
+
+Creating and using an API key:
+
+```python
+# Create (raw_key is returned exactly once)
+async with auth.get_session() as session:
+    raw_key, key = await auth.api_key_service.create_api_key(
+        session,
+        name="production_api",
+        owner_id=user_id,
+        scopes=["api:read", "api:write"],
+        rate_limit_per_minute=100,
+        prefix_type="sk_live",
+    )
+    await session.commit()
+
+# Use it (external service)
+headers = {"X-API-Key": raw_key}
+```
+
+Rate limiting is implemented by `RateLimiter` in `outlabs_auth/utils/rate_limit.py`
+and applied inside the API-key and challenge paths — it is not a separate
+`RateLimitDeps` dependency you attach to routes.
+
+The library also ships routers you can mount rather than hand-rolling: `auth`,
+`users`, `roles`, `permissions`, `entities`, `memberships`, `api_keys`,
+`api_key_admin`, `integration_principals`, `oauth`, `oauth_associate`, `audit`,
+`config`, `self_service`, `session` (`outlabs_auth/routers/`).
 
 ### Security Best Practices
 
 See [SECURITY.md](SECURITY.md) for comprehensive security guidelines.
 
 **Key Security Requirements**:
-1. **argon2id hashing** (NOT SHA256) for all keys
-2. **Never log raw keys** - only prefixes
-3. **Optional expiration** with manual rotation API (recommended 90 days)
-4. **IP whitelisting** strictly enforced
-5. **Temporary locks** after 10 failed attempts in 10 minutes (30-min cooldown)
-6. **Rate limiting** per key and per source via Redis counters
-7. **Operational visibility** for key lifecycle operations
-
-**API Key Security Checklist**:
-- [ ] Keys use argon2id hashing
-- [ ] Raw keys never logged or stored
-- [ ] Optional expiration configured (recommended ≤90 days)
-- [ ] IP whitelisting enabled for production
-- [ ] Rate limiting configured per key (Redis counters)
-- [ ] Key create/revoke procedures are observable and operationally reviewable
-- [ ] Temporary locks on repeated failures (not permanent revocation)
-- [ ] Keys scoped to minimum permissions
-
-### Package Structure Updates
-
-```python
-outlabs_auth/
-├── models/
-│   ├── api_key.py              # NEW: APIKeyModel
-│   ├── service_account.py      # NEW: ServiceAccountModel
-│   └── auth_context.py         # NEW: AuthContext, AuthSource
-├── services/
-│   ├── api_key_service.py      # NEW: API key lifecycle
-│   ├── service_account_service.py  # NEW: Service accounts
-│   ├── multi_source_auth.py    # NEW: Multi-source resolution
-│   └── rate_limiter.py         # NEW: Rate limiting
-├── dependencies/
-│   ├── simple.py               # NEW: SimpleDeps
-│   ├── multi_source.py         # NEW: MultiSourceDeps
-│   ├── groups.py               # NEW: GroupDeps (Enterprise)
-│   ├── entities.py             # NEW: EntityDeps (Enterprise)
-│   └── rate_limit.py           # NEW: RateLimitDeps
-└── routes/
-    └── api_keys.py             # NEW: API key management
-```
+1. **SHA-256 hashing for API keys** — they are 32 bytes of CSPRNG output, so a slow
+   KDF buys nothing. **Argon2id for user passwords**, where it does matter.
+2. **`secret_key` must be >=32 characters** — HS256 rejects anything shorter, and
+   construction raises.
+3. **Never log raw keys** — only prefixes. `key_hash` is all that is stored.
+4. **Optional expiration** with a rotation API (90 days recommended)
+5. **IP whitelisting** strictly enforced when configured
+6. **Temporary locks** after repeated failures (30-minute cooldown) rather than
+   permanent revocation (DD-028)
+7. **Rate limiting** per key via Redis counters — and it **fails closed**: if Redis
+   is configured but unavailable, requests get a retryable 503
+   (`AuthenticationInfrastructureError`) rather than silently bypassing the limit
+8. **`debug=False`** in `register_exception_handlers` — it is what keeps raw
+   exception text out of responses
+9. **Untrusted entity-context header** — `X-Entity-Context` is ignored unless
+   explicitly opted into
 
 ---
 
-## Authentication Extensions (v1.1-v1.4, Optional)
+## Authentication Extensions (Optional)
 
-**Status**: Post-v1.0 features
-**Timeline**: Weeks 8-16 (9 weeks total)
-**Compatibility**: Work with both SimpleRBAC and EnterpriseRBAC
+**Compatibility**: Work with both SimpleRBAC and EnterpriseRBAC — these are core
+feature flags and injected services, not preset-specific modules.
 
 ### Overview
 
-Authentication extensions add modern auth capabilities beyond password-based authentication. All extensions are **optional** and can be adopted independently based on application needs.
+Authentication extensions add capabilities beyond password login. All are optional
+and adopted independently.
 
-**Extension Phases**:
-- **v1.1 (Week 8-9)**: Notification system (prerequisite)
-- **v1.2 (Week 10-12)**: OAuth/social login
-- **v1.3 (Week 13-14)**: Passwordless authentication
-- **v1.4 (Week 15-16)**: Advanced features (MFA, WebAuthn)
+There is **no `outlabs_auth/extensions/` package**. The real layout is:
 
-### Extension 1: Notification Handler Abstraction (v1.1)
-
-**Purpose**: Pluggable system for sending auth-related notifications without vendor lock-in.
-
-#### NotificationHandler Interface
-```python
-class NotificationEvent(BaseModel):
-    """Event emitted when notification needs to be sent"""
-    type: str  # "welcome", "magic_link", "otp", "password_reset", etc.
-    recipient: str  # Email or phone number
-    data: Dict[str, Any]  # Event-specific payload
-    metadata: Optional[Dict[str, Any]] = None
-
-class NotificationHandler(ABC):
-    """Abstract base class for notification handlers"""
-
-    @abstractmethod
-    async def send(self, event: NotificationEvent) -> bool:
-        """
-        Send notification event.
-        Returns True if sent successfully, False otherwise.
-        """
-        pass
 ```
-
-#### Pre-built Handlers
-```python
-# Default handler (logs but doesn't send)
-class NoOpHandler(NotificationHandler):
-    async def send(self, event: NotificationEvent) -> bool:
-        logger.info(f"Notification event: {event.type} to {event.recipient}")
-        return True
-
-# Webhook handler (send to HTTP endpoint)
-class WebhookHandler(NotificationHandler):
-    def __init__(self, webhook_url: str, headers: Optional[Dict] = None):
-        self.webhook_url = webhook_url
-        self.headers = headers or {}
-
-    async def send(self, event: NotificationEvent) -> bool:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.webhook_url,
-                json=event.dict(),
-                headers=self.headers
-            )
-            return response.status_code == 200
-
-# Queue handler (push to message queue)
-class QueueHandler(NotificationHandler):
-    def __init__(self, queue_client: Any, queue_name: str):
-        self.queue_client = queue_client
-        self.queue_name = queue_name
-
-    async def send(self, event: NotificationEvent) -> bool:
-        await self.queue_client.send_message(
-            self.queue_name,
-            event.json()
-        )
-        return True
-
-# Callback handler (direct function call)
-class CallbackHandler(NotificationHandler):
-    def __init__(self, callback: Callable[[NotificationEvent], Awaitable[bool]]):
-        self.callback = callback
-
-    async def send(self, event: NotificationEvent) -> bool:
-        return await self.callback(event)
-
-# Composite handler (combine multiple handlers)
-class CompositeHandler(NotificationHandler):
-    def __init__(self, handlers: List[NotificationHandler], parallel: bool = True):
-        self.handlers = handlers
-        self.parallel = parallel
-
-    async def send(self, event: NotificationEvent) -> bool:
-        if self.parallel:
-            results = await asyncio.gather(
-                *[h.send(event) for h in self.handlers],
-                return_exceptions=True
-            )
-            return all(r is True for r in results if not isinstance(r, Exception))
-        else:
-            for handler in self.handlers:
-                if not await handler.send(event):
-                    return False
-            return True
-```
-
-#### Usage Example
-```python
-# Configure notification handler
-notification_handler = WebhookHandler(
-    webhook_url="https://api.internal/notifications",
-    headers={"X-API-Key": os.getenv("NOTIFICATION_API_KEY")}
-)
-
-auth = SimpleRBAC(
-    database=mongo_client,
-    notification_handler=notification_handler
-)
-
-# Notification is sent automatically
-await auth.user_service.send_welcome_email(user)
-```
-
-### Extension 2: OAuth/Social Login (v1.2)
-
-**Purpose**: Enable "Login with Google/Facebook/Apple" functionality.
-**Requires**: Notification system (v1.1) for welcome emails
-
-#### OAuth Provider Interface
-```python
-class OAuthToken(BaseModel):
-    access_token: str
-    token_type: str
-    expires_in: int
-    refresh_token: Optional[str] = None
-
-class OAuthUserInfo(BaseModel):
-    provider_user_id: str
-    email: Optional[EmailStr] = None
-    email_verified: bool = False
-    name: Optional[str] = None
-    picture: Optional[str] = None
-    profile_data: Optional[Dict[str, Any]] = None
-
-class OAuthProvider(ABC):
-    """Abstract base class for OAuth providers"""
-
-    @abstractmethod
-    def get_authorization_url(
-        self,
-        state: str,
-        redirect_uri: str,
-        scopes: Optional[List[str]] = None
-    ) -> str:
-        """Generate OAuth authorization URL"""
-        pass
-
-    @abstractmethod
-    async def exchange_code(
-        self,
-        code: str,
-        redirect_uri: str
-    ) -> OAuthToken:
-        """Exchange authorization code for tokens"""
-        pass
-
-    @abstractmethod
-    async def get_user_info(self, token: OAuthToken) -> OAuthUserInfo:
-        """Get user information from provider"""
-        pass
-```
-
-#### New Models
-```python
-class AuthMethod(str, Enum):
-    PASSWORD = "password"
-    GOOGLE = "google"
-    FACEBOOK = "facebook"
-    APPLE = "apple"
-    GITHUB = "github"
-    MICROSOFT = "microsoft"
-    MAGIC_LINK = "magic_link"
-    SMS_OTP = "sms_otp"
-    EMAIL_OTP = "email_otp"
-    TOTP = "totp"
-
-class SocialAccountModel(BaseDocument):
-    """Social account linked to user"""
-    user: Link[UserModel]
-    provider: str  # "google", "facebook", "apple", etc.
-    provider_user_id: str
-    email: Optional[EmailStr] = None
-    email_verified: bool = False
-    profile_data: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
-    updated_at: datetime
-
-class UserModel(BaseDocument):
-    # ... existing fields ...
-    hashed_password: Optional[str] = None  # Optional now
-    auth_methods: List[AuthMethod] = Field(default_factory=lambda: [AuthMethod.PASSWORD])
-    phone_number: Optional[str] = None  # For SMS OTP
-```
-
-#### OAuth Service
-```python
-class OAuthService:
-    """OAuth authentication service"""
-
-    async def get_authorization_url(
-        self,
-        provider: str,
-        redirect_uri: str
-    ) -> str:
-        """Generate OAuth authorization URL with state validation"""
-        pass
-
-    async def authenticate_with_provider(
-        self,
-        provider: str,
-        code: str,
-        redirect_uri: str,
-        auto_link_by_email: bool = True
-    ) -> Tuple[UserModel, TokenPair, bool]:
-        """
-        Authenticate user with OAuth provider.
-        Returns (user, tokens, is_new_user)
-
-        Rules:
-        - If social email is verified: auto-link to existing user
-        - If social email is unverified: create separate account
-        - If no existing user: create new user
-        """
-        pass
-
-    async def link_provider_to_user(
-        self,
-        user_id: str,
-        provider: str,
-        code: str,
-        redirect_uri: str
-    ) -> SocialAccountModel:
-        """Link social account to existing user"""
-        pass
-
-    async def unlink_provider(
-        self,
-        user_id: str,
-        provider: str
-    ) -> None:
-        """Unlink social account (must have alternative auth method)"""
-        pass
-```
-
-#### Usage Example
-```python
-oauth_providers = {
-    "google": GoogleProvider(
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
-    ),
-    "facebook": FacebookProvider(
-        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
-        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
-    )
-}
-
-auth = SimpleRBAC(
-    database=mongo_client,
-    notification_handler=notification_handler,
-    oauth_providers=oauth_providers
-)
-
-# Get authorization URL
-auth_url = await auth.oauth_service.get_authorization_url(
-    provider="google",
-    redirect_uri="https://myapp.com/auth/callback"
-)
-
-# Handle callback
-user, tokens, is_new = await auth.oauth_service.authenticate_with_provider(
-    provider="google",
-    code=request.query_params["code"],
-    redirect_uri="https://myapp.com/auth/callback"
-)
-```
-
-### Extension 3: Passwordless Authentication (v1.3)
-
-**Purpose**: Magic links and OTP-based authentication.
-**Requires**: Notification system (v1.1) for sending links/codes
-
-#### Challenge Management
-```python
-class ChallengeType(str, Enum):
-    MAGIC_LINK = "magic_link"
-    EMAIL_OTP = "email_otp"
-    SMS_OTP = "sms_otp"
-    WHATSAPP_OTP = "whatsapp_otp"
-    TELEGRAM_OTP = "telegram_otp"
-
-class AuthenticationChallengeModel(BaseDocument):
-    """Temporary authentication challenge"""
-    challenge_type: ChallengeType
-    recipient: str  # Email or phone
-    code: str  # Magic link token or OTP
-    user_id: Optional[str] = None
-    attempts: int = 0
-    max_attempts: int = 3
-    expires_at: datetime
-    created_at: datetime
-```
-
-#### Passwordless Service
-```python
-class PasswordlessService:
-    """Passwordless authentication service"""
-
-    # Magic Links
-    async def send_magic_link(
-        self,
-        email: EmailStr,
-        create_user_if_not_exists: bool = False
-    ) -> None:
-        """
-        Generate magic link and send via notification handler.
-        Magic link expires in 15 minutes.
-        """
-        pass
-
-    async def verify_magic_link(
-        self,
-        code: str
-    ) -> TokenPair:
-        """Verify magic link and return JWT tokens"""
-        pass
-
-    # OTP
-    async def send_otp(
-        self,
-        recipient: str,
-        channel: str = "email",  # "email", "sms", "whatsapp", "telegram"
-        create_user_if_not_exists: bool = False
-    ) -> None:
-        """
-        Generate 6-digit OTP and send via notification handler.
-        OTP expires in 5 minutes.
-        """
-        pass
-
-    async def verify_otp(
-        self,
-        recipient: str,
-        code: str
-    ) -> TokenPair:
-        """Verify OTP code and return JWT tokens"""
-        pass
-```
-
-#### Usage Example
-```python
-auth = SimpleRBAC(
-    database=mongo_client,
-    notification_handler=notification_handler
-)
-
-# Magic link
-await auth.passwordless_service.send_magic_link("user@example.com")
-tokens = await auth.passwordless_service.verify_magic_link(code)
-
-# SMS OTP
-await auth.passwordless_service.send_otp("+1234567890", channel="sms")
-tokens = await auth.passwordless_service.verify_otp("+1234567890", "123456")
-```
-
-### Extension 4: Advanced Features (v1.4)
-
-**Purpose**: MFA, TOTP, extended OTP channels, and WebAuthn research.
-
-#### TOTP/MFA
-```python
-class MFAMethodModel(BaseDocument):
-    """Multi-factor authentication method"""
-    user: Link[UserModel]
-    method_type: str  # "totp", "sms", "email"
-    totp_secret: Optional[str] = None  # For authenticator apps
-    is_primary: bool = False
-    created_at: datetime
-    last_used_at: Optional[datetime] = None
-
-class MFAService:
-    """Multi-factor authentication service"""
-
-    async def enable_totp(self, user_id: str) -> Tuple[str, str]:
-        """
-        Enable TOTP for user.
-        Returns (secret, qr_code_uri)
-        """
-        pass
-
-    async def verify_totp(self, user_id: str, code: str) -> bool:
-        """Verify TOTP code from authenticator app"""
-        pass
-
-    async def generate_backup_codes(self, user_id: str) -> List[str]:
-        """Generate recovery codes for lost authenticator"""
-        pass
-
-    async def require_mfa(self, user_id: str) -> None:
-        """Enforce MFA for user"""
-        pass
-```
-
-### Package Structure Changes (Extensions)
-
-```python
 outlabs_auth/
-├── extensions/                  # NEW: Extension modules
-│   ├── __init__.py
-│   ├── notifications/
-│   │   ├── __init__.py
-│   │   ├── base.py             # NotificationHandler ABC
-│   │   ├── webhook.py          # WebhookHandler
-│   │   ├── queue.py            # QueueHandler
-│   │   └── callback.py         # CallbackHandler
-│   ├── oauth/
-│   │   ├── __init__.py
-│   │   ├── base.py             # OAuthProvider ABC
-│   │   ├── google.py           # GoogleProvider
-│   │   ├── facebook.py         # FacebookProvider
-│   │   └── apple.py            # AppleProvider
-│   ├── passwordless/
-│   │   ├── __init__.py
-│   │   ├── service.py          # PasswordlessService
-│   │   └── challenge.py        # Challenge management
-│   └── mfa/
-│       ├── __init__.py
-│       ├── service.py          # MFAService
-│       └── totp.py             # TOTP implementation
-├── models/
-│   ├── social_account.py       # NEW
-│   ├── auth_challenge.py       # NEW
-│   └── mfa_method.py           # NEW
-└── services/
-    ├── oauth.py                # NEW
-    ├── passwordless.py         # NEW
-    └── mfa.py                  # NEW
+├── oauth/                       # OAuth / social login
+│   ├── provider.py              # OAuthProvider base
+│   ├── provider_factories.py    # httpx-oauth backed factories (optional dep)
+│   ├── providers/
+│   │   ├── google.py
+│   │   ├── facebook.py
+│   │   ├── apple.py
+│   │   └── github.py
+│   ├── security.py              # PKCE, nonce, state, constant-time compare
+│   ├── state.py                 # server-side state records
+│   ├── models.py                # transport dataclasses (not tables)
+│   └── exceptions.py            # OAuthError hierarchy (NOT OutlabsAuthException)
+├── mail/                        # transactional auth mail
+│   ├── service.py               # ComposedAuthMailService
+│   ├── composer.py
+│   ├── providers.py
+│   └── types.py                 # intents + delivery results
+├── messaging/                   # WhatsApp / SMS challenge delivery
+│   └── types.py
+└── models/sql/
+    ├── social_account.py        # SocialAccount    → social_accounts
+    ├── oauth_state.py           # OAuthState       → oauth_states
+    └── auth_challenge.py        # AuthChallenge    → auth_challenges
 ```
 
-### Configuration Changes
+**Not implemented**: TOTP/MFA, backup codes, and WebAuthn/passkeys. There is no
+`MFAMethodModel`, no `mfa` service, and no `enable_mfa` flag.
+
+### Extension 1: Mail and Notifications
+
+**Purpose**: Deliver auth mail without vendor lock-in. The library defines the
+intent types and calls an **injected service**; it ships no vendor integration.
+
+`outlabs_auth/mail/types.py` defines the intents:
+
+- `InviteMailIntent`
+- `ForgotPasswordMailIntent`
+- `PasswordResetConfirmationMailIntent`
+- `AccessGrantedMailIntent`
+
+`ComposedAuthMailService` (`outlabs_auth/mail/service.py`) exposes the matching
+coroutines — `send_invite`, `send_forgot_password`,
+`send_password_reset_confirmation`, `send_access_granted` — each returning a
+`MailDeliveryResult`.
+
+Wire it in via constructor arguments:
 
 ```python
-class SimpleConfig(AuthConfig):
-    """Configuration with optional extensions"""
-
-    # Notification system (v1.1)
-    notification_handler: Optional[NotificationHandler] = None
-
-    # OAuth providers (v1.2)
-    oauth_providers: Optional[Dict[str, OAuthProvider]] = None
-
-    # Passwordless (v1.3)
-    enable_magic_links: bool = False
-    enable_otp: bool = False
-    magic_link_expire_minutes: int = 15
-    otp_expire_minutes: int = 5
-
-    # MFA (v1.4)
-    enable_mfa: bool = False
-    mfa_required_for_users: List[str] = Field(default_factory=list)
-```
-
-### Extension Integration Example
-
-```python
-from outlabs_auth import SimpleRBAC
-from outlabs_auth.extensions.notifications import WebhookHandler
-from outlabs_auth.extensions.oauth import GoogleProvider, FacebookProvider
-
-# Full configuration with all extensions
-notification_handler = WebhookHandler(
-    webhook_url="https://api.internal/notifications",
-    headers={"X-API-Key": os.getenv("API_KEY")}
-)
-
-oauth_providers = {
-    "google": GoogleProvider(
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
-    ),
-    "facebook": FacebookProvider(
-        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
-        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
-    )
-}
-
 auth = SimpleRBAC(
-    database=mongo_client,
-    notification_handler=notification_handler,
-    oauth_providers=oauth_providers,
-    enable_magic_links=True,
-    enable_otp=True,
-    enable_mfa=True
+    database_url=os.getenv("DATABASE_URL"),
+    secret_key=os.getenv("SECRET_KEY"),        # >=32 chars
+    notification_service=notification_service,
+    transactional_mail_service=mail_service,
+    transactional_messaging_service=messaging_service,  # WhatsApp/SMS
+    enable_notifications=True,
 )
-
-# All auth methods now available:
-# 1. Password (built-in)
-tokens = await auth.auth_service.login("user@example.com", "password")
-
-# 2. OAuth (v1.2)
-tokens = await auth.oauth_service.authenticate_with_provider("google", code, redirect_uri)
-
-# 3. Magic link (v1.3)
-await auth.passwordless_service.send_magic_link("user@example.com")
-tokens = await auth.passwordless_service.verify_magic_link(code)
-
-# 4. OTP (v1.3)
-await auth.passwordless_service.send_otp("+1234567890", channel="sms")
-tokens = await auth.passwordless_service.verify_otp("+1234567890", "123456")
-
-# 5. TOTP/MFA (v1.4)
-secret, qr_code = await auth.mfa_service.enable_totp(user.id)
-is_valid = await auth.mfa_service.verify_totp(user.id, totp_code)
 ```
+
+### Extension 2: OAuth / Social Login
+
+**Providers**: Google, Facebook, Apple, GitHub are implemented directly under
+`outlabs_auth/oauth/providers/`. `provider_factories.py` reaches additional
+providers (Microsoft, Discord, ...) through the optional `httpx-oauth` dependency.
+
+#### SocialAccount → `social_accounts`
+```python
+class SocialAccount(BaseModel, table=True):
+    __tablename__ = "social_accounts"
+
+    user_id: UUID            # FK → users.id
+    provider: str            # "google", "facebook", "apple", "github"
+    provider_user_id: str
+    provider_email: Optional[str]
+    provider_email_verified: bool
+    provider_username: Optional[str]
+
+    # Provider tokens — only stored when store_oauth_provider_tokens=True,
+    # encrypted with oauth_token_encryption_key
+    access_token: Optional[str]
+    refresh_token: Optional[str]
+    token_expires_at: Optional[datetime]
+
+    display_name: Optional[str]
+    avatar_url: Optional[str]
+    profile_url: Optional[str]
+    last_login_at: Optional[datetime]
+```
+
+#### OAuthState → `oauth_states`
+```python
+class OAuthState(BaseModel, table=True):
+    __tablename__ = "oauth_states"
+
+    state: str
+    provider: str
+    user_id: Optional[UUID]
+    redirect_uri: Optional[str]
+    code_verifier: Optional[str]   # PKCE
+    nonce: Optional[str]           # OIDC replay protection
+    expires_at: datetime
+    used_at: Optional[datetime]    # single-use enforcement
+```
+
+**Security properties** (see `CHANGELOG.md` 0.1.0a24):
+- Authorization responses are **browser-bound and single-use**: signed state claims
+  are backed by this server-side record plus a binding cookie, so callbacks reject
+  replayed, expired, or cross-browser state.
+- Apple ID tokens are verified through JWKS. Invalid provider ID tokens are
+  rejected — there is no unverified-parse fallback.
+- Account auto-linking requires a **provider-verified** email; otherwise it raises
+  `EmailNotVerifiedError` rather than linking.
+
+Users are `hashed_password: Optional[str]` — OAuth-only users have no password, and
+`auth_methods` records how the account can authenticate. `CannotUnlinkLastMethodError`
+prevents unlinking the last remaining way to log in.
+
+### Extension 3: Passwordless Authentication
+
+#### AuthChallenge → `auth_challenges`
+```python
+class AuthChallengeType(str, Enum):
+    MAGIC_LINK = "magic_link"
+    ACCESS_CODE = "access_code"
+    WHATSAPP_OTP = "whatsapp_otp"
+    SMS_OTP = "sms_otp"
+
+
+class AuthChallenge(BaseModel, table=True):
+    __tablename__ = "auth_challenges"
+
+    user_id: UUID                       # FK → users.id
+    challenge_type: AuthChallengeType
+    token_hash: str                     # the raw token is never stored
+    recipient: str                      # email address or phone number
+    expires_at: datetime
+    used_at: Optional[datetime]         # single-use enforcement
+    redirect_url: Optional[str]
+    requested_ip_address: Optional[str]
+    requested_user_agent: Optional[str]
+```
+
+Enable and tune via constructor flags — note it is `enable_access_codes`, not
+`enable_otp`:
+
+```python
+auth = SimpleRBAC(
+    database_url=os.getenv("DATABASE_URL"),
+    secret_key=os.getenv("SECRET_KEY"),
+
+    enable_magic_links=True,
+    magic_link_expire_minutes=15,
+    magic_link_request_rate_limit_max=3,
+    magic_link_request_rate_limit_window_seconds=300,
+
+    enable_access_codes=True,
+    access_code_expire_minutes=10,
+    access_code_length=6,
+    access_code_request_rate_limit_max=3,
+    access_code_request_rate_limit_window_seconds=300,
+    access_code_verify_rate_limit_max=10,
+    access_code_verify_rate_limit_window_seconds=300,
+)
+```
+
+Rate limiting is enforced on both **request** and **verify** for access codes —
+request-only limiting would leave the code itself brute-forceable.
+
+WhatsApp and SMS OTP challenge types deliver through the injected
+`transactional_messaging_service`. See `examples/enterprise_rbac/challenge_messaging.py`
+for a working wiring, and `docs/WHATSAPP_ACCOUNT_MESSAGING.md`.
 
 ### Key Design Principles
 
-1. **Optional**: All extensions are opt-in
-2. **Independent**: Extensions can be adopted separately
-3. **Compatible**: Work with both SimpleRBAC and EnterpriseRBAC
-4. **No Vendor Lock-in**: Use pluggable abstractions (notification handlers, OAuth providers)
-5. **Security First**: Rate limiting, expiration, state validation built-in
-6. **Documented**: Comprehensive guides in AUTH_EXTENSIONS.md and SECURITY.md
-
-### Testing Extensions
-
-```python
-# Test notification handler
-async def test_webhook_handler():
-    handler = WebhookHandler("https://webhook.site/...")
-    event = NotificationEvent(
-        type="welcome",
-        recipient="test@example.com",
-        data={"name": "Test User"}
-    )
-    assert await handler.send(event) is True
-
-# Test OAuth flow
-async def test_google_oauth(auth_with_oauth):
-    # Mock OAuth provider
-    auth_url = await auth_with_oauth.oauth_service.get_authorization_url(
-        "google", "http://localhost/callback"
-    )
-    assert "accounts.google.com" in auth_url
-
-# Test magic link
-async def test_magic_link(auth_with_notifications):
-    await auth_with_notifications.passwordless_service.send_magic_link("test@example.com")
-    # Verify notification was sent
-    # Verify challenge created in database
-```
+1. **Injected, not built in** — notification/mail/messaging services are supplied by
+   the host app. The library owns the intent and the call, never the vendor.
+2. **Feature-flagged** — every extension is off by default; enabling one is a
+   constructor argument, not a different preset.
+3. **Tokens are hashed at rest** — `AuthChallenge.token_hash`, `APIKey.key_hash`.
+   Raw values are returned once and never stored or logged.
+4. **Single-use and expiring** — challenges and OAuth states both carry
+   `expires_at` + `used_at`.
+5. **Additive schema** — enabling an extension may add tables; run
+   `outlabs-auth migrate`. It never requires switching presets.
 
 ---
 
@@ -2225,207 +1649,269 @@ For details and examples, see:
 
 ## Configuration System
 
+`outlabs_auth/core/config.py`. In practice you pass these as keyword arguments to
+`SimpleRBAC` / `EnterpriseRBAC` / `OutlabsAuth`, which build the config object for
+you.
+
 ### Base Configuration
 ```python
 class AuthConfig(BaseModel):
-    """Base configuration for all presets"""
+    """Base configuration shared by SimpleRBAC and EnterpriseRBAC."""
 
-    # JWT settings
-    secret_key: str
+    # Database
+    database_url: str          # postgresql+asyncpg://user:pass@host:5432/dbname
+    database_schema: Optional[str] = None   # None → follow the connection search path
+
+    # JWT
+    secret_key: str            # >=32 chars — HS256 rejects shorter, construction raises
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
+    jwt_audience: Optional[str] = None
 
-    # Password settings
+    # Service tokens — separate derived signing key for domain separation
+    service_token_secret_key: Optional[str] = None   # min_length=32 when set
+    service_token_audience: Optional[str] = None
+
+    # Password policy
     password_min_length: int = 8
     require_special_char: bool = True
     require_uppercase: bool = True
     require_digit: bool = True
 
+    # Argon2id tuning (OWASP 2023 minimums)
+    argon2_time_cost: int = 2
+    argon2_memory_cost_kib: int = 19456     # 19 MiB
+    argon2_parallelism: int = 1
+
     # Security
     max_login_attempts: int = 5
     lockout_duration_minutes: int = 30
-```
 
-### Preset-Specific Configs
-```python
-class SimpleConfig(AuthConfig):
-    """Configuration for SimpleRBAC"""
-
-    # Simple mode has no additional config
-    pass
-
-class EnterpriseConfig(AuthConfig):
-    """Configuration for EnterpriseRBAC"""
-
-    # Entity settings (always enabled)
-    max_entity_depth: int = 5
-    allowed_entity_types: Optional[List[str]] = None
-    allow_access_groups: bool = True
-
-    # Optional features (opt-in)
+    # Feature flags (see the preset subclasses)
+    enable_entity_hierarchy: bool = False
     enable_context_aware_roles: bool = False
     enable_abac: bool = False
-    enable_caching: bool = False  # Defaults to True when Redis is enabled by OutlabsAuth
-    enable_audit_log: bool = False  # Reserved for future extended/compliance capture
+    enable_caching: Optional[bool] = None   # defaults to True when Redis is configured
+    enable_audit_log: bool = False
+```
 
-    # Redis counters + permission cache
-    redis_url: Optional[str] = None
-    cache_ttl_seconds: int = 300
+`MIN_HS_SECRET_KEY_LENGTH = 32` is enforced — a short `secret_key` raises during
+construction, not at first request. This is the single most common integration
+error.
+
+### Preset-Specific Configs
+
+The preset configs pin the feature flags with `frozen=True`, which is what makes
+"SimpleRBAC cannot accidentally grow a hierarchy" a type-level guarantee rather
+than a convention:
+
+```python
+class SimpleConfig(AuthConfig):
+    """Configuration for SimpleRBAC. Entity hierarchy and advanced features off."""
+
+    enable_entity_hierarchy: bool = Field(default=False, frozen=True)
+    enable_context_aware_roles: bool = Field(default=False, frozen=True)
+    enable_abac: bool = Field(default=False, frozen=True)
+
+
+class EnterpriseConfig(AuthConfig):
+    """Configuration for EnterpriseRBAC. Entity hierarchy always on."""
+
+    enable_entity_hierarchy: bool = Field(default=True, frozen=True)
+
+    # Entity settings
+    max_entity_depth: int = 10
+    allowed_entity_types: Optional[list[str]] = None   # None = any
+    allow_access_groups: bool = True
+
+    # enable_context_aware_roles / enable_abac / enable_caching / enable_audit_log
+    # are inherited from AuthConfig and remain configurable (default False).
+```
+
+Note `max_entity_depth` defaults to **10**.
+
+### Optional dependencies and background work
+
+```python
+redis_enabled: Optional[bool] = None
+redis_url: Optional[str] = None
+redis_key_prefix: Optional[str] = None
+cache_ttl_seconds: int = 300
+
+# Embedded schedulers are OFF by default — run one deterministic cycle with
+# `outlabs-auth run-maintenance` instead, or opt in explicitly.
+background_job_mode: Literal["disabled", "embedded"] = "disabled"
+
+# Injected services — the library defines the interface and calls it
+notification_service: Optional[Any] = None
+transactional_mail_service: Optional[Any] = None
+transactional_messaging_service: Optional[Any] = None
+
+# Untrusted by default
+trust_resource_context_header: bool = False
 ```
 
 ---
 
 ## Testing Strategy
 
-### Unit Tests
-```python
-# Test each service independently
-tests/unit/services/test_auth_service.py
-tests/unit/services/test_permission_service.py
-tests/unit/services/test_entity_service.py
+Layout:
 
-# Test models
-tests/unit/models/test_user_model.py
-tests/unit/models/test_entity_model.py
-
-# Test utilities
-tests/unit/utils/test_jwt.py
-tests/unit/utils/test_password.py
+```
+tests/
+├── conftest.py              # shared fixtures
+├── fixtures/
+├── unit/
+│   ├── authentication/      # transports, strategies, backends
+│   ├── database/
+│   ├── integrations/
+│   ├── oauth/
+│   ├── observability/
+│   ├── services/
+│   └── test_readme_quickstart.py   # extracts and EXECUTES the README block
+└── integration/             # router/endpoint-level, real PostgreSQL
+    └── query_budget_support.py     # asserts query counts, catching N+1 regressions
 ```
 
-### Integration Tests
-```python
-# Test preset configurations
-tests/integration/test_simple_rbac.py
-tests/integration/test_enterprise_rbac.py
+### Schema-per-test isolation
 
-# Test complex scenarios
-tests/integration/test_tree_permissions.py
-tests/integration/test_context_aware_roles.py
-tests/integration/test_abac_conditions.py
-tests/integration/test_root_entity_isolation.py
+`test_engine` creates a **uniquely named PostgreSQL schema per test**, sets the
+connection's `search_path` to it, runs `SQLModel.metadata.create_all`, and drops
+the schema `CASCADE` afterwards:
+
+```python
+@pytest_asyncio.fixture(scope="function")
+async def test_engine():
+    schema_name = f"test_{uuid4().hex}"
+    ...
 ```
 
-### Example Tests
-```python
-# Test example applications work
-tests/examples/test_simple_app.py
-tests/examples/test_enterprise_app.py
-```
+This buys real isolation and parallelism without a database per worker. It also
+means **tests need a live PostgreSQL** — there is no SQLite fallback, and there
+should not be one: the library depends on PostgreSQL-specific behaviour
+(`PG_UUID`, schema search paths, `SKIP LOCKED`).
 
-### Test Fixtures
-```python
-@pytest.fixture
-async def test_db():
-    """Test database connection"""
-    from sqlalchemy.ext.asyncio import create_async_engine
-    engine = create_async_engine(
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_outlabs_auth"
-    )
-    yield engine
-    await engine.dispose()
+### Key fixtures (`tests/conftest.py`)
 
-@pytest.fixture
-async def simple_auth(test_db):
-    """SimpleRBAC instance for testing"""
-    auth = SimpleRBAC(
-        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/test_outlabs_auth",
-        secret_key="test-secret-key"
-    )
-    await auth.initialize()
-    return auth
+| Fixture | Provides |
+|---------|----------|
+| `test_engine` | async engine bound to a throwaway schema |
+| `test_session` | `AsyncSession` for a single test |
+| `test_secret_key` | a >=32-char key (short keys raise at construction) |
+| `auth_config` | `AuthConfig` built from the test key |
+| `auth` | initialized `SimpleRBAC` |
+| `auth_with_cache` | `SimpleRBAC` with Redis caching enabled |
+| `redis_client` | Redis connection for cache/counter tests |
 
-@pytest.fixture
-async def test_user(simple_auth):
-    """Create test user"""
-    return await simple_auth.user_service.create_user(
-        email="test@example.com",
-        password="Test123!@#"
-    )
-```
+### The README is a test
 
----
+`tests/unit/test_readme_quickstart.py` extracts the quickstart code block from
+`README.md` and executes it, so the first thing a new integrator reads cannot rot.
+It has caught both of the classic mistakes: a `secret_key` under 32 chars, and
+mounting routers at import time while `auth.deps` only exists after the async
+`initialize()`.
 
-## Migration Path from Current System
+If you change the README quickstart, run that test.
 
-### Phase 1: Parallel Development
-- Keep current API running
-- Develop library alongside
-- Test library in isolated projects
-
-### Phase 2: Selective Migration
-- New projects use library
-- Existing projects stay on API
-- No forced migration
-
-### Phase 3: Gradual Deprecation
-- Document API deprecation timeline
-- Provide migration tools
-- Support both for transition period
-
-### Phase 4: API Sunset
-- After all projects migrated
-- Archive API code
-- Maintain library only
+See [TESTING_GUIDE.md](TESTING_GUIDE.md) and `docs-library/95-Testing-Guide.md`.
 
 ---
 
 ## Performance Considerations
 
-### Caching Strategy (EnterpriseRBAC with caching enabled)
-```python
-# Redis cache keys
-user_permissions:{user_id}:{entity_id}  # TTL: 5 minutes
-entity_path:{entity_id}                 # TTL: 10 minutes
-role_permissions:{role_id}              # TTL: 15 minutes
+### Caching Strategy
 
-# Cache invalidation on:
-- Role permissions changed
-- User membership changed
-- Entity hierarchy changed
-```
+`outlabs_auth/services/cache.py` (`CacheService`). Keys are built through
+`redis_client.make_key(...)`, so everything is namespaced by `redis_key_prefix`:
+
+| Key shape | Built by |
+|-----------|----------|
+| `auth:permission-check:{user_id}:{entity_id\|global}:{permission}[:{context_hash}]` | `make_permission_check_key` |
+| `auth:user-permissions:{user_id}:{all\|global}` | `make_user_permissions_key` |
+| `auth:entity-relation:{version}:{ancestor_id}:{descendant_id}` | `make_entity_relation_key` |
+| `auth:abac-conditions-flag` | `make_abac_conditions_flag_key` |
+
+TTL is `cache_ttl_seconds` (default 300) with **±10% jitter** (`_jittered_ttl`) so
+entries written together do not expire — and stampede a rebuild — together.
+
+**Invalidation** is two-tier:
+
+1. **Direct** — `invalidate_user_permissions(user_id)` publishes
+   `permissions:user:{user_id}`; entity changes publish
+   `permissions:entity:{entity_id}`. Redis Pub/Sub propagates to every instance
+   (DD-037).
+2. **Version bumps** — API-key auth snapshots carry a version counter
+   (`bump_user_api_key_auth_snapshot_version`, `..._entity_...`, `..._global_...`).
+   Bumping the version makes every key derived from it unreachable, which
+   invalidates a whole class of entries in O(1) without scanning.
+
+Caching is enabled by default when Redis is configured (`enable_caching` defaults
+to `None` → True with Redis).
 
 ### Database Indexes
+
+Declared in each model's `__table_args__`. The notable ones:
+
 ```python
-# User collection
-{"email": 1}  # Unique
-{"status": 1}
+# users
+UniqueConstraint("email", name="uq_users_email")
+Index("ix_users_status", "status")
+Index("ix_users_root_entity_id", "root_entity_id")
 
-# Role collection
-{"name": 1}
+# permissions
+UniqueConstraint("name", name="uq_permissions_name")
+Index("ix_permissions_resource", "resource")
+Index("ix_permissions_status", "status")
 
-# Permission collection
-{"name": 1}
-{"resource": 1, "action": 1}
+# entities                                    (EnterpriseRBAC)
+UniqueConstraint("slug", name="uq_entities_slug")
+Index("ix_entities_class_type", "entity_class", "entity_type")
+Index("ix_entities_parent_id", "parent_id")
+Index("ix_entities_status", "status")
 
-# Entity collection (EnterpriseRBAC only)
-{"slug": 1}  # Unique
-{"parent_entity": 1}
-{"entity_type": 1}
+# entity_memberships                          (EnterpriseRBAC)
+UniqueConstraint("user_id", "entity_id", name="uq_entity_membership")
+Index("ix_em_entity_id", "entity_id")
+Index("ix_em_user_status", "user_id", "status")
 
-# EntityMembership collection (EnterpriseRBAC only)
-{"user": 1, "entity": 1}  # Unique
-{"entity": 1}
-{"user": 1}
+# entity_closure                              (EnterpriseRBAC)
+UniqueConstraint("ancestor_id", "descendant_id", name="uq_entity_closure")
+Index("ix_closure_ancestor_depth", "ancestor_id", "depth")
+Index("ix_closure_descendant_depth", "descendant_id", "depth")
+
+# user_role_memberships                       (SimpleRBAC)
+UniqueConstraint("user_id", "role_id", name="uq_user_role_membership")
+Index("ix_urm_user_status", "user_id", "status")
 ```
 
+Composite indexes are deliberately ordered so their **leading prefix** serves
+single-column lookups — that is why the redundant single-column btrees were
+dropped (migration `0018`, index hygiene). Adding them back is a regression, not
+an optimization.
+
 ### Query Optimization
-- Eager loading of relationships (use `fetch_links=True`)
-- Batch permission checks when possible
-- Limit entity path traversal depth
-- Cache expensive queries
+
+- **Eager loading via `selectinload`** — `services/permission.py` uses it heavily to
+  pull roles and their permissions in one extra query instead of one per row.
+  (There is no `fetch_links`; that is not a SQLAlchemy API.)
+- **Request-scoped cache** — `services/request_cache.py` +
+  `middleware/request_cache.py` memoize repeated lookups within a single request,
+  so two permission checks on one route do not hit Redis or PostgreSQL twice.
+- **Query budgets in tests** — `tests/integration/query_budget_support.py` asserts
+  query counts, so an N+1 regression fails CI rather than quietly costing latency.
+- Batch permission checks when possible.
+- Limit entity path traversal depth (`max_entity_depth`, default 10).
 
 ---
 
-## Next Steps
+## Further Reading
 
-1. ✅ Architecture defined
-2. 🔄 Create implementation roadmap (next)
-3. ⏭️ Design public API
-4. ⏭️ Begin Phase 1 implementation
+The source is the truth. In order:
 
----
-
-**Last Updated**: 2025-01-14 (PostgreSQL migration complete, SQLAlchemy async, closure table for tree queries)
-**Next Review**: After testing all examples
+1. **`examples/`** — the only integration reference kept honest by tests
+2. **`README.md`** — quickstart, executed by `tests/unit/test_readme_quickstart.py`
+3. **the source** — `core/auth.py`, `routers/`, `dependencies/__init__.py`
+4. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** — why it is built this way
+5. **[CURRENT_IMPLEMENTATION_STATUS.md](CURRENT_IMPLEMENTATION_STATUS.md)** and
+   **`CHANGELOG.md`** — what is actually built, and what shipped when

@@ -1,11 +1,11 @@
 # Current Implementation Status
 
-**Updated**: 2026-04-12
+**Updated**: 2026-07-17
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
 
-For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](/Users/macbookm3/Documents/projects/outlabsAuth/docs/NEXT_PASS_BACKLOG.md).
+For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
 
 ## Completed Slices
 
@@ -33,6 +33,31 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 - Apple ID tokens are now parsed through verified JWKS-based validation in the shared OAuth helper path.
 - Invalid provider ID tokens are rejected instead of falling back to unverified parsing.
 - Locked users cannot obtain new local tokens through OAuth callback login or invite-accept auto-login.
+- OAuth SPA hosts can use success/error redirect URLs and local `cookie_secure=False` for non-HTTPS dev.
+- Invite-only OAuth is supported via `require_existing_user=True` on `get_oauth_router`.
+- OAuth self-register creates OAuth-only accounts (no `PASSWORD` auth method / no retained placeholder password hash).
+- Self-service social account list/unlink lives on `get_users_router` (`/me/social-accounts`); unlink is blocked when it would remove the last usable auth method.
+
+### Sessions and Cross-User Audit Search
+
+- Active refresh-token sessions are listable and revocable:
+  - self-service: `GET/DELETE /users/me/sessions` (+ revoke-all)
+  - admin: `GET/DELETE /users/{user_id}/sessions` (+ revoke-all)
+- Responses use `UserSessionResponse` (no token secrets).
+- Cross-user audit search is mounted via `get_audit_router` (enterprise example: `/v1/audit-events`).
+- `user_audit_service` is always created on `initialize()`; `enable_audit_log` does not gate these HTTP routes.
+- Scoped Enterprise actors only see audit events whose `root_entity_id` is in their access scope.
+- Admin session revokes record user-audit events when the audit service is present.
+
+### Passwordless, Phone Verify, and Multi-Channel Access Codes
+
+- Magic links and email access codes remain available behind feature flags on `get_auth_router`.
+- Access-code request/verify accept exactly one of `email` or verified `phone` (E.164), with optional `channel` (`email` | `whatsapp` | `sms`).
+- Phone WhatsApp/SMS paths store `whatsapp_otp` / `sms_otp` challenge types; email remains `access_code`.
+- Phone verify OTP is self-service on `get_users_router` (`/me/phone/request-code`, `/me/phone/verify-code`) using `phone_verify`.
+- Delivery remains host-owned (intents/hooks + transactional mail). Enterprise example wires console/Twilio WhatsApp Content + SMS Messages recipes.
+- Bundled transactional mail providers now include Postmark and Resend in addition to SMTP/SendGrid/Mailgun.
+- Permission caching supports `cache_backend='memory'` for single-instance hosts without Redis (DD-057). Multi-instance hosts should keep `cache_backend='redis'` (default when `redis_url` is set).
 
 ### User Audit and Membership History
 
@@ -174,9 +199,9 @@ These are intentional implementation details that are slightly more specific tha
 
 ### Admin UI Repository Boundary
 
-- The Nuxt admin UI no longer lives inside this Python repository.
-- The active frontend codebase now lives in the sibling repository `../OutlabsAuthUI` (local workspace `/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
-- Reason: backend and frontend lifecycle now move independently, and keeping the UI in its own repository removes stale in-repo build/release assumptions from this package.
+- The admin console is the sister repository [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React), not an in-tree frontend.
+- Local clone is typically `../OutlabsAuthUI`. Contract and wiring: `docs/AUTH_UI.md`.
+- Reason: backend and frontend lifecycle move independently; this package stays library-first.
 
 ### API Key Host Boundary
 
@@ -202,6 +227,9 @@ These are intentional implementation details that are slightly more specific tha
   state rather than a dedicated persisted status.
 - The backend host/admin API key surface is implemented, but the external admin
   UI in `../OutlabsAuthUI` has not adopted it yet.
+- Session inventory, social unlink, and audit-search HTTP surfaces are implemented
+  and covered by focused integration tests; OutlabsAuth UI adoption of those
+  screens may still lag the backend.
 - The new integration-principal and system-key backend surface is implemented,
   but host-product UX and operational guidance for when to prefer
   `system_integration` keys versus JWT service tokens still needs more product
@@ -232,6 +260,13 @@ These are intentional implementation details that are slightly more specific tha
     personal and system-integration keys
   - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
     consuming the new admin and host integration surfaces
+
+- Focused coverage for the 2026-07 auth surface slice:
+  - `tests/integration/test_user_sessions_api.py`
+  - `tests/integration/test_social_accounts_api.py`
+  - `tests/integration/test_audit_search_api.py`
+  - `tests/integration/test_access_code_auth.py` (email + verified-phone channels)
+  - OAuth SPA/callback and associate unit/integration suites under `tests/unit/test_oauth_*` and `tests/integration/test_oauth_router_callback_paths.py`
 
 - The current full-suite regression baseline on 2026-04-12 passes with `712`
   tests green and no warning output.

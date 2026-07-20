@@ -31,6 +31,7 @@ def build_user_response(user: Any, root_entity_name: Optional[str] = None) -> Us
         last_name=user.last_name,
         status=serialize_status(user.status),
         email_verified=user.email_verified,
+        phone_verified=bool(getattr(user, "phone_verified", False)),
         is_superuser=user.is_superuser,
         avatar_url=getattr(user, "avatar_url", None),
         phone=getattr(user, "phone", None),

@@ -1,9 +1,8 @@
 # OutlabsAuth Error Handling Guide
 
-**Version**: 1.0
-**Date**: 2025-01-14
 **Audience**: Developers integrating OutlabsAuth
 **Status**: Production Reference
+**Source of truth**: `outlabs_auth/core/exceptions.py`, `outlabs_auth/fastapi.py`, `outlabs_auth/oauth/exceptions.py`
 
 ---
 
@@ -12,13 +11,11 @@
 1. [Error Handling Philosophy](#error-handling-philosophy)
 2. [Exception Hierarchy](#exception-hierarchy)
 3. [Error Codes](#error-codes)
-4. [Common Exceptions](#common-exceptions)
+4. [OAuth Exceptions](#oauth-exceptions)
 5. [Error Handling Patterns](#error-handling-patterns)
 6. [API Error Responses](#api-error-responses)
 7. [Logging Errors](#logging-errors)
 8. [User-Friendly Messages](#user-friendly-messages)
-9. [Debugging Errors](#debugging-errors)
-10. [Production Error Handling](#production-error-handling)
 
 ---
 
@@ -34,12 +31,13 @@
 
 ### Error Categories
 
-- **Authentication Errors**: Login, token validation, sessions
-- **Authorization Errors**: Permission checks, access control
-- **Validation Errors**: Input validation, data constraints
-- **Not Found Errors**: Resource not found
-- **Conflict Errors**: Duplicate resources, constraint violations
-- **System Errors**: Database errors, service unavailable
+- **Authentication Errors** (401): Login, token validation, API keys, account state
+- **Authorization Errors** (403): Permission checks, access control
+- **Entity / Membership Errors** (400/404/409): EnterpriseRBAC hierarchy and memberships
+- **User Errors** (400/404/409): User lifecycle
+- **Validation Errors** (422): Input validation
+- **Rate Limiting** (429)
+- **Configuration / System Errors** (500/503)
 
 ---
 
@@ -47,506 +45,313 @@
 
 ### Base Exception
 
+Every library exception derives from `OutlabsAuthException`. The class carries
+`error_code` and `status_code` as **class attributes**, so subclasses declare
+them rather than passing them to `__init__`:
+
 ```python
-# outlabs_auth/exceptions.py
+# outlabs_auth/core/exceptions.py
 
 class OutlabsAuthException(Exception):
-    """Base exception for all OutlabsAuth errors"""
+    error_code: str = "AUTH_ERROR"
+    status_code: int = 500
 
     def __init__(
         self,
         message: str,
-        error_code: str,
-        status_code: int = 500,
-        details: Optional[dict] = None
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
     ):
         self.message = message
-        self.error_code = error_code
-        self.status_code = status_code
+        if error_code:
+            self.error_code = error_code
         self.details = details or {}
         super().__init__(self.message)
 
-    def to_dict(self) -> dict:
-        """Convert exception to dictionary for API response"""
+    def to_dict(self) -> Dict[str, Any]:
         return {
-            "error": {
-                "message": self.message,
-                "code": self.error_code,
-                "details": self.details
-            }
+            "error": self.error_code,
+            "message": self.message,
+            "details": self.details
         }
 ```
 
-### Exception Hierarchy
+**Note the constructor signature**: `message` is the only required argument.
+`error_code` is optional and only needed to override the class default.
+`status_code` is not a constructor argument at all.
+
+### Hierarchy
 
 ```
-OutlabsAuthException
-├── AuthenticationException (401)
-│   ├── InvalidCredentialsException
-│   ├── TokenExpiredException
-│   ├── InvalidTokenException
-│   ├── UserInactiveException
-│   └── AccountLockedException
+OutlabsAuthException                       (AUTH_ERROR, 500)
+├── AuthenticationError                    (AUTHENTICATION_ERROR, 401)
+│   ├── InvalidCredentialsError            (INVALID_CREDENTIALS)
+│   ├── TokenExpiredError                  (TOKEN_EXPIRED)
+│   ├── TokenInvalidError                  (TOKEN_INVALID)
+│   ├── RefreshTokenInvalidError           (REFRESH_TOKEN_INVALID)
+│   ├── APIKeyInvalidError                 (API_KEY_INVALID)
+│   ├── APIKeyExpiredError                 (API_KEY_EXPIRED)
+│   ├── APIKeyLockedError                  (API_KEY_LOCKED)
+│   ├── AccountLockedError                 (ACCOUNT_LOCKED)
+│   └── AccountInactiveError               (ACCOUNT_INACTIVE)
 │
-├── AuthorizationException (403)
-│   ├── PermissionDeniedException
-│   ├── InsufficientPermissionsException
-│   └── EntityAccessDeniedException
+├── AuthenticationInfrastructureError      (AUTH_INFRASTRUCTURE_UNAVAILABLE, 503)
 │
-├── ValidationException (400)
-│   ├── InvalidEmailException
-│   ├── WeakPasswordException
-│   ├── InvalidEntityTypeException
-│   └── InvalidPermissionFormatException
+├── AuthorizationError                     (AUTHORIZATION_ERROR, 403)
+│   ├── PermissionDeniedError              (PERMISSION_DENIED)
+│   ├── InsufficientPermissionsError       (INSUFFICIENT_PERMISSIONS)
+│   ├── RoleNotFoundError                  (ROLE_NOT_FOUND, 404)
+│   └── PermissionNotFoundError            (PERMISSION_NOT_FOUND, 404)
 │
-├── NotFoundException (404)
-│   ├── UserNotFoundException
-│   ├── RoleNotFoundException
-│   ├── EntityNotFoundException
-│   └── PermissionNotFoundException
+├── EntityError                            (ENTITY_ERROR, 400)          [EnterpriseRBAC]
+│   ├── EntityNotFoundError                (ENTITY_NOT_FOUND, 404)
+│   ├── CircularHierarchyError             (CIRCULAR_HIERARCHY)
+│   ├── InvalidParentEntityError           (INVALID_PARENT)
+│   ├── MaxDepthExceededError              (MAX_DEPTH_EXCEEDED)
+│   ├── EntityTypeNotAllowedError          (ENTITY_TYPE_NOT_ALLOWED)
+│   └── InvalidEntityClassError            (INVALID_ENTITY_CLASS)
 │
-├── ConflictException (409)
-│   ├── UserAlreadyExistsException
-│   ├── RoleAlreadyExistsException
-│   ├── EntityAlreadyExistsException
-│   └── DuplicateSlugException
+├── MembershipError                        (MEMBERSHIP_ERROR, 400)      [EnterpriseRBAC]
+│   ├── MembershipNotFoundError            (MEMBERSHIP_NOT_FOUND, 404)
+│   ├── MembershipAlreadyExistsError       (MEMBERSHIP_ALREADY_EXISTS, 409)
+│   └── MaxMembersExceededError            (MAX_MEMBERS_EXCEEDED)
 │
-└── SystemException (500)
-    ├── DatabaseException
-    ├── CacheException
-    └── ServiceUnavailableException
+├── UserError                              (USER_ERROR, 400)
+│   ├── UserNotFoundError                  (USER_NOT_FOUND, 404)
+│   ├── UserAlreadyExistsError             (USER_ALREADY_EXISTS, 409)
+│   ├── InvalidPasswordError               (INVALID_PASSWORD)
+│   └── EmailNotVerifiedError              (EMAIL_NOT_VERIFIED)
+│
+├── ValidationError                        (VALIDATION_ERROR, 422)
+│   ├── InvalidInputError                  (INVALID_INPUT)
+│   └── MissingRequiredFieldError          (MISSING_REQUIRED_FIELD)
+│
+├── RateLimitError                         (RATE_LIMIT_EXCEEDED, 429)
+│
+├── ConfigurationError                     (CONFIGURATION_ERROR, 500)
+├── DatabaseError                          (DATABASE_ERROR, 500)
+└── RedisError                             (REDIS_ERROR, 500)
+```
+
+**Note**: `RoleNotFoundError` and `PermissionNotFoundError` subclass
+`AuthorizationError` (whose default status is 403) but override `status_code`
+to 404. `AuthenticationInfrastructureError` subclasses `OutlabsAuthException`
+directly, not `AuthenticationError` — it signals that a required control
+(for example Redis-backed rate limiting) is unavailable, which is a 503, not a
+credential failure.
+
+### Imports
+
+A commonly used subset is re-exported from the package root:
+
+```python
+from outlabs_auth import (
+    OutlabsAuthException,
+    AuthenticationError,
+    AuthorizationError,
+    ConfigurationError,
+    InvalidCredentialsError,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
+    UserNotFoundError,
+)
+```
+
+Everything else is imported from the module directly:
+
+```python
+from outlabs_auth.core.exceptions import (
+    EntityNotFoundError,
+    InvalidInputError,
+    MembershipAlreadyExistsError,
+    RateLimitError,
+)
 ```
 
 ---
 
 ## Error Codes
 
-### Error Code Format
+Error codes are flat `SCREAMING_SNAKE_CASE` strings — there is no category
+prefix. The `error_code` of each exception is listed in the hierarchy above and
+is the authoritative value emitted in the `error` field of an API response.
 
-```
-<CATEGORY>_<SPECIFIC_ERROR>
-
-Examples:
-- AUTH_INVALID_CREDENTIALS
-- AUTH_TOKEN_EXPIRED
-- AUTHZ_PERMISSION_DENIED
-- VAL_WEAK_PASSWORD
-- NOT_FOUND_USER
-- CONFLICT_USER_EXISTS
-```
-
-### Complete Error Code List
-
-#### Authentication (AUTH_*)
-
-| Code | HTTP | Description |
+| Code | HTTP | Raised when |
 |------|------|-------------|
-| `AUTH_INVALID_CREDENTIALS` | 401 | Invalid email or password |
-| `AUTH_TOKEN_EXPIRED` | 401 | Access token has expired |
-| `AUTH_TOKEN_INVALID` | 401 | Token is malformed or invalid |
-| `AUTH_USER_INACTIVE` | 401 | User account is deactivated |
-| `AUTH_ACCOUNT_LOCKED` | 401 | Account locked due to failed attempts |
-| `AUTH_REFRESH_TOKEN_INVALID` | 401 | Refresh token is invalid or revoked |
+| `INVALID_CREDENTIALS` | 401 | Invalid email or password |
+| `TOKEN_EXPIRED` | 401 | JWT has expired |
+| `TOKEN_INVALID` | 401 | JWT is malformed or fails verification |
+| `REFRESH_TOKEN_INVALID` | 401 | Refresh token invalid or revoked |
+| `API_KEY_INVALID` | 401 | API key invalid or revoked |
+| `API_KEY_EXPIRED` | 401 | API key past its expiry |
+| `API_KEY_LOCKED` | 401 | API key temporarily locked after repeated failures |
+| `ACCOUNT_LOCKED` | 401 | Account locked after failed login attempts |
+| `ACCOUNT_INACTIVE` | 401 | Account inactive or suspended |
+| `AUTH_INFRASTRUCTURE_UNAVAILABLE` | 503 | A required auth control (e.g. Redis rate limiting) is down |
+| `PERMISSION_DENIED` | 403 | User lacks the required permission |
+| `INSUFFICIENT_PERMISSIONS` | 403 | User lacks permissions for the operation |
+| `ROLE_NOT_FOUND` | 404 | Role does not exist |
+| `PERMISSION_NOT_FOUND` | 404 | Permission does not exist |
+| `ENTITY_NOT_FOUND` | 404 | Entity does not exist |
+| `CIRCULAR_HIERARCHY` | 400 | Move would create a cycle in the entity tree |
+| `INVALID_PARENT` | 400 | Parent entity invalid or incompatible |
+| `MAX_DEPTH_EXCEEDED` | 400 | Entity tree deeper than `max_entity_depth` |
+| `ENTITY_TYPE_NOT_ALLOWED` | 400 | Entity type not permitted in this context |
+| `INVALID_ENTITY_CLASS` | 400 | Entity class is not STRUCTURAL or ACCESS_GROUP |
+| `MEMBERSHIP_NOT_FOUND` | 404 | Membership does not exist |
+| `MEMBERSHIP_ALREADY_EXISTS` | 409 | User is already a member of the entity |
+| `MAX_MEMBERS_EXCEEDED` | 400 | Entity is at its member cap |
+| `USER_NOT_FOUND` | 404 | User does not exist |
+| `USER_ALREADY_EXISTS` | 409 | Email already registered |
+| `INVALID_PASSWORD` | 400 | Password fails policy requirements |
+| `EMAIL_NOT_VERIFIED` | 400 | Email address not verified |
+| `INVALID_INPUT` | 422 | Input data invalid |
+| `MISSING_REQUIRED_FIELD` | 422 | Required field absent |
+| `RATE_LIMIT_EXCEEDED` | 429 | Rate limit hit |
+| `CONFIGURATION_ERROR` | 500 | Invalid library configuration |
+| `DATABASE_ERROR` | 500 | PostgreSQL operation failed |
+| `REDIS_ERROR` | 500 | Redis operation failed |
 
-#### Authorization (AUTHZ_*)
+Codes produced by the framework-level handlers in `outlabs_auth/fastapi.py`
+rather than by an exception class:
 
-| Code | HTTP | Description |
+| Code | HTTP | Raised when |
 |------|------|-------------|
-| `AUTHZ_PERMISSION_DENIED` | 403 | User lacks required permission |
-| `AUTHZ_INSUFFICIENT_PERMISSIONS` | 403 | Insufficient permissions for action |
-| `AUTHZ_ENTITY_ACCESS_DENIED` | 403 | Access denied to entity |
-| `AUTHZ_ROLE_REQUIRED` | 403 | Specific role required |
-
-#### Validation (VAL_*)
-
-| Code | HTTP | Description |
-|------|------|-------------|
-| `VAL_INVALID_EMAIL` | 400 | Email format is invalid |
-| `VAL_WEAK_PASSWORD` | 400 | Password doesn't meet requirements |
-| `VAL_INVALID_ENTITY_TYPE` | 400 | Entity type is invalid |
-| `VAL_INVALID_PERMISSION` | 400 | Permission format is invalid |
-| `VAL_MISSING_REQUIRED_FIELD` | 400 | Required field is missing |
-| `VAL_INVALID_FIELD_VALUE` | 400 | Field value is invalid |
-
-#### Not Found (NOT_FOUND_*)
-
-| Code | HTTP | Description |
-|------|------|-------------|
-| `NOT_FOUND_USER` | 404 | User not found |
-| `NOT_FOUND_ROLE` | 404 | Role not found |
-| `NOT_FOUND_ENTITY` | 404 | Entity not found |
-| `NOT_FOUND_PERMISSION` | 404 | Permission not found |
-
-#### Conflict (CONFLICT_*)
-
-| Code | HTTP | Description |
-|------|------|-------------|
-| `CONFLICT_USER_EXISTS` | 409 | User with email already exists |
-| `CONFLICT_ROLE_EXISTS` | 409 | Role with name already exists |
-| `CONFLICT_ENTITY_EXISTS` | 409 | Entity with slug already exists |
-| `CONFLICT_DUPLICATE_SLUG` | 409 | Slug must be unique |
-
-#### System (SYS_*)
-
-| Code | HTTP | Description |
-|------|------|-------------|
-| `SYS_DATABASE_ERROR` | 500 | Database operation failed |
-| `SYS_CACHE_ERROR` | 500 | Cache operation failed |
-| `SYS_SERVICE_UNAVAILABLE` | 503 | Service temporarily unavailable |
+| `VALIDATION_ERROR` | 422 | FastAPI `RequestValidationError` |
+| `INTEGRITY_ERROR` | 409 | SQLAlchemy `IntegrityError` (constraint violation) |
+| `INVALID_INPUT` | 422 | Bare `ValueError` escaped a handler |
+| `HTTP_ERROR` | *varies* | Starlette/FastAPI `HTTPException` |
+| `INTERNAL_SERVER_ERROR` | 500 | Any unhandled exception |
 
 ---
 
-## Common Exceptions
+## OAuth Exceptions
 
-### Authentication Exceptions
+OAuth errors live in `outlabs_auth/oauth/exceptions.py` and form a **separate
+hierarchy rooted at `OAuthError(Exception)`**. They do *not* inherit from
+`OutlabsAuthException`, carry no `error_code` or `status_code`, and are **not**
+picked up by the `OutlabsAuthException` handler — catch them explicitly or let
+the catch-all handler turn them into a 500.
 
-```python
-# outlabs_auth/exceptions.py
-
-class AuthenticationException(OutlabsAuthException):
-    """Base class for authentication errors"""
-    def __init__(self, message: str, error_code: str, details: Optional[dict] = None):
-        super().__init__(message, error_code, status_code=401, details=details)
-
-
-class InvalidCredentialsException(AuthenticationException):
-    """Raised when login credentials are invalid"""
-    def __init__(self, details: Optional[dict] = None):
-        super().__init__(
-            message="Invalid email or password",
-            error_code="AUTH_INVALID_CREDENTIALS",
-            details=details
-        )
-
-
-class TokenExpiredException(AuthenticationException):
-    """Raised when access token has expired"""
-    def __init__(self, details: Optional[dict] = None):
-        super().__init__(
-            message="Access token has expired",
-            error_code="AUTH_TOKEN_EXPIRED",
-            details=details
-        )
-
-
-class InvalidTokenException(AuthenticationException):
-    """Raised when token is malformed or invalid"""
-    def __init__(self, details: Optional[dict] = None):
-        super().__init__(
-            message="Invalid token",
-            error_code="AUTH_TOKEN_INVALID",
-            details=details
-        )
-
-
-class UserInactiveException(AuthenticationException):
-    """Raised when user account is deactivated"""
-    def __init__(self, user_id: str, details: Optional[dict] = None):
-        super().__init__(
-            message="User account is inactive",
-            error_code="AUTH_USER_INACTIVE",
-            details={"user_id": user_id, **(details or {})}
-        )
+```
+OAuthError
+├── InvalidStateError            state parameter invalid, expired, or missing
+├── InvalidCodeError             authorization code invalid or expired
+├── ProviderError                provider returned an error (carries .provider, .error,
+│                                .error_description, .error_uri)
+├── AccountLinkError             cannot link a provider account to a user
+│   ├── AccountAlreadyLinkedError    provider account linked to another user
+│   ├── ProviderAlreadyLinkedError   user already has this provider linked
+│   └── CannotUnlinkLastMethodError  would leave the user with no way to log in
+├── ProviderNotConfiguredError   provider not configured
+├── EmailNotVerifiedError        provider did not verify the email (blocks auto-link)
+├── TokenRefreshError            failed to refresh a provider token
+├── InvalidNonceError            OIDC nonce validation failed (possible replay)
+└── PKCEValidationError          code verifier does not match the challenge
 ```
 
-### Authorization Exceptions
-
-```python
-class AuthorizationException(OutlabsAuthException):
-    """Base class for authorization errors"""
-    def __init__(self, message: str, error_code: str, details: Optional[dict] = None):
-        super().__init__(message, error_code, status_code=403, details=details)
-
-
-class PermissionDeniedException(AuthorizationException):
-    """Raised when user lacks required permission"""
-    def __init__(
-        self,
-        permission: str,
-        user_id: str,
-        entity_id: Optional[str] = None,
-        details: Optional[dict] = None
-    ):
-        super().__init__(
-            message=f"Permission denied: {permission}",
-            error_code="AUTHZ_PERMISSION_DENIED",
-            details={
-                "permission": permission,
-                "user_id": user_id,
-                "entity_id": entity_id,
-                **(details or {})
-            }
-        )
-
-
-class EntityAccessDeniedException(AuthorizationException):
-    """Raised when access to entity is denied"""
-    def __init__(
-        self,
-        entity_id: str,
-        user_id: str,
-        details: Optional[dict] = None
-    ):
-        super().__init__(
-            message=f"Access denied to entity",
-            error_code="AUTHZ_ENTITY_ACCESS_DENIED",
-            details={
-                "entity_id": entity_id,
-                "user_id": user_id,
-                **(details or {})
-            }
-        )
-```
-
-### Validation Exceptions
-
-```python
-class ValidationException(OutlabsAuthException):
-    """Base class for validation errors"""
-    def __init__(self, message: str, error_code: str, details: Optional[dict] = None):
-        super().__init__(message, error_code, status_code=400, details=details)
-
-
-class WeakPasswordException(ValidationException):
-    """Raised when password doesn't meet requirements"""
-    def __init__(self, requirements: list[str], details: Optional[dict] = None):
-        super().__init__(
-            message="Password does not meet security requirements",
-            error_code="VAL_WEAK_PASSWORD",
-            details={
-                "requirements": requirements,
-                **(details or {})
-            }
-        )
-
-
-class InvalidEmailException(ValidationException):
-    """Raised when email format is invalid"""
-    def __init__(self, email: str, details: Optional[dict] = None):
-        super().__init__(
-            message=f"Invalid email format: {email}",
-            error_code="VAL_INVALID_EMAIL",
-            details={"email": email, **(details or {})}
-        )
-```
-
-### Not Found Exceptions
-
-```python
-class NotFoundException(OutlabsAuthException):
-    """Base class for not found errors"""
-    def __init__(self, message: str, error_code: str, details: Optional[dict] = None):
-        super().__init__(message, error_code, status_code=404, details=details)
-
-
-class UserNotFoundException(NotFoundException):
-    """Raised when user is not found"""
-    def __init__(self, user_id: Optional[str] = None, email: Optional[str] = None):
-        identifier = user_id or email or "unknown"
-        super().__init__(
-            message=f"User not found: {identifier}",
-            error_code="NOT_FOUND_USER",
-            details={"user_id": user_id, "email": email}
-        )
-
-
-class RoleNotFoundException(NotFoundException):
-    """Raised when role is not found"""
-    def __init__(self, role_id: str):
-        super().__init__(
-            message=f"Role not found: {role_id}",
-            error_code="NOT_FOUND_ROLE",
-            details={"role_id": role_id}
-        )
-```
-
-### Conflict Exceptions
-
-```python
-class ConflictException(OutlabsAuthException):
-    """Base class for conflict errors"""
-    def __init__(self, message: str, error_code: str, details: Optional[dict] = None):
-        super().__init__(message, error_code, status_code=409, details=details)
-
-
-class UserAlreadyExistsException(ConflictException):
-    """Raised when user with email already exists"""
-    def __init__(self, email: str):
-        super().__init__(
-            message=f"User already exists with email: {email}",
-            error_code="CONFLICT_USER_EXISTS",
-            details={"email": email}
-        )
-
-
-class RoleAlreadyExistsException(ConflictException):
-    """Raised when role with name already exists"""
-    def __init__(self, name: str):
-        super().__init__(
-            message=f"Role already exists with name: {name}",
-            error_code="CONFLICT_ROLE_EXISTS",
-            details={"name": name}
-        )
-```
+`outlabs_auth.oauth.exceptions.EmailNotVerifiedError` and
+`outlabs_auth.core.exceptions.EmailNotVerifiedError` are **different classes**
+with the same name. Import them under an alias if you need both in one module.
 
 ---
 
 ## Error Handling Patterns
 
-### Pattern 1: Try-Except with Specific Exceptions
+### Pattern 1: Register the shipped handlers
+
+The library ships its handlers — you do not need to write them:
 
 ```python
-from outlabs_auth.exceptions import (
-    UserNotFoundException,
-    PermissionDeniedException
-)
-
-async def update_user_role(user_id: str, role_id: str):
-    """Update user role with proper error handling"""
-    try:
-        # Validate user exists
-        user = await auth.user_service.get_user(user_id)
-        if not user:
-            raise UserNotFoundException(user_id=user_id)
-
-        # Check permission
-        has_perm, _ = await auth.permission_service.check_permission(
-            user_id=current_user.id,
-            permission="role:assign"
-        )
-        if not has_perm:
-            raise PermissionDeniedException(
-                permission="role:assign",
-                user_id=current_user.id
-            )
-
-        # Update role
-        await auth.role_service.assign_role(user_id, role_id)
-
-        return {"status": "success", "user_id": user_id, "role_id": role_id}
-
-    except UserNotFoundException as e:
-        # Log error
-        logger.warning(f"User not found: {user_id}")
-        # Re-raise for FastAPI to handle
-        raise
-
-    except PermissionDeniedException as e:
-        # Log security event
-        logger.warning(f"Permission denied: {e.details}")
-        raise
-
-    except Exception as e:
-        # Catch unexpected errors
-        logger.error(f"Unexpected error updating user role: {str(e)}")
-        raise SystemException(
-            message="An unexpected error occurred",
-            error_code="SYS_INTERNAL_ERROR"
-        )
-```
-
-### Pattern 2: FastAPI Exception Handler
-
-```python
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from outlabs_auth.exceptions import OutlabsAuthException
+from fastapi import FastAPI
+from outlabs_auth import register_exception_handlers
 
 app = FastAPI()
 
-@app.exception_handler(OutlabsAuthException)
-async def outlabs_auth_exception_handler(
-    request: Request,
-    exc: OutlabsAuthException
-):
-    """Handle all OutlabsAuth exceptions"""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=exc.to_dict()
+# mode="global": OutlabsAuthException + validation/integrity/HTTP/catch-all handlers
+register_exception_handlers(app, debug=False, observability=auth.observability)
+
+# mode="auth_only": only the OutlabsAuthException handler, leaving your app's
+# own handlers for everything else
+register_exception_handlers(app, mode="auth_only")
+```
+
+`register_outlabs_exception_handler(app)` is the equivalent of `mode="auth_only"`.
+
+The `debug` flag controls whether raw exception text is included in the
+`details` of integrity/value/unexpected errors. **Leave it `False` in
+production** — it is what keeps internal detail out of responses.
+
+Passing `observability=` routes unhandled exceptions through the library's
+structured logger as an `unhandled_exception` event.
+
+### Pattern 2: Catch specific exceptions
+
+```python
+from outlabs_auth import PermissionDeniedError, UserNotFoundError
+
+async def update_user_role(session, actor_id, user_id: str, role_id: str):
+    user = await auth.user_service.get_user(session, user_id)
+    if not user:
+        raise UserNotFoundError(f"User not found: {user_id}", details={"user_id": user_id})
+
+    has_perm, _ = await auth.permission_service.check_permission(
+        session, user_id=actor_id, permission="role:assign"
     )
-
-# Example endpoint
-@app.post("/users")
-async def create_user(user_data: CreateUserRequest):
-    try:
-        user = await auth.user_service.create_user(
-            email=user_data.email,
-            password=user_data.password,
-            name=user_data.name
+    if not has_perm:
+        raise PermissionDeniedError(
+            "Permission denied: role:assign",
+            details={"permission": "role:assign", "user_id": str(actor_id)},
         )
-        return user
-    except UserAlreadyExistsException:
-        # FastAPI automatically uses exception handler
-        raise
+
+    await auth.role_service.assign_role(session, user_id, role_id)
+    await session.commit()
 ```
 
-### Pattern 3: Validation with Custom Errors
+Because every exception derives from `OutlabsAuthException`, a single `except`
+catches the whole family, and `to_dict()` gives you the response body:
 
 ```python
-from pydantic import BaseModel, validator
-from outlabs_auth.exceptions import WeakPasswordException
+from outlabs_auth import OutlabsAuthException
 
-class CreateUserRequest(BaseModel):
-    email: str
-    password: str
-    name: str
-
-    @validator('password')
-    def validate_password(cls, password: str):
-        """Validate password strength"""
-        errors = []
-
-        if len(password) < 12:
-            errors.append("Password must be at least 12 characters")
-
-        if not any(c.isupper() for c in password):
-            errors.append("Password must contain uppercase letter")
-
-        if not any(c.islower() for c in password):
-            errors.append("Password must contain lowercase letter")
-
-        if not any(c.isdigit() for c in password):
-            errors.append("Password must contain number")
-
-        if not any(c in "!@#$%^&*" for c in password):
-            errors.append("Password must contain special character")
-
-        if errors:
-            raise WeakPasswordException(requirements=errors)
-
-        return password
+try:
+    ...
+except OutlabsAuthException as exc:
+    logger.warning("auth_error", **exc.to_dict())
+    raise
 ```
 
-### Pattern 4: Context Manager for Error Handling
+### Pattern 3: Catch by category
+
+Category base classes let you handle a whole class of failure at once:
 
 ```python
-from contextlib import asynccontextmanager
-from outlabs_auth.exceptions import DatabaseException
+from outlabs_auth import AuthenticationError, AuthorizationError
 
-@asynccontextmanager
-async def database_transaction():
-    """Context manager for database transactions with error handling"""
-    session = await create_session()
-    try:
-        yield session
-        await session.commit()
-    except Exception as e:
-        await session.rollback()
-        logger.error(f"Database transaction failed: {str(e)}")
-        raise DatabaseException(
-            message="Database transaction failed",
-            error_code="SYS_DATABASE_ERROR",
-            details={"error": str(e)}
-        )
-    finally:
-        await session.close()
+try:
+    user = await auth.get_current_user(session, token)
+except AuthenticationError:
+    # any 401: bad credentials, expired/invalid token, locked or inactive account
+    ...
+except AuthorizationError:
+    # any 403 (plus role/permission 404s)
+    ...
+```
 
-# Usage
-async def create_user_with_role(email: str, password: str, role_id: str):
-    async with database_transaction() as session:
-        user = await create_user(session, email, password)
-        await assign_role(session, user.id, role_id)
-        return user
+### Pattern 4: Overriding the error code
+
+`error_code` is a class attribute with an optional constructor override — use it
+when you want a more specific code without declaring a new class:
+
+```python
+from outlabs_auth.core.exceptions import ValidationError
+
+raise ValidationError(
+    "Slug must be lowercase alphanumeric with dashes",
+    error_code="INVALID_SLUG",
+    details={"field": "slug"},
+)
 ```
 
 ---
@@ -555,83 +360,99 @@ async def create_user_with_role(email: str, password: str, role_id: str):
 
 ### Standard Error Response Format
 
+`to_dict()` produces a **flat** object — `error`, `message`, `details` at the
+top level:
+
 ```json
 {
-  "error": {
-    "message": "User not found",
-    "code": "NOT_FOUND_USER",
-    "details": {
-      "user_id": "12345"
-    }
+  "error": "USER_NOT_FOUND",
+  "message": "User not found: 12345",
+  "details": {
+    "user_id": "12345"
   }
 }
 ```
 
-### Error Response Examples
+The HTTP status comes from the exception's `status_code`, not from the body.
 
-**401 Unauthorized** (Invalid Credentials):
+### Examples
+
+**401 Unauthorized** (invalid credentials):
 ```json
 {
-  "error": {
-    "message": "Invalid email or password",
-    "code": "AUTH_INVALID_CREDENTIALS",
-    "details": {}
+  "error": "INVALID_CREDENTIALS",
+  "message": "Invalid email or password",
+  "details": {}
+}
+```
+
+**403 Forbidden** (permission denied):
+```json
+{
+  "error": "PERMISSION_DENIED",
+  "message": "Permission denied: user:delete",
+  "details": {
+    "permission": "user:delete",
+    "user_id": "abc123",
+    "entity_id": null
   }
 }
 ```
 
-**403 Forbidden** (Permission Denied):
+**409 Conflict** (duplicate user):
 ```json
 {
-  "error": {
-    "message": "Permission denied: user:delete",
-    "code": "AUTHZ_PERMISSION_DENIED",
-    "details": {
-      "permission": "user:delete",
-      "user_id": "abc123",
-      "entity_id": null
-    }
+  "error": "USER_ALREADY_EXISTS",
+  "message": "User already exists with email: user@example.com",
+  "details": {
+    "email": "user@example.com"
   }
 }
 ```
 
-**404 Not Found**:
+**422 Unprocessable Entity** (request validation, from the shipped handler):
 ```json
 {
-  "error": {
-    "message": "User not found: user@example.com",
-    "code": "NOT_FOUND_USER",
-    "details": {
-      "user_id": null,
-      "email": "user@example.com"
-    }
+  "error": "VALIDATION_ERROR",
+  "message": "Request validation failed",
+  "details": {
+    "errors": [
+      {"type": "string_too_short", "loc": ["body", "password"], "msg": "String should have at least 12 characters"}
+    ]
   }
 }
 ```
 
-**409 Conflict**:
+The validation handler strips the `input`, `ctx`, and `url` keys from each
+Pydantic error (SEC-8). Pydantic v2 echoes the rejected value back in `input`,
+which for a password or token field would put the submitted secret into the
+response body — and from there into client logs, proxies, and error trackers.
+Only the field location and reason are returned.
+
+**429 Too Many Requests**:
 ```json
 {
-  "error": {
-    "message": "User already exists with email: user@example.com",
-    "code": "CONFLICT_USER_EXISTS",
-    "details": {
-      "email": "user@example.com"
-    }
-  }
+  "error": "RATE_LIMIT_EXCEEDED",
+  "message": "Too many login attempts. Try again in 60 seconds.",
+  "details": {}
 }
 ```
 
-**500 Internal Server Error**:
+**500 Internal Server Error** (catch-all handler, `debug=False`):
 ```json
 {
-  "error": {
-    "message": "Database operation failed",
-    "code": "SYS_DATABASE_ERROR",
-    "details": {
-      "error": "Connection timeout"
-    }
-  }
+  "error": "INTERNAL_SERVER_ERROR",
+  "message": "Internal server error",
+  "details": {}
+}
+```
+
+**503 Service Unavailable** (auth control unavailable):
+```json
+{
+  "error": "AUTH_INFRASTRUCTURE_UNAVAILABLE",
+  "message": "Rate limiting backend unavailable",
+  "details": {}
 }
 ```
 
@@ -639,61 +460,34 @@ async def create_user_with_role(email: str, password: str, role_id: str):
 
 ## Logging Errors
 
-### Structured Error Logging
+Every `OutlabsAuthException` serializes to a log-ready dict via `to_dict()`, and
+`status_code` is a clean level selector:
 
 ```python
 import logging
-import json
-from datetime import datetime
+from outlabs_auth import OutlabsAuthException
 
-class ErrorLogger:
-    """Structured error logging"""
+logger = logging.getLogger("outlabs_auth")
 
-    def __init__(self, logger_name: str = "outlabs_auth"):
-        self.logger = logging.getLogger(logger_name)
+def log_exception(exc: OutlabsAuthException, **context) -> None:
+    payload = {**exc.to_dict(), "status_code": exc.status_code, **context}
 
-    def log_error(
-        self,
-        exception: OutlabsAuthException,
-        user_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-        **kwargs
-    ):
-        """Log error with structured data"""
-        log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "error_code": exception.error_code,
-            "error_message": exception.message,
-            "status_code": exception.status_code,
-            "details": exception.details,
-            "user_id": user_id,
-            "request_id": request_id,
-            **kwargs
-        }
-
-        # Log at appropriate level
-        if exception.status_code >= 500:
-            self.logger.error(json.dumps(log_data))
-        elif exception.status_code >= 400:
-            self.logger.warning(json.dumps(log_data))
-        else:
-            self.logger.info(json.dumps(log_data))
-
-# Usage
-error_logger = ErrorLogger()
-
-try:
-    user = await auth.user_service.get_user(user_id)
-except UserNotFoundException as e:
-    error_logger.log_error(
-        exception=e,
-        user_id=current_user.id,
-        request_id=request.headers.get("X-Request-ID"),
-        action="get_user",
-        endpoint="/users/{user_id}"
-    )
-    raise
+    if exc.status_code >= 500:
+        logger.error(payload)
+    elif exc.status_code >= 400:
+        logger.warning(payload)
+    else:
+        logger.info(payload)
 ```
+
+If you have the library's observability service wired up, prefer its structured
+logger — it attaches the correlation ID and hostname automatically:
+
+```python
+auth.observability.logger.warning("permission_denied", **exc.to_dict())
+```
+
+See `docs-library/97-Observability.md` and `docs-library/99-Log-Events-Reference.md`.
 
 ### Log Levels for Different Errors
 
@@ -712,271 +506,50 @@ except UserNotFoundException as e:
 
 ### Principle: Don't Leak Implementation Details
 
-**Bad**:
+**Bad** — driver-level detail reaches the client:
 ```json
 {
-  "error": "pymongo.errors.ServerSelectionTimeoutError: localhost:27017: [Errno 61] Connection refused"
+  "error": "asyncpg.exceptions.CannotConnectNowError: the database system is starting up"
 }
 ```
 
 **Good**:
 ```json
 {
-  "error": {
-    "message": "Service temporarily unavailable. Please try again later.",
-    "code": "SYS_SERVICE_UNAVAILABLE",
-    "details": {}
-  }
+  "error": "DATABASE_ERROR",
+  "message": "A system error occurred. Please try again later.",
+  "details": {}
 }
 ```
 
-### User-Friendly Error Messages
+This is exactly what `register_exception_handlers(app, debug=False)` does for
+you: raw exception text only ever lands in `details` when `debug=True`.
+
+### Mapping Codes to Copy
+
+The library's `message` is written for developers. For end-user copy, map the
+stable `error_code` in your own application:
 
 ```python
-# outlabs_auth/errors.py
-
 USER_FRIENDLY_MESSAGES = {
-    "AUTH_INVALID_CREDENTIALS": "Invalid email or password. Please try again.",
-    "AUTH_TOKEN_EXPIRED": "Your session has expired. Please log in again.",
-    "AUTH_ACCOUNT_LOCKED": "Your account has been temporarily locked. Please try again later.",
-    "AUTHZ_PERMISSION_DENIED": "You don't have permission to perform this action.",
-    "VAL_WEAK_PASSWORD": "Password must be at least 12 characters with uppercase, lowercase, number, and special character.",
-    "NOT_FOUND_USER": "User not found.",
-    "CONFLICT_USER_EXISTS": "An account with this email already exists.",
-    "SYS_DATABASE_ERROR": "A system error occurred. Please try again later.",
+    "INVALID_CREDENTIALS": "Invalid email or password. Please try again.",
+    "TOKEN_EXPIRED": "Your session has expired. Please log in again.",
+    "ACCOUNT_LOCKED": "Your account has been temporarily locked. Please try again later.",
+    "ACCOUNT_INACTIVE": "This account is not active. Contact your administrator.",
+    "PERMISSION_DENIED": "You don't have permission to perform this action.",
+    "INVALID_PASSWORD": "Password does not meet the security requirements.",
+    "USER_NOT_FOUND": "User not found.",
+    "USER_ALREADY_EXISTS": "An account with this email already exists.",
+    "RATE_LIMIT_EXCEEDED": "Too many attempts. Please wait and try again.",
+    "DATABASE_ERROR": "A system error occurred. Please try again later.",
+    "INTERNAL_SERVER_ERROR": "An unexpected error occurred. Please try again later.",
 }
 
 def get_user_friendly_message(error_code: str) -> str:
-    """Get user-friendly error message"""
     return USER_FRIENDLY_MESSAGES.get(
         error_code,
         "An unexpected error occurred. Please contact support."
     )
 ```
 
----
-
-## Debugging Errors
-
-### Error Context
-
-```python
-class OutlabsAuthException(Exception):
-    """Enhanced exception with debugging context"""
-
-    def __init__(
-        self,
-        message: str,
-        error_code: str,
-        status_code: int = 500,
-        details: Optional[dict] = None,
-        debug_info: Optional[dict] = None  # Only in development
-    ):
-        self.message = message
-        self.error_code = error_code
-        self.status_code = status_code
-        self.details = details or {}
-        self.debug_info = debug_info or {}
-        super().__init__(self.message)
-
-    def to_dict(self, include_debug: bool = False) -> dict:
-        """Convert to dict, optionally include debug info"""
-        result = {
-            "error": {
-                "message": self.message,
-                "code": self.error_code,
-                "details": self.details
-            }
-        }
-
-        if include_debug and self.debug_info:
-            result["error"]["debug"] = self.debug_info
-
-        return result
-
-# Usage
-try:
-    user = await UserModel.find_one(UserModel.id == user_id)
-    if not user:
-        raise UserNotFoundException(
-            user_id=user_id,
-            debug_info={
-                "query": {"id": user_id},
-                "collection": "users",
-                "stack_trace": traceback.format_exc()
-            }
-        )
-except UserNotFoundException as e:
-    # In development, include debug info
-    if settings.ENVIRONMENT == "development":
-        return JSONResponse(
-            status_code=e.status_code,
-            content=e.to_dict(include_debug=True)
-        )
-    else:
-        # In production, hide debug info
-        return JSONResponse(
-            status_code=e.status_code,
-            content=e.to_dict(include_debug=False)
-        )
-```
-
-### Permission Explainer for Debugging
-
-```python
-# Use the built-in permission explainer
-explanation = await auth.permissions.explain(
-    user_id=user.id,
-    permission="entity:update",
-    entity_id=entity.id
-)
-
-# Returns:
-{
-    "allowed": False,
-    "reason": "User has no role in this entity",
-    "resolution_path": [
-        "Checked user roles in entity 'engineering'",
-        "No roles found",
-        "Checked tree permissions from parents",
-        "No tree permissions found",
-        "Permission denied"
-    ],
-    "debug_info": {
-        "user_roles": [],
-        "entity_path": ["platform", "organization", "engineering"],
-        "checked_permissions": ["entity:update", "entity:update_tree", "entity:update_all"]
-    }
-}
-```
-
----
-
-## Production Error Handling
-
-### Error Monitoring
-
-**Sentry Integration**:
-```python
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-
-# Initialize Sentry
-sentry_sdk.init(
-    dsn="your-sentry-dsn",
-    integrations=[FastApiIntegration()],
-    traces_sample_rate=0.1,
-    environment="production"
-)
-
-# Errors are automatically captured
-try:
-    user = await auth.user_service.create_user(email, password)
-except UserAlreadyExistsException as e:
-    # Automatically sent to Sentry
-    sentry_sdk.capture_exception(e)
-    raise
-```
-
-### Error Alerts
-
-**Alert Rules** (Prometheus):
-```yaml
-groups:
-  - name: error_alerts
-    rules:
-      - alert: HighErrorRate
-        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
-        for: 5m
-        annotations:
-          summary: "High error rate (>5%)"
-
-      - alert: AuthenticationFailures
-        expr: rate(auth_login_failures_total[5m]) > 10
-        for: 2m
-        annotations:
-          summary: "High authentication failure rate"
-```
-
-### Error Recovery
-
-```python
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10)
-)
-async def fetch_user_with_retry(user_id: str):
-    """Retry fetching user on database errors"""
-    try:
-        return await UserModel.get(user_id)
-    except DatabaseException as e:
-        logger.warning(f"Database error, retrying: {str(e)}")
-        raise  # Retry
-```
-
----
-
-## Best Practices
-
-### Do's ✅
-
-- Use specific exception types
-- Include helpful error details
-- Log errors appropriately
-- Return consistent error format
-- Sanitize error messages in production
-- Use error codes for programmatic handling
-- Test error scenarios
-- Monitor error rates
-- Set up alerts for critical errors
-
-### Don'ts ❌
-
-- Don't expose sensitive data in errors
-- Don't return stack traces to users
-- Don't use generic `Exception`
-- Don't ignore exceptions
-- Don't leak implementation details
-- Don't log sensitive data (passwords, tokens)
-- Don't return different formats for errors
-
----
-
-## Summary
-
-### Quick Reference
-
-**Raising Exceptions**:
-```python
-from outlabs_auth.exceptions import UserNotFoundException
-
-# Raise specific exception
-raise UserNotFoundException(user_id=user_id)
-```
-
-**Handling Exceptions**:
-```python
-try:
-    user = await auth.user_service.get_user(user_id)
-except UserNotFoundException as e:
-    logger.warning(f"User not found: {user_id}")
-    raise
-```
-
-**FastAPI Handler**:
-```python
-@app.exception_handler(OutlabsAuthException)
-async def handler(request: Request, exc: OutlabsAuthException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=exc.to_dict()
-    )
-```
-
----
-
-**Last Updated**: 2025-01-14
-**Next Review**: Quarterly
-**Owner**: Engineering Team
+Match on `error_code`, never on `message` — the code is the stable contract.

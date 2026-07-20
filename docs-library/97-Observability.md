@@ -1,79 +1,51 @@
-# 97. Observability & Monitoring
+# Observability & Monitoring
 
-> **Quick Reference**: How to use OutlabsAuth observability without taking over the host FastAPI application's logging, metrics, middleware, or generic exception handling.
+> **Handbook** · Metrics and logs without taking over your FastAPI app.  
+> Part of the [OutlabsAuth Handbook](./README.md). Catalogs:
+> [Metrics](./98-Metrics-Reference.md), [Log events](./99-Log-Events-Reference.md).
 
-## Overview
+OutlabsAuth emits **auth-domain** logs and Prometheus metrics. Your host usually
+owns process logging, `/metrics`, and tracing.
 
-OutlabsAuth emits auth-domain logs and Prometheus metrics. The library is
-designed for two integration modes:
+| Mode | When | What the library adds by default |
+|------|------|----------------------------------|
+| **Embedded** (recommended) | Real host APIs | Auth exception handler + UnitOfWork / request-cache middleware |
+| **Standalone** | Demos / auth-first apps | Opt in to metrics route, correlation ID, resource context, broader exception handlers |
 
-- **Embedded mode**: default for real host APIs. The host app owns logging,
-  `/metrics`, tracing, request middleware, and broad exception handling.
-- **Standalone mode**: optional for demos and isolated auth-first apps. The
-  library can mount a metrics endpoint and add broader middleware/handlers when
-  you opt in explicitly.
+---
 
-## Embedded Mode
+## Embedded (default)
 
-Use this mode when OutlabsAuth is installed inside an existing API such as
-`outlabsAPI` or `DiverseAPI-postgres`.
+Rules of thumb:
 
-### Rules
-
-- Keep the host application's logger configuration.
-- Keep the host application's Prometheus registry and `/metrics` route.
-- Keep the host application's tracing and correlation middleware.
-- Keep the host application's generic `HTTPException`, validation, and catch-all
-  exception handlers.
-- Let OutlabsAuth emit only auth-domain logs, metrics, and auth-specific
-  exceptions.
-
-### Host-Owned Metrics Endpoint
-
-If the host app already exposes `/metrics`, keep using it. Pass the host
-registry into OutlabsAuth and the auth metrics will appear in the same scrape.
+- Keep the host logger, Prometheus registry, `/metrics`, and generic exception handlers
+- Pass the host registry into OutlabsAuth so auth metrics share one scrape
+- Let auth emit only auth-domain signals
 
 ```python
 import logging
-
-from fastapi import FastAPI
 from prometheus_client import REGISTRY
-
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.fastapi import register_outlabs_exception_handler
 from outlabs_auth.observability import ObservabilityConfig
 
-app = FastAPI()
-logger = logging.getLogger("host_api.auth")
-
 auth = EnterpriseRBAC(
-    database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/mydb",
-    secret_key="your-secret-key",
-    observability_config=ObservabilityConfig(
-        enable_metrics=True,
-        metrics_path="/internal/auth/metrics",
-    ),
-    observability_logger=logger,
+    database_url=...,
+    secret_key=...,
+    observability_config=ObservabilityConfig(enable_metrics=True),
+    observability_logger=logging.getLogger("host_api.auth"),
     observability_metrics_registry=REGISTRY,
 )
-
-register_outlabs_exception_handler(app)
+auth.instrument_fastapi(app)  # auth_only exceptions + UoW + request cache
 ```
 
-### FastAPI Helper Defaults
+`instrument_fastapi(app)` **always** installs:
 
-`auth.instrument_fastapi(app)` is safe for embedded apps by default. It only:
+- `OutlabsAuthException` handler (`exception_handler_mode="auth_only"`)
+- `UnitOfWorkMiddleware` (commit before response — read-your-writes)
+- `RequestCacheMiddleware` (request-scoped permission memos)
 
-- registers the `OutlabsAuthException` handler
-
-It does **not**:
-
-- mount a metrics route
-- add correlation-ID middleware
-- add resource-context middleware
-- register global `HTTPException`, validation, or generic `Exception` handlers
-
-This is equivalent to:
+It does **not** (unless you opt in): mount `/metrics`, correlation-ID middleware,
+resource-context middleware, or global HTTP/validation/Exception handlers.
 
 ```python
 auth.instrument_fastapi(
@@ -85,45 +57,22 @@ auth.instrument_fastapi(
 )
 ```
 
-### Shared vs External SQLAlchemy Engines
+Shared SQLAlchemy engine: auth will not instrument that engine for DB metrics
+unless `observability_instrument_external_engine=True`.
 
-If the host passes a shared SQLAlchemy engine into OutlabsAuth, auth will not
-instrument that engine for DB-query observability unless you opt in:
+---
 
-```python
-auth = EnterpriseRBAC(
-    engine=shared_engine,
-    secret_key="your-secret-key",
-    observability_config=ObservabilityConfig(enable_metrics=True),
-    observability_instrument_external_engine=True,
-)
-```
-
-Leave `observability_instrument_external_engine=False` when the host owns DB
-instrumentation for a shared engine.
-
-## Standalone Mode
-
-Use this for isolated demos or library-owned example apps where OutlabsAuth is
-expected to provide the main auth observability surfaces itself.
+## Standalone / demos
 
 ```python
-from fastapi import FastAPI
-
-from outlabs_auth import SimpleRBAC
-from outlabs_auth.observability import ObservabilityConfig
-
-app = FastAPI()
-
 auth = SimpleRBAC(
-    database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/mydb",
-    secret_key="your-secret-key",
+    database_url=...,
+    secret_key=...,
     observability_config=ObservabilityConfig(
         enable_metrics=True,
         metrics_path="/metrics",
     ),
 )
-
 auth.instrument_fastapi(
     app,
     exception_handler_mode="global",
@@ -133,105 +82,53 @@ auth.instrument_fastapi(
 )
 ```
 
-That standalone configuration will:
+Use `exception_handler_mode="global"` only when auth should own the full
+exception surface for that app.
 
-- add the auth metrics router
-- add correlation ID middleware
-- add resource context middleware
-- install the broader validation, `HTTPException`, and catch-all handlers
+---
 
-## Logging Behavior
+## Logging
 
-OutlabsAuth no longer configures global logging for the whole process.
+Auth does **not** reconfigure global logging.
 
-- If you pass `observability_logger=...`, auth emits through that logger.
-- If you do not pass one, auth uses a namespaced fallback logger defined by
-  `ObservabilityConfig.logger_name`.
-- Injecting a host logger does not reconfigure its handlers or level.
+- Pass `observability_logger=...` to emit through your logger, or
+- Fall back to `ObservabilityConfig.logger_name` (namespaced)
 
-```python
-import logging
+Presets: `ObservabilityPresets.development()` / `.staging()` / `.production()` /
+`.disabled()`.
 
-from outlabs_auth import SimpleRBAC
-from outlabs_auth.observability import ObservabilityConfig
+Event catalog: [99 — Log Events](./99-Log-Events-Reference.md).
 
-auth = SimpleRBAC(
-    database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/mydb",
-    secret_key="your-secret-key",
-    observability_config=ObservabilityConfig(
-        enable_metrics=True,
-        logger_name="outlabs_auth",
-    ),
-    observability_logger=logging.getLogger("host_api.auth"),
-)
-```
+---
 
-## Metrics Behavior
+## Metrics
 
-When metrics are enabled, OutlabsAuth records namespaced metrics such as:
+With `enable_metrics=True`, auth registers namespaced series such as
+`outlabs_auth_login_attempts_total`, `outlabs_auth_permission_checks_total`,
+entity ops, and DB query duration histograms.
 
-- `outlabs_auth_login_attempts_total`
-- `outlabs_auth_permission_checks_total`
-- `outlabs_auth_entity_operations_total`
-- `outlabs_auth_db_query_duration_seconds`
+Inject `observability_metrics_registry=REGISTRY` in embedded hosts so one
+`/metrics` scrape includes host + auth. Full list:
+[98 — Metrics](./98-Metrics-Reference.md).
 
-If you inject `observability_metrics_registry`, those metrics are registered in
-that collector registry. This is the recommended approach for embedded apps.
+Portable Grafana/Prometheus stack: [`observability/`](../observability/).
 
-If you do not inject a registry, the default Prometheus registry is used.
-
-## Host Integration Example
-
-For a host app that already exposes `/metrics`:
-
-```python
-from prometheus_client import REGISTRY
-
-auth = EnterpriseRBAC(
-    database_url=settings.AUTH_DATABASE_URL,
-    secret_key=settings.AUTH_SECRET_KEY,
-    observability_config=ObservabilityConfig(enable_metrics=True),
-    observability_metrics_registry=REGISTRY,
-)
-
-# Keep the host app's existing /metrics endpoint.
-```
-
-Prometheus still scrapes one endpoint, but the response now includes both host
-metrics and OutlabsAuth metrics from the same process.
+---
 
 ## Troubleshooting
 
-### No auth metrics on the host `/metrics` endpoint
+| Symptom | Check |
+|---------|--------|
+| No auth metrics on host `/metrics` | `enable_metrics=True`; same registry for scrape and `observability_metrics_registry` |
+| Middleware missing | Call `instrument_fastapi` at import time (before the app starts serving) |
+| Host handlers overwritten | Stay on `exception_handler_mode="auth_only"` or `register_outlabs_exception_handler(app)` |
 
-Check:
+---
 
-1. `ObservabilityConfig(enable_metrics=True)` is set.
-2. The host app is exposing `generate_latest()` from the same process.
-3. If you inject a custom registry, the host `/metrics` route is rendering that
-   same registry.
+## Related
 
-### `instrument_fastapi()` did not add middleware
-
-`instrument_fastapi()` must run before the FastAPI app starts serving. If you
-call it after startup, auth warns and skips middleware registration.
-
-### Host exception handlers changed unexpectedly
-
-Use embedded defaults or register only the auth-specific handler:
-
-```python
-from outlabs_auth.fastapi import register_outlabs_exception_handler
-
-register_outlabs_exception_handler(app)
-```
-
-Avoid `exception_handler_mode="global"` unless the auth library should own the
-full exception surface for that app.
-
-## Related Docs
-
-- [README.md](../README.md) - installation and integration overview
-- [98-Metrics-Reference.md](98-Metrics-Reference.md) - metrics catalog
-- [99-Log-Events-Reference.md](99-Log-Events-Reference.md) - event catalog
-- [grafana-dashboards/README.md](../grafana-dashboards/README.md) - Grafana setup
+- [Metrics Reference](./98-Metrics-Reference.md)
+- [Log Events Reference](./99-Log-Events-Reference.md)
+- [Configuration](./03-Configuration.md)
+- [ABAC](./26-ABAC.md) — `include_resource_context` when using request-state merge
+- [`observability/`](../observability/)

@@ -17,6 +17,7 @@ from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
     InvalidInputError,
+    MembershipNotFoundError,
     RoleNotFoundError,
     UserNotFoundError,
 )
@@ -1981,6 +1982,125 @@ class RoleService(BaseService[Role]):
             )
         await self._invalidate_user_permissions_cache(user_id)
         return True
+
+
+    async def update_user_role_membership(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        membership_id: UUID,
+        *,
+        valid_from: Optional[datetime] = None,
+        update_valid_from: bool = False,
+        valid_until: Optional[datetime] = None,
+        update_valid_until: bool = False,
+        status: Optional[MembershipStatus] = None,
+        update_status: bool = False,
+        updated_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+    ) -> UserRoleMembership:
+        """Update a direct user role membership validity window and/or status."""
+        membership_stmt = select(UserRoleMembership).where(
+            cast(Any, UserRoleMembership.id) == membership_id,
+            cast(Any, UserRoleMembership.user_id) == user_id,
+        )
+        membership_result = await session.execute(membership_stmt)
+        membership = cast(Optional[UserRoleMembership], membership_result.scalar_one_or_none())
+        if membership is None:
+            raise MembershipNotFoundError(
+                message="Role membership not found",
+                details={
+                    "user_id": str(user_id),
+                    "membership_id": str(membership_id),
+                },
+            )
+
+        user = await session.get(User, user_id)
+        if user is None:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        role = await session.get(Role, membership.role_id)
+        if role is None:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(membership.role_id)},
+            )
+
+        previous_snapshot = await self._build_user_role_audit_snapshot(
+            session,
+            membership,
+            role=role,
+        )
+
+        next_valid_from = valid_from if update_valid_from else membership.valid_from
+        next_valid_until = valid_until if update_valid_until else membership.valid_until
+        if next_valid_from and next_valid_until and next_valid_until < next_valid_from:
+            raise InvalidInputError(
+                message="valid_until must be after valid_from",
+                details={
+                    "user_id": str(user_id),
+                    "membership_id": str(membership_id),
+                },
+            )
+
+        if update_valid_from:
+            membership.valid_from = valid_from
+        if update_valid_until:
+            membership.valid_until = valid_until
+
+        event_at = datetime.now(timezone.utc)
+        if update_status and status is not None:
+            membership.status = status
+            if status == MembershipStatus.ACTIVE:
+                membership.revoked_at = None
+                membership.revoked_by_id = None
+                membership.revocation_reason = None
+            elif status in {MembershipStatus.REVOKED, MembershipStatus.SUSPENDED}:
+                membership.revoked_at = membership.revoked_at or event_at
+                membership.revoked_by_id = updated_by_id
+                if reason is not None:
+                    membership.revocation_reason = reason
+
+        await session.flush()
+        await session.refresh(membership)
+
+        current_snapshot = await self._build_user_role_audit_snapshot(
+            session,
+            membership,
+            role=role,
+        )
+        changed_fields = self._changed_snapshot_fields(
+            previous_snapshot,
+            current_snapshot,
+            [
+                "status",
+                "valid_from",
+                "valid_until",
+                "revoked_at",
+                "revoked_by_id",
+                "revocation_reason",
+            ],
+        )
+        if changed_fields:
+            await self._record_user_role_audit_event(
+                session,
+                user=user,
+                role=role,
+                membership=membership,
+                event_type="user.role_updated",
+                event_source="role_service.update_user_role_membership",
+                actor_user_id=updated_by_id,
+                reason=reason,
+                previous_snapshot=previous_snapshot,
+                occurred_at=event_at,
+                metadata={"changed_fields": changed_fields},
+            )
+            await self._invalidate_user_permissions_cache(user_id)
+
+        return membership
 
     async def revoke_all_roles_for_user(
         self,

@@ -1,8 +1,13 @@
 # EnterpriseRBAC Real Estate Example - Implementation Progress
 
+> **Historical note (2026-07):** This tracker is outdated. The example backend is the
+> current ACME/Summit seed in `reset_test_env.py`, and the admin UI is the sister
+> Vite/React repo [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) — not
+> an in-tree Nuxt app. Prefer [README.md](./README.md) and [QUICKSTART.md](./QUICKSTART.md).
+
 **Started**: 2025-01-23
 **Updated**: 2025-10-23
-**Status**: ✅ Backend Complete | 🚧 Integrating Frontend
+**Status**: Backend example maintained; UI is external (see note above)
 
 ---
 
@@ -100,7 +105,7 @@ See [REQUIREMENTS.md](./REQUIREMENTS.md) for complete use case documentation.
 - [x] Domain models (Lead, LeadNote)
 - [x] Main FastAPI application
 - [x] EnterpriseRBAC initialization
-- [x] Database setup (MongoDB + Beanie)
+- [x] Database setup (PostgreSQL + SQLModel)
 - [x] CORS middleware for frontend
 
 ### Phase 2: Standard Routers ✅
@@ -287,7 +292,7 @@ Developers can use these as-is or build custom routes using the services directl
 ### Dependencies
 
 - **Python**: 3.12+
-- **MongoDB**: Running locally or via Docker
+- **PostgreSQL**: Running locally or via Docker
 - **Redis**: Optional (for caching)
 - **Node.js/Bun**: For frontend
 - **Nuxt 4**: Admin UI framework
@@ -296,7 +301,7 @@ Developers can use these as-is or build custom routes using the services directl
 
 - 8002: Backend API
 - 3000: Frontend admin UI
-- 27017: MongoDB (default)
+- 5432: PostgreSQL (default)
 - 6379: Redis (optional)
 
 ---

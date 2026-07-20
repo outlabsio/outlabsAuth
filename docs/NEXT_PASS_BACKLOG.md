@@ -1,9 +1,59 @@
 # Next Pass Backlog
 
-**Updated**: 2026-04-22
+**Updated**: 2026-07-17
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
-This document is intentionally short. It is not a full project plan and it does not replace [IMPLEMENTATION_ROADMAP.md](/Users/macbookm3/Documents/projects/outlabsAuth/docs/IMPLEMENTATION_ROADMAP.md). It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
+This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
+
+## Shipped Since Last Backlog Update (2026-07)
+
+- ✅ **Implementer docs spine** — root README product front door; `docs-library/` Getting Started / routers / configuration / OAuth / sessions+audit / passwordless+messaging; OutlabsAuth UI documented as Vite/React sister console (`docs/AUTH_UI.md`).
+- ✅ **User handbook polish (docs-library)** — handbook home + reading paths; Introduction / Choosing a Preset / Deployment; Getting Started through ABAC / entities / memberships; trimmed topic guides; fixed stale data-model links; Nuxt docs IA sketch. Content source for a future Nuxt docs site.
+- ✅ **Session inventory + social unlink + audit search APIs** — users-router session/social surfaces; `get_audit_router`; focused integration tests; OAuth-only accounts cannot unlink their last social method.
+- ✅ **Verified-phone access codes + host messaging recipes** — `whatsapp_otp` / `sms_otp` / phone verify; per-channel rate limits; Postmark/Resend mail providers; enterprise Twilio WhatsApp Content + SMS Messages wiring; OAuth SPA redirects / invite-only login DX.
+- ✅ **DD-057 cache backend abstraction** — `cache_backend: redis | memory | none`; in-process `MemoryCacheBackend` for single-instance hosts without Redis.
+
+## Shipped Since Last Backlog Update (2026-06)
+
+Recorded so this backlog reflects reality after the June release train (this list, not the per-item sections below, is the current source of truth for what landed since 2026-04-22):
+
+- ✅ **Security hardening SEC-1..SEC-9** — audit `docs/SECURITY_AUDIT_2026-06-10.md`. Includes SEC-1 (refresh tokens can no longer authenticate) and SEC-9 (HS* signing secrets must be ≥32 chars, enforced at `AuthConfig` construction — breaking for short dev/test secrets).
+- ✅ **DD-056 tenant isolation** on user-management routes; roles router aligned to the 404 anti-enumeration contract. See `docs/DESIGN_DECISIONS.md` (DD-056) and `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`.
+- ✅ **4-phase Redis / API-key performance overhaul** — shipped in v0.1.0a23 (2026-06-16): batched version reads (single `MGET`), pipelined per-request usage/rate-limit writes, batched invalidation fan-out (`bump_versions_and_publish` / `publish_user_permissions_invalidation_batch`), and circuit-breaker reconnect on the Redis client. Index-hygiene migration `20260611_0018`.
+- ✅ **doctor / bootstrap CLI exercised in real deployments** — first rolled out across qdarteAPI, diverse-data-api, and qdarte-intake on the a23 release (was "landed but not yet exercised").
+
+The forward-looking items in "Runtime Performance Follow-Ups" below remain open and were intentionally left as-is.
+
+## Cache Backend Abstraction (Redis-Optional Caching) — SHIPPED
+
+**Status**: Shipped 2026-07-17 (DD-057). Use `cache_backend='memory'` for
+single-instance hosts; `redis` remains the multi-instance default when
+`redis_url` is set. See `outlabs_auth/services/cache_backend.py` and
+`docs-library/03-Configuration.md`.
+
+Historical proposal notes retained below for context; implementation follows
+the DD-057 decision in `DESIGN_DECISIONS.md`.
+
+<details>
+<summary>Original proposal text</summary>
+
+**Status**: Proposed, not started. Direction accepted 2026-06-26. Design recorded in **DD-057** (`docs/DESIGN_DECISIONS.md`).
+
+**Why**: caching is Redis-only today — `enable_caching` requires `redis_enabled` (`core/config.py`), `CacheService` is built on a `RedisClient` (`core/auth.py:552-554`), and every `CacheService` method no-ops when Redis is unavailable. So "no Redis" means "no cross-request cache": full Postgres resolution per authz check (12–21 queries / ~80–144 ms p95 on the API-key paths in the table below, vs 0 queries / ~4–8 ms warm). Single-instance consumers that do not want to run Redis (the personal/Outlabs stack on a home server; small OSS adopters) currently either run an unnecessary Redis or eat the uncached cost — worse on remote Postgres (Neon), where each uncached check crosses the network.
+
+**Enablers already in place**: the cache backend is a single injected dependency (`CacheService(redis_client, config)`); invalidation is version-stamped, not delete-based, so a single-instance in-process cache is correct without pub/sub; precedent exists (`api_key_local_snapshot_cache_ttl`, `utils/rate_limit.py`).
+
+**Scope (this pass)**:
+
+- Add `cache_backend: redis | memory | none` to `AuthConfig`; reconcile `_resolve_redis_defaults` so `memory` satisfies `enable_caching` without `redis_enabled`.
+- Implement `MemoryCacheBackend` (`outlabs_auth/services/cache_backend.py`) mirroring the `RedisClient` surface `CacheService` consumes (`make_key`, `mget_raw`, `set_raw`, `get`, `set`, `increment`/`get_counter`, `delete_pattern`, `bump_versions_and_publish`), over a bounded `TTLCache` + local epoch ints; `publish`/`subscribe` no-op; `is_available=True`.
+- Inject the backend by `cache_backend` in `core/auth.py`; leave `CacheService` logic unchanged.
+- Parametrize the cache + hot-path-budget tests over `redis`/`memory`; add memory-backend invalidation + TTL-staleness tests; run `benchmarks/redis_roundtrips_bench.py` and `scripts/benchmark_auth_paths.py` in `memory` mode and record the numbers next to the Redis baseline.
+- Document the three backends and the single-instance (instant invalidation) vs multi-instance (TTL-bounded staleness) contract in `README` + `CURRENT_IMPLEMENTATION_STATUS.md`.
+
+**Explicitly out of scope (future extension)**: multi-instance-without-Redis via epoch counters held in Postgres + `LISTEN/NOTIFY` fan-out, layered over the in-process payload cache. Only worth it to remove Redis from multi-instance deployments; single-instance `memory` does not need it.
+
+</details>
 
 ## Release-Ready Auth Perf Slice
 
@@ -489,6 +539,6 @@ original P1 scope proposed.
 
 These are known and accepted for now:
 
-- Bootstrap/doctor CLI has landed but not yet been exercised against real production deployments — operator feedback may surface additional edge cases.
+- Bootstrap/doctor CLI landed and was first exercised against real deployments in the v0.1.0a23 rollout (qdarteAPI, diverse-data-api, qdarte-intake; 2026-06-16) — continued operator feedback may still surface edge cases.
 - No broader admin-route perf benchmark suite beyond the current query-budget tests.
 - No guarantee yet that every downstream host app is using the optimized production defaults unless they follow the current docs.

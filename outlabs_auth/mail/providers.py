@@ -244,6 +244,149 @@ class MailgunMailProvider(TransactionalMailProvider):
             return MailDeliveryResult.failed(self.provider_name, str(exc))
 
 
+class PostmarkMailProvider(TransactionalMailProvider):
+    """Deliver transactional mail through the Postmark REST API."""
+
+    provider_name = "postmark"
+
+    def __init__(
+        self,
+        *,
+        server_token: str,
+        from_email: str,
+        from_name: Optional[str] = None,
+        base_url: str = "https://api.postmarkapp.com",
+        message_stream: str = "outbound",
+        timeout: int = 10,
+    ) -> None:
+        self.server_token = server_token
+        self.from_email = from_email
+        self.from_name = from_name
+        self.base_url = base_url.rstrip("/")
+        self.message_stream = message_stream
+        self.timeout = timeout
+
+    async def send(self, message: AuthMailMessage) -> MailDeliveryResult:
+        payload: dict[str, Any] = {
+            "From": f"{self.from_name} <{self.from_email}>" if self.from_name else self.from_email,
+            "To": (
+                f"{message.to_name} <{message.to_email}>"
+                if message.to_name
+                else message.to_email
+            ),
+            "Subject": message.subject,
+            "TextBody": message.text_body,
+            "MessageStream": self.message_stream,
+        }
+        if message.html_body:
+            payload["HtmlBody"] = message.html_body
+        if message.reply_to:
+            payload["ReplyTo"] = message.reply_to
+        if message.tags:
+            payload["Tag"] = message.tags[0]
+        if message.metadata:
+            payload["Metadata"] = {
+                key: value if isinstance(value, str) else json.dumps(value)
+                for key, value in message.metadata.items()
+            }
+        if message.headers:
+            payload["Headers"] = [
+                {"Name": key, "Value": value} for key, value in message.headers.items()
+            ]
+        if message.provider_template_id:
+            payload["TemplateId"] = message.provider_template_id
+            payload["TemplateModel"] = dict(message.template_data)
+            payload.pop("Subject", None)
+            payload.pop("TextBody", None)
+            payload.pop("HtmlBody", None)
+
+        try:
+            response = await self._get_http_client().post(
+                f"{self.base_url}/email"
+                if not message.provider_template_id
+                else f"{self.base_url}/email/withTemplate",
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Postmark-Server-Token": self.server_token,
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+            return MailDeliveryResult.queued(
+                self.provider_name,
+                provider_message_id=str(response_data.get("MessageID") or ""),
+                details={"error_code": response_data.get("ErrorCode")},
+            )
+        except Exception as exc:
+            return MailDeliveryResult.failed(self.provider_name, str(exc))
+
+
+class ResendMailProvider(TransactionalMailProvider):
+    """Deliver transactional mail through the Resend REST API."""
+
+    provider_name = "resend"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        from_email: str,
+        from_name: Optional[str] = None,
+        base_url: str = "https://api.resend.com",
+        timeout: int = 10,
+    ) -> None:
+        self.api_key = api_key
+        self.from_email = from_email
+        self.from_name = from_name
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    async def send(self, message: AuthMailMessage) -> MailDeliveryResult:
+        payload: dict[str, Any] = {
+            "from": f"{self.from_name} <{self.from_email}>" if self.from_name else self.from_email,
+            "to": [message.to_email],
+            "subject": message.subject,
+            "text": message.text_body,
+        }
+        if message.html_body:
+            payload["html"] = message.html_body
+        if message.reply_to:
+            payload["reply_to"] = message.reply_to
+        if message.tags:
+            payload["tags"] = [{"name": "category", "value": tag} for tag in message.tags]
+        if message.headers:
+            payload["headers"] = dict(message.headers)
+        if message.metadata:
+            # Resend has no first-class metadata bag; stamp intended recipient in headers.
+            headers = dict(payload.get("headers") or {})
+            for key, value in message.metadata.items():
+                headers[f"X-Outlabs-{key}"] = (
+                    value if isinstance(value, str) else json.dumps(value)
+                )
+            payload["headers"] = headers
+
+        try:
+            response = await self._get_http_client().post(
+                f"{self.base_url}/emails",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+            return MailDeliveryResult.queued(
+                self.provider_name,
+                provider_message_id=str(response_data.get("id") or ""),
+                details={"status_code": response.status_code},
+            )
+        except Exception as exc:
+            return MailDeliveryResult.failed(self.provider_name, str(exc))
+
+
 class WebhookMailProvider(TransactionalMailProvider):
     """Forward transactional mail payloads to an external delivery service."""
 

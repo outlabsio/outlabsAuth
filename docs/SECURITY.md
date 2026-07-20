@@ -1,5 +1,6 @@
 # OutlabsAuth Security Guide
 
+
 **Version**: 1.4
 **Date**: 2025-01-14
 **Audience**: Developers deploying OutlabsAuth to production
@@ -76,7 +77,7 @@ OutlabsAuth is an authentication and authorization library designed with securit
 1. **Authentication Bypass**: Weak passwords, brute force, credential stuffing
 2. **Privilege Escalation**: Permission bugs, hierarchy bypass
 3. **Session Hijacking**: Token theft, XSS, MITM
-4. **Injection Attacks**: NoSQL injection, command injection
+4. **Injection Attacks**: SQL injection, command injection
 5. **Denial of Service**: Rate limit bypass, resource exhaustion
 6. **Data Exposure**: Information leakage, verbose errors
 
@@ -88,15 +89,16 @@ OutlabsAuth is an authentication and authorization library designed with securit
 
 **Access Tokens** (Short-lived):
 ```python
-from outlabs_auth import SimpleRBAC, AuthConfig
+from outlabs_auth import SimpleRBAC
 
-config = AuthConfig(
-    secret_key="CHANGE-THIS-IN-PRODUCTION",  # Must be random
-    access_token_expire_minutes=15,          # Short expiry
-    algorithm="HS256",                       # HMAC SHA-256
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    # Must be random AND >= 32 chars under HS256 — construction raises otherwise.
+    # Generate with: openssl rand -hex 32
+    secret_key=SECRET_KEY,
+    access_token_expire_minutes=15,  # Short expiry
+    algorithm="HS256",               # HMAC SHA-256
 )
-
-auth = SimpleRBAC(database=db, config=config)
 ```
 
 **Best Practices**:
@@ -490,7 +492,7 @@ class APIKeyModel(BaseDocument):
 
 **Usage Tracking** (DD-033):
 - **Fast path** (every request): `INCR` counter in Redis
-- **Slow path** (background task every 5 minutes): Sync Redis counters to MongoDB
+- **Slow path** (background task every 5 minutes): Sync Redis counters to Postgres
 - **Performance**: 99%+ reduction in database writes
 
 **Best Practices**:
@@ -605,32 +607,31 @@ async def authenticate_api_key(
 ```
 
 **Background Task - Sync Usage Counters** (DD-033):
+The library ships this worker — do not hand-roll the sync loop. Start it on
+application startup and stop it on shutdown:
+
 ```python
-async def sync_api_key_metrics():
-    """
-    Periodically sync Redis counters to MongoDB (every 5 minutes).
-    Runs in background task - no impact on request latency.
-    """
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
+from outlabs_auth.workers import start_api_key_sync_worker
 
-        # Get all active API key prefixes
-        active_keys = await APIKeyModel.find(
-            APIKeyModel.is_active == True
-        ).to_list()
+@app.on_event("startup")
+async def startup():
+    app.state.api_key_usage_sync = await start_api_key_sync_worker(
+        auth.api_key_service,
+        auth.config,
+        session_factory=auth.session_factory,
+        interval_seconds=300,  # 5 minutes
+    )
 
-        for key in active_keys:
-            # Get usage count from Redis
-            usage = await redis.get(f"api_key:usage:{key.key_prefix}")
-            if usage:
-                # Update MongoDB
-                key.usage_count += int(usage)
-                key.last_synced_at = datetime.now()
-                await key.save()
-
-                # Reset Redis counter
-                await redis.delete(f"api_key:usage:{key.key_prefix}")
+@app.on_event("shutdown")
+async def shutdown():
+    await app.state.api_key_usage_sync.stop()
 ```
+
+The worker reads the Redis counters, batches the writes into Postgres through
+the supplied `session_factory`, and clears the counters it drained. Without
+Redis configured there are no counters to drain and every authenticated request
+writes `api_keys.usage_count` directly — see the DB-fallback contention warning
+in the Deployment Guide.
 
 ### IP Whitelisting
 
@@ -1105,7 +1106,11 @@ entity_admin_role = {
 # Enterprise preset with tree permissions
 from outlabs_auth import EnterpriseRBAC
 
-auth = EnterpriseRBAC(database=db, enable_entity_hierarchy=True)
+auth = EnterpriseRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_entity_hierarchy=True,
+)
 
 # User with tree permission at parent
 # Can access all descendant entities
@@ -1331,45 +1336,88 @@ if os.getenv("ENVIRONMENT") == "development":
 
 ## Database Security
 
-### MongoDB Security
+### PostgreSQL Connection Security
 
-**Connection Security**:
+The connection is configured entirely through the `database_url`. TLS is
+negotiated via standard libpq-style query parameters, which `asyncpg` honours:
+
 ```python
-from motor.motor_asyncio import AsyncIOMotorClient
+from outlabs_auth import EnterpriseRBAC
 
-# Secure connection with authentication
-client = AsyncIOMotorClient(
-    f"mongodb://{username}:{password}@{host}:{port}",
-    authSource="admin",
-    tls=True,                    # Enable TLS
-    tlsAllowInvalidCertificates=False,
-    serverSelectionTimeoutMS=5000
+auth = EnterpriseRBAC(
+    database_url=(
+        "postgresql+asyncpg://outlabs_auth_app:PASSWORD"
+        "@db.internal:5432/appdb?ssl=verify-full"
+    ),
+    secret_key=SECRET_KEY,  # >= 32 chars under HS256
 )
 ```
 
-**Database User Permissions**:
-```javascript
-// MongoDB user with least privilege
-use outlabs_auth;
-db.createUser({
-  user: "outlabs_auth_app",
-  pwd: passwordPrompt(),
-  roles: [
-    { role: "readWrite", db: "outlabs_auth" }
-  ]
-});
+- Use `ssl=verify-full` in production. It verifies both the certificate chain
+  and the hostname; `ssl=require` encrypts but authenticates nothing and does
+  not protect against an active MITM.
+- Never put the password in source. See [Secrets Management](#secrets-management).
+
+**Database User Permissions** (least privilege):
+
+```sql
+-- Owner role: runs migrations (needs DDL). Used by `outlabs-auth migrate`.
+CREATE ROLE outlabs_auth_owner LOGIN PASSWORD 'REDACTED';
+
+-- Runtime role: what the application connects as. No DDL.
+CREATE ROLE outlabs_auth_app LOGIN PASSWORD 'REDACTED';
+
+GRANT USAGE ON SCHEMA auth TO outlabs_auth_app;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON ALL TABLES IN SCHEMA auth TO outlabs_auth_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA auth TO outlabs_auth_app;
+
+-- Keep the grant true for tables future migrations add.
+ALTER DEFAULT PRIVILEGES FOR ROLE outlabs_auth_owner IN SCHEMA auth
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO outlabs_auth_app;
 ```
+
+Separating the migration role from the runtime role means a compromised
+application credential cannot drop or alter the auth schema.
+
+### Schema Isolation
+
+Set `OUTLABS_AUTH_SCHEMA` (CLI) / `database_schema` (config) to place the auth
+tables in a dedicated Postgres schema rather than `public`. This is applied via
+`search_path` on the connection — no table hardcodes a schema — so the same
+build works whether or not the host app isolates it.
+
+The library also namespaces its own Alembic version table as
+**`outlabs_auth_alembic_version`**. It cannot collide with a host application's
+`alembic_version`, and a consuming app's `alembic upgrade head` will not touch
+the auth schema. The two migration histories are independent by construction.
 
 ### Query Security
 
-**Prevent NoSQL Injection**:
-```python
-# Good: Use Beanie ODM (parameterized queries)
-user = await UserModel.find_one(UserModel.email == email)
+Injection resistance was reviewed directly against the source in the
+[2026-06-10 Security Audit](SECURITY_AUDIT_2026-06-10.md) — see its
+"Verified safe" section. Summary of the finding, not a restatement of the
+analysis:
 
-# Bad: String concatenation (vulnerable)
-# Don't do this!
-# db.users.find({"email": email})  # Injection risk
+> No request-reachable SQL injection. `order_by` uses column objects, search
+> uses parameterized `.ilike`, and the only `text()` f-strings are
+> operator-supplied schema names in `cli.py` / `migrations`.
+
+The same audit records that mass assignment is systematically prevented and that
+response schemas do not leak secrets. Consult it rather than this section for
+the current state of those controls.
+
+**When extending the library**, keep to the patterns that made that finding
+true: bind parameters or SQLModel/SQLAlchemy column expressions, never f-strings
+built from request data.
+
+```python
+# Good: parameterized through the ORM
+statement = select(User).where(User.email == email)
+user = (await session.execute(statement)).scalar_one_or_none()
+
+# Bad: request data interpolated into SQL text
+# await session.execute(text(f"SELECT * FROM users WHERE email = '{email}'"))
 ```
 
 **Input Validation**:
@@ -1391,48 +1439,73 @@ async def create_user(user: CreateUserRequest):
 ### Data Encryption
 
 **Encryption at Rest**:
-```bash
-# MongoDB encrypted storage engine
-mongod --enableEncryption \
-  --encryptionKeyFile /path/to/keyfile \
-  --encryptionCipherMode AES256-CBC
-```
+
+Postgres has no built-in storage-engine encryption. Encrypt at rest one level
+down, at the volume or the managed-service layer:
+
+- **Managed** (RDS/Aurora, Cloud SQL, Neon, Supabase): enable storage encryption
+  at instance creation. On most providers it cannot be turned on in place later
+  — it requires a re-create and migrate.
+- **Self-hosted**: encrypt the underlying volume (LUKS/dm-crypt) and mount the
+  data directory from it.
+
+Either way, restrict `PGDATA` filesystem permissions and keep backups encrypted
+(below) — an encrypted volume does nothing for a plaintext dump copied off the
+host.
 
 **Field-Level Encryption** (for sensitive data):
+
+The library does not encrypt individual columns. If your application stores
+sensitive attributes on its own models, encrypt them in the application before
+they reach the database:
+
 ```python
 from cryptography.fernet import Fernet
+from sqlmodel import Field, SQLModel
 
-class UserModel(Document):
+cipher = Fernet(encryption_key)  # load from your secrets manager
+
+class Customer(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
     email: str
-    hashed_password: str
-    ssn: Optional[str] = None  # Sensitive - encrypt before storage
+    ssn_encrypted: str | None = None  # ciphertext at rest, never plaintext
 
-    @classmethod
-    async def create_with_encrypted_ssn(cls, email: str, password: str, ssn: str):
-        cipher = Fernet(encryption_key)
-        encrypted_ssn = cipher.encrypt(ssn.encode())
+    def set_ssn(self, ssn: str) -> None:
+        self.ssn_encrypted = cipher.encrypt(ssn.encode()).decode()
 
-        user = cls(
-            email=email,
-            hashed_password=hash_password(password),
-            ssn=encrypted_ssn.decode()
-        )
-        await user.save()
-        return user
+    def get_ssn(self) -> str | None:
+        if self.ssn_encrypted is None:
+            return None
+        return cipher.decrypt(self.ssn_encrypted.encode()).decode()
 ```
+
+Note the tradeoff: an encrypted column cannot be indexed, searched, or sorted
+usefully. Encrypt only what genuinely needs it.
+
+Passwords are a separate matter — they are **hashed with Argon2id, not
+encrypted**, by the library itself. Never encrypt a password; a reversible
+password is a breach waiting to be decrypted.
 
 ### Backup Security
 
 **Secure Backups**:
 ```bash
-# Encrypt backups
-mongodump --uri="mongodb://..." --out=/tmp/backup
-tar czf backup.tar.gz /tmp/backup
-gpg --symmetric --cipher-algo AES256 backup.tar.gz
+# Dump, then encrypt before the plaintext ever touches durable storage.
+# --no-owner/--no-privileges keep the dump restorable under a different role.
+pg_dump "postgresql://user:pass@host:5432/appdb?sslmode=verify-full" \
+  --format=custom --no-owner --no-privileges \
+  | gpg --symmetric --cipher-algo AES256 --output backup.dump.gpg
 
 # Store encrypted backup securely
-aws s3 cp backup.tar.gz.gpg s3://secure-backups/ --sse AES256
+aws s3 cp backup.dump.gpg s3://secure-backups/ --sse AES256
 ```
+
+Piping `pg_dump` straight into `gpg` avoids writing an unencrypted dump to disk
+at all. If you must stage it, put it on an encrypted volume and shred it after.
+
+The auth schema contains password hashes and API-key hashes. A stolen backup is
+an offline cracking target — treat backup encryption keys with the same care as
+`SECRET_KEY`, and store them somewhere other than the bucket holding the backups.
 
 ---
 
@@ -1443,11 +1516,22 @@ aws s3 cp backup.tar.gz.gpg s3://secure-backups/ --sse AES256
 **Never Commit Secrets**:
 ```bash
 # .env (add to .gitignore)
+# Must be >= 32 chars under HS256: openssl rand -hex 32
 SECRET_KEY=your-secret-key-here
-DATABASE_URL=mongodb://user:pass@host:27017/db
+DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/db?ssl=verify-full
+# Optional: only set these if you run Redis.
 REDIS_URL=redis://user:pass@host:6379
+# Required whenever Redis is enabled (0.1.0a24+). Namespace per app+environment.
+REDIS_KEY_PREFIX=myapp:production
+# Optional: isolate the auth tables in their own Postgres schema.
+OUTLABS_AUTH_SCHEMA=auth
 SMTP_PASSWORD=smtp-password
 ```
+
+`REDIS_KEY_PREFIX` is a security control, not cosmetics — two applications
+sharing a Redis database without distinct prefixes will read and destroy each
+other's counters and cached authorization state. See
+[F-03 in the 2026-07-15 audit](ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md).
 
 **Load from Environment**:
 ```python
@@ -1722,11 +1806,14 @@ config = EnterpriseConfig(
 - [ ] Entity context permissions working
 
 #### Database
-- [ ] MongoDB authentication enabled
-- [ ] TLS encryption for connections
-- [ ] Database user has least privilege
-- [ ] Backups encrypted
-- [ ] Beanie ODM used (no raw queries)
+- [ ] Postgres requires password authentication (no `trust` in `pg_hba.conf`)
+- [ ] TLS enforced on connections (`ssl=verify-full`, not `require`)
+- [ ] Runtime role has least privilege (no DDL; separate role for migrations)
+- [ ] Auth tables isolated via `OUTLABS_AUTH_SCHEMA`
+- [ ] Schema migrated with `outlabs-auth migrate` (not `auto_migrate` in production)
+- [ ] Encryption at rest enabled on the volume or managed instance
+- [ ] Backups encrypted, and backup keys stored apart from the backups
+- [ ] Queries parameterized via SQLModel/SQLAlchemy (no request data in `text()`)
 
 #### Secrets
 - [ ] No secrets in source control

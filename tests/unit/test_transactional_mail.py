@@ -4,11 +4,14 @@ import pytest
 
 from outlabs_auth.mail import (
     AuthMailComposer,
+    AuthMailMessage,
     ComposedAuthMailService,
     DefaultAuthMailComposer,
     InviteMailIntent,
     MailDeliveryResult,
     MailRecipient,
+    PostmarkMailProvider,
+    ResendMailProvider,
     TransactionalMailProvider,
 )
 
@@ -88,3 +91,94 @@ async def test_composed_auth_mail_service_skips_when_composer_returns_none():
     assert result.skipped is True
     assert result.accepted is False
     assert provider.messages == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_postmark_mail_provider_posts_email_payload(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"MessageID": "pm-123", "ErrorCode": 0}
+
+    class FakeClient:
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    provider = PostmarkMailProvider(
+        server_token="token",
+        from_email="noreply@example.com",
+        from_name="Example",
+    )
+    monkeypatch.setattr(provider, "_get_http_client", lambda: FakeClient())
+
+    result = await provider.send(
+        AuthMailMessage(
+            to_email="user@example.com",
+            subject="Invite",
+            text_body="Hello",
+            html_body="<p>Hello</p>",
+            tags=("invite",),
+            metadata={"intended_recipient": "user@example.com"},
+        )
+    )
+
+    assert result.accepted is True
+    assert result.provider_message_id == "pm-123"
+    assert captured["url"].endswith("/email")
+    assert captured["headers"]["X-Postmark-Server-Token"] == "token"
+    assert captured["json"]["To"] == "user@example.com"
+    assert captured["json"]["Tag"] == "invite"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_resend_mail_provider_posts_email_payload(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "re_123"}
+
+    class FakeClient:
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    provider = ResendMailProvider(
+        api_key="re_key",
+        from_email="noreply@example.com",
+    )
+    monkeypatch.setattr(provider, "_get_http_client", lambda: FakeClient())
+
+    result = await provider.send(
+        AuthMailMessage(
+            to_email="user@example.com",
+            subject="Invite",
+            text_body="Hello",
+            metadata={"intended_recipient": "user@example.com"},
+        )
+    )
+
+    assert result.accepted is True
+    assert result.provider_message_id == "re_123"
+    assert captured["url"].endswith("/emails")
+    assert captured["headers"]["Authorization"] == "Bearer re_key"
+    assert captured["json"]["to"] == ["user@example.com"]
+    assert captured["json"]["headers"]["X-Outlabs-intended_recipient"] == "user@example.com"

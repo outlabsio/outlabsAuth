@@ -7,7 +7,8 @@
 - Admin UI now lives in the sibling repository `../OutlabsAuthUI`.
 - `examples/` and `scripts/`: runnable demos and smoke scripts.
 - `observability/` and `docker-compose.yml`: metrics/logging stack and local dependencies.
-- `docs/` and `docs-library/`: design docs, guides, and API references.
+- `docs/`: maintainer design specs, audits, release process
+- `docs-library/`: implementer handbook (user-facing guides; future docs-site source)
 
 ## Build, Test, and Development Commands
 - `uv run start.py`: interactive launcher for API/observability services.
@@ -25,7 +26,7 @@
 - Python: 4-space indentation, type hints preferred; format with `black`.
 - Static checks: `ruff` and `mypy` are configured in `pyproject.toml`.
 - Tests: files named `test_*.py`, pytest markers like `@pytest.mark.unit` and `@pytest.mark.integration` are used.
-- Frontend: keep existing Nuxt/TypeScript patterns; follow file-local conventions.
+- Frontend: admin UI lives in sibling `../OutlabsAuthUI` (Vite/React/TypeScript); follow that repo’s conventions.
 
 ## Testing Guidelines
 - Frameworks: `pytest` + `pytest-asyncio`.

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Added
+
+- **Implementer handbook (`docs-library/`)** — reading paths, Introduction / Choosing a Preset,
+  Getting Started, routers, configuration, OAuth, sessions/audit, passwordless, roles/permissions,
+  ABAC, entities, memberships, and trimmed topic guides (users, invites, status, JWT, API keys,
+  activity, testing, observability). Nuxt docs IA sketch in `docs-library/README.md`. OutlabsAuth UI
+  documented as a Vite/React sister console (`docs/AUTH_UI.md`).
+- **Session inventory and social unlink** on `get_users_router` (`/me/sessions`,
+  `/me/social-accounts`, admin session revoke).
+- **Cross-user audit search** via `get_audit_router`.
+- **Verified-phone access codes** with `whatsapp` / `sms` delivery channels (`whatsapp_otp` /
+  `sms_otp`), phone-verify self-service, Postmark/Resend mail providers, and enterprise Twilio
+  WhatsApp/SMS host recipes.
+- **OAuth SPA redirects and invite-only login DX**; OAuth-only accounts no longer retain a usable
+  placeholder password method.
+- **`cache_backend` abstraction (DD-057)** — `redis` | `memory` | `none`. In-process
+  `MemoryCacheBackend` lets single-instance hosts cache permissions without Redis.
+
+### Database migrations
+
+- None for this slice.
+
 ## [0.1.0a24] - 2026-07-15
 
 ### Security and robustness
