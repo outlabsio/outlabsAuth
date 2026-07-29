@@ -11,6 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import OutlabsAuthException
+from outlabs_auth.frontend.flows import (
+    consume_verified_challenge,
+    prepare_challenge_dispatch,
+    stash_send_next_url,
+    stash_send_profile,
+)
+from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.observability import (
     ObservabilityContext,
     get_observability_dependency,
@@ -357,6 +364,12 @@ def get_auth_router(
             # Generate reset token
             token = await auth.auth_service.generate_reset_token(session, user)
 
+            # DD-059: carry the requested frontend profile key to the mail
+            # intent without changing the frozen hook signature. Unknown keys
+            # fail closed at delivery; the outward 204 stays opaque.
+            if data.app:
+                stash_send_profile(data.app)
+
             # Trigger hook (should send email)
             await auth.user_service.on_after_forgot_password(user, token)
 
@@ -451,18 +464,38 @@ def get_auth_router(
             if getattr(user.status, "value", user.status) != "active" or user.is_locked:
                 return None
 
+            # DD-059: resolve the frontend profile and canonical return target
+            # once, at request time. Fail-closed outcomes skip generation and
+            # delivery entirely while the outward 204 stays opaque.
+            resolver = getattr(auth, "frontend_resolver", None)
+            dispatch = await prepare_challenge_dispatch(
+                resolver,
+                session,
+                user,
+                flow=FrontendFlow.MAGIC_LINK,
+                requested_app=data.app,
+                redirect_url=data.redirect_url,
+            )
+            if not dispatch.deliver:
+                return None
+
             token = await auth.auth_service.generate_magic_link_token(
                 session,
                 user,
                 redirect_url=data.redirect_url,
+                profile_id=dispatch.profile_id,
+                next_url=dispatch.next_url,
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
             )
+            if dispatch.profile_id is not None:
+                stash_send_profile(dispatch.profile_id)
+                stash_send_next_url(dispatch.next_url)
             await auth.user_service.on_after_magic_link_requested(
                 user,
                 token,
                 request,
-                redirect_url=data.redirect_url,
+                redirect_url=(dispatch.next_url if resolver is not None else data.redirect_url),
             )
         except Exception as e:
             if auth.observability:
@@ -501,11 +534,13 @@ def get_auth_router(
             await auth.user_service.on_after_login(user, request)
             obs.log_event("magic_link_verified", user_id=str(user.id))
 
+            verified = consume_verified_challenge()
             return LoginResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
                 token_type=tokens.token_type,
                 expires_in=tokens.expires_in,
+                next_url=verified.get("next_url"),
             )
         except HTTPException:
             raise
@@ -585,20 +620,40 @@ def get_auth_router(
             if getattr(user.status, "value", user.status) != "active" or user.is_locked:
                 return None
 
+            # DD-059: resolve the frontend profile and canonical return target
+            # once, at request time; fail-closed outcomes skip generation and
+            # delivery while the outward 204 stays opaque.
+            resolver = getattr(auth, "frontend_resolver", None)
+            dispatch = await prepare_challenge_dispatch(
+                resolver,
+                session,
+                user,
+                flow=FrontendFlow.ACCESS_CODE,
+                requested_app=data.app,
+                redirect_url=data.redirect_url,
+            )
+            if not dispatch.deliver:
+                return None
+
             code = await auth.auth_service.generate_access_code(
                 session,
                 user,
                 recipient=challenge_recipient,
                 channel=delivery_channel,
                 redirect_url=data.redirect_url,
+                profile_id=dispatch.profile_id,
+                next_url=dispatch.next_url,
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
             )
+            if dispatch.profile_id is not None:
+                stash_send_profile(dispatch.profile_id)
+                stash_send_next_url(dispatch.next_url)
             await auth.user_service.on_after_access_code_requested(
                 user,
                 code,
                 request,
-                redirect_url=data.redirect_url,
+                redirect_url=(dispatch.next_url if resolver is not None else data.redirect_url),
                 delivery_channel=delivery_channel,
                 challenge_type=challenge_type,
             )
@@ -669,11 +724,13 @@ def get_auth_router(
             await auth.user_service.on_after_login(user, request)
             obs.log_event("access_code_verified", user_id=str(user.id))
 
+            verified = consume_verified_challenge()
             return LoginResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
                 token_type=tokens.token_type,
                 expires_in=tokens.expires_in,
+                next_url=verified.get("next_url"),
             )
         except HTTPException:
             raise

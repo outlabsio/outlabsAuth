@@ -23,6 +23,7 @@ from outlabs_auth.core.exceptions import (
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from outlabs_auth.frontend.flows import consume_send_next_url, consume_send_profile
 from outlabs_auth.mail.types import (
     AccessGrantedMailIntent,
     ForgotPasswordMailIntent,
@@ -213,6 +214,7 @@ class UserService(BaseService[User]):
             expires_at=expires_at,
             delivery_channel="email",
             redirect_url=redirect_url,
+            next_url=consume_send_next_url(),
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
             **await self._frontend_context_fields(user),
@@ -247,6 +249,7 @@ class UserService(BaseService[User]):
             expires_at=expires_at,
             delivery_channel=delivery_channel,
             redirect_url=redirect_url,
+            next_url=consume_send_next_url(),
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
             **await self._frontend_context_fields(user),
@@ -1652,14 +1655,24 @@ class UserService(BaseService[User]):
         request per root. Without an internal session factory, slug/type stay
         None (resolvers that need them fail closed rather than guess).
         """
+        # profile_id: the request-scoped profile key stashed by the bundled
+        # routers (requested key on forgot-password; resolved key on challenge
+        # flows). Consume-once; None when no router stashed anything.
+        profile_id = consume_send_profile()
         root_entity_id = getattr(user, "root_entity_id", None)
         if root_entity_id is None:
-            return {"root_entity_id": None, "root_entity_slug": None, "root_entity_type": None}
+            return {
+                "root_entity_id": None,
+                "root_entity_slug": None,
+                "root_entity_type": None,
+                "profile_id": profile_id,
+            }
         entity = await self._load_root_entity_cached(root_entity_id)
         return {
             "root_entity_id": str(root_entity_id),
             "root_entity_slug": getattr(entity, "slug", None) if entity is not None else None,
             "root_entity_type": getattr(entity, "entity_type", None) if entity is not None else None,
+            "profile_id": profile_id,
         }
 
     async def _load_root_entity_cached(self, root_entity_id: UUID) -> Optional[Entity]:

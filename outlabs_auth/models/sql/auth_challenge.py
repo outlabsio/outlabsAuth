@@ -65,7 +65,24 @@ class AuthChallenge(BaseModel, table=True):
     redirect_url: Optional[str] = Field(
         default=None,
         sa_column=Column(String(2048), nullable=True),
-        description="Optional host-owned post-login redirect hint.",
+        description=(
+            "Raw caller-supplied redirect hint (compat window; unvalidated). "
+            "Superseded by next_url when frontend profiles are configured."
+        ),
+    )
+    profile_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+        description="Resolved frontend profile key (DD-059) this challenge was issued for.",
+    )
+    next_url: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(2048), nullable=True),
+        description=(
+            "Canonical post-verification destination, validated against the "
+            "resolved profile's redirect policy at request time and returned "
+            "by the verify endpoints."
+        ),
     )
     requested_ip_address: Optional[str] = Field(
         default=None,

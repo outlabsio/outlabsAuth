@@ -144,7 +144,7 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
         assert UUID(str(token.family_id)) == token_id
         assert token.replaced_by_token_id is None
         assert token.usage_count == 3
-        assert revision.scalar_one() == "20260715_0020"
+        assert revision.scalar_one() == "20260729_0021"
         assert index_exists.scalar_one() == 1
         assert await _row_count(schema, "api_key_usage_sync_batches") == 0
         assert {

@@ -17,6 +17,11 @@ from outlabs_auth.frontend.errors import (
     UnknownFrontendProfileError,
     UnknownRequestedProfileError,
 )
+from outlabs_auth.frontend.flows import (
+    ChallengeFrontendDispatch,
+    consume_verified_challenge,
+    prepare_challenge_dispatch,
+)
 from outlabs_auth.frontend.registry import FrontendProfileRegistry
 from outlabs_auth.frontend.resolution import (
     FrontendProfileResolver,
@@ -35,6 +40,7 @@ from outlabs_auth.frontend.types import (
 )
 
 __all__ = [
+    "ChallengeFrontendDispatch",
     "FrontendConfigurationError",
     "FrontendFlow",
     "FrontendProfile",
@@ -53,6 +59,8 @@ __all__ = [
     "TOKEN_FLOWS",
     "UnknownFrontendProfileError",
     "UnknownRequestedProfileError",
+    "consume_verified_challenge",
+    "prepare_challenge_dispatch",
     "route_by_root_entity_slug",
     "route_by_root_entity_type",
 ]

@@ -31,6 +31,7 @@ from outlabs_auth.core.exceptions import (
     TokenInvalidError,
     UserNotFoundError,
 )
+from outlabs_auth.frontend.flows import stash_verified_challenge
 from outlabs_auth.models.sql.auth_challenge import AuthChallenge
 from outlabs_auth.models.sql.enums import AuthChallengeType, UserStatus
 from outlabs_auth.models.sql.token import RefreshToken
@@ -939,11 +940,17 @@ class AuthService:
         user: User,
         *,
         redirect_url: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        next_url: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> str:
         """
         Generate a single-use magic-link token for an active user.
+
+        ``profile_id`` / ``next_url`` carry the resolved frontend profile and
+        the canonical, policy-validated return target (DD-059); the bundled
+        router supplies them from request-time resolution.
 
         The returned token is plain text for host-owned email delivery. Only a
         hash is stored in the database.
@@ -971,6 +978,8 @@ class AuthService:
             recipient=user.email,
             expires_at=expires,
             redirect_url=redirect_url,
+            profile_id=profile_id,
+            next_url=next_url,
             requested_ip_address=ip_address,
             requested_user_agent=user_agent,
         )
@@ -1006,6 +1015,8 @@ class AuthService:
                 metadata={
                     "delivery_channel": "email",
                     "redirect_url": redirect_url,
+                    "profile_id": profile_id,
+                    "next_url": next_url,
                 },
                 occurred_at=now,
             )
@@ -1020,6 +1031,8 @@ class AuthService:
         recipient: Optional[str] = None,
         channel: Optional[str] = None,
         redirect_url: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        next_url: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> str:
@@ -1085,6 +1098,8 @@ class AuthService:
             recipient=challenge_recipient,
             expires_at=expires,
             redirect_url=redirect_url,
+            profile_id=profile_id,
+            next_url=next_url,
             requested_ip_address=ip_address,
             requested_user_agent=user_agent,
         )
@@ -1123,6 +1138,8 @@ class AuthService:
                 metadata={
                     "delivery_channel": delivery_channel,
                     "redirect_url": redirect_url,
+                    "profile_id": profile_id,
+                    "next_url": next_url,
                 },
                 occurred_at=now,
             )
@@ -1488,6 +1505,11 @@ class AuthService:
             auth_method=f"access_code:{delivery_channel}",
         )
 
+        # Surface the challenge's frontend context (canonical next_url) to the
+        # response layer without changing this method's return shape (DD-059).
+        if matching_challenge.profile_id is not None or matching_challenge.next_url is not None:
+            stash_verified_challenge(matching_challenge.profile_id, matching_challenge.next_url)
+
         return user, tokens
 
     async def verify_phone_verify_code(
@@ -1708,6 +1730,11 @@ class AuthService:
             user_agent=user_agent,
             auth_method="magic_link",
         )
+
+        # Surface the challenge's frontend context (canonical next_url) to the
+        # response layer without changing this method's return shape (DD-059).
+        if challenge.profile_id is not None or challenge.next_url is not None:
+            stash_verified_challenge(challenge.profile_id, challenge.next_url)
 
         return user, tokens
 

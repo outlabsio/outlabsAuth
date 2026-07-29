@@ -272,6 +272,14 @@ Slice 1 (profiles, resolution, mail) is implemented on `feat/dd-059-multi-fronte
 - **Enrichment cold-loads open sessions from an internal factory** (`UserService._session_factory`, wired by `OutlabsAuth` service construction) guarded by the request-scoped cache — hook signatures are frozen and receive no session, so the caller's UoW is not reachable from the send sites. Cost is at most one root-entity load per request per root. Hosts constructing `UserService` directly get `None` and enrichment degrades to `root_entity_id`-only.
 - `request_origin` on the resolution context is fed from `request_base_url` (the API origin, and `None` on the bundled forgot/invite paths) — evidence only, as specified.
 
+### Slice 2 notes (2026-07-29)
+
+Slice 2 (challenges + canonical `next_url`) is implemented: `app` on the forgot-password/magic-link/access-code request schemas; request-time resolution in the bundled routers via `frontend.flows.prepare_challenge_dispatch` (fail closed on unknown apps, mismatches, disallowed return targets, and magic-link profiles with no landing route — access codes tolerate a missing route since codes are typed, not followed); migration `20260729_0021` adds `profile_id` + `next_url` to `auth_challenges`; verification returns the canonical `next_url` on `LoginResponse`. Mechanism notes:
+
+- **Request-scoped carriers, not hook changes**: values that travel router → send site (requested/resolved profile, canonical target) or verify → response (`next_url`) ride consume-once entries in the request cache, keeping hook signatures and `verify_*` return shapes frozen. `frontend.consume_verified_challenge()` is public so host facades calling `verify_magic_link`/`verify_access_code` directly can read the canonical `next_url` the same way the bundled routers do.
+- `OutlabsAuth` accepts `frontend_resolver=`, and adopts the mail service's resolver when not given — routers and mail routing share one registry by default.
+- The raw `redirect_url` remains accepted for the compat window: unvalidated passthrough on hosts without profiles; on hosts with profiles it must normalize into the resolved profile's policy or the request fails closed, and hook overriders now receive the canonical target instead of the raw value.
+
 ## 11. Reconciliation record (r2)
 
 Independent second audit: [`MULTI_FRONTEND_SECOND_AUDIT.md`](./MULTI_FRONTEND_SECOND_AUDIT.md). Both audits converge on the core diagnosis and the profiles + host-resolver direction. Disposition of its material deltas:

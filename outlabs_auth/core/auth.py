@@ -106,6 +106,7 @@ class OutlabsAuth:
         notification_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
         transactional_messaging_service: Optional[Any] = None,
+        frontend_resolver: Optional[Any] = None,
         # Observability
         observability_config: Optional[Any] = None,
         observability_logger: Optional[Any] = None,
@@ -272,6 +273,12 @@ class OutlabsAuth:
         self.notification_service = notification_service
         self.transactional_mail_service = transactional_mail_service
         self.transactional_messaging_service = transactional_messaging_service
+        # DD-059: the canonical frontend resolution component. When not given
+        # explicitly, adopt the one the multi-frontend mail service was built
+        # with so routers and mail routing share a single registry.
+        self.frontend_resolver = frontend_resolver or getattr(
+            transactional_mail_service, "frontend_resolver", None
+        )
 
         # Initialize observability
         self.observability_config = observability_config
