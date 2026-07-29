@@ -1,9 +1,19 @@
 """Transactional mail wiring for the EnterpriseRBAC example app.
 
-Host-owned recipe: pick a provider via OUTLABS_AUTH_MAIL_PROVIDER (or auto-detect),
-compose branded invite/reset copy, optionally sandbox-redirect recipients.
+Host-owned recipe, two-profile edition (DD-059): one outlabsAuth mount, two
+first-party frontends.
 
-Library owns intents + provider transports; this module owns selection + branding.
+- **console** — the OutlabsAuthUI-style admin console: query-token links
+  (``?token={token}``), full flow support.
+- **portal** — an agent-portal-style frontend: path-token links
+  (``/recovery/{token}``) and **no invite page** (``accept_invite=None``), so
+  invites routed to it fail closed instead of producing a guessed link.
+
+The library owns profiles, resolution, intents, and provider transports; this
+module owns the declarations: the two profiles, the resolver mapping, per-
+profile branding/copy, provider selection, and the sandbox recipient
+override. Single-frontend hosts can ignore all of this — the library's
+single-composer construction is unchanged.
 """
 
 from __future__ import annotations
@@ -13,8 +23,15 @@ from collections.abc import Callable
 from dataclasses import replace
 from html import escape
 from typing import Optional
-from urllib.parse import urlencode
 
+from outlabs_auth.frontend import (
+    FrontendFlow,
+    FrontendProfile,
+    FrontendProfileRegistry,
+    FrontendProfileResolver,
+    FrontendRoutes,
+    route_by_root_entity_slug,
+)
 from outlabs_auth.mail import (
     AccessGrantedMailIntent,
     AuthMailMessage,
@@ -34,10 +51,19 @@ from outlabs_auth.mail import (
 )
 
 APP_NAME = "Outlabs Auth"
-ACCEPT_INVITE_PATH = "/auth/accept-invite"
-PASSWORD_RESET_PATH = "/auth/reset-password"
-LOGIN_PATH = "/auth/login"
+PORTAL_APP_NAME = "Outlabs Auth Portal"
+CONSOLE_PROFILE_KEY = "console"
+PORTAL_PROFILE_KEY = "portal"
 DEFAULT_MAILGUN_API_BASE_URL = "https://api.mailgun.net"
+
+# Example audience mapping: users rooted at these entity slugs land on the
+# portal; everyone else is console. Replace with your host's real predicate —
+# the audits behind DD-059 found slug, type, role, and requested-key routing
+# across four production hosts, which is why the resolver is host code.
+ROOT_SLUG_ROUTES = {
+    "internal": CONSOLE_PROFILE_KEY,
+    "agent-practice": PORTAL_PROFILE_KEY,
+}
 
 
 def _trim_trailing_slash(value: str) -> str:
@@ -52,13 +78,78 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return normalized or None
 
 
-def build_frontend_token_link(frontend_url: str, path: str, token: str) -> str:
-    query = urlencode({"token": token})
-    return f"{_trim_trailing_slash(frontend_url)}{path}?{query}"
+def build_example_frontend_registry(
+    *,
+    console_url: str,
+    portal_url: str,
+) -> FrontendProfileRegistry:
+    """
+    Declare the example's two frontend profiles.
+
+    Origins default to localhost over HTTP in development, so ``local_dev``
+    is inferred from the declared origins — production HTTPS origins are
+    validated strictly either way.
+    """
+    console_origin = _trim_trailing_slash(console_url)
+    portal_origin = _trim_trailing_slash(portal_url)
+    local_dev = console_origin.startswith("http://") or portal_origin.startswith("http://")
+    return FrontendProfileRegistry(
+        [
+            FrontendProfile(
+                key=CONSOLE_PROFILE_KEY,
+                app_name=APP_NAME,
+                public_origins=(console_origin,),
+                routes=FrontendRoutes(
+                    login="/auth/login",
+                    password_reset="/auth/reset-password?token={token}",
+                    accept_invite="/auth/accept-invite?token={token}",
+                    magic_link="/auth/magic-link?token={token}",
+                    access_code="/auth/access-code",
+                    oauth_success="/auth/oauth/callback",
+                    oauth_error="/auth/login",
+                ),
+                support_email=_env("MAIL_SUPPORT_EMAIL"),
+            ),
+            FrontendProfile(
+                key=PORTAL_PROFILE_KEY,
+                app_name=PORTAL_APP_NAME,
+                public_origins=(portal_origin,),
+                routes=FrontendRoutes(
+                    login="/sign-in",
+                    password_reset="/recovery/{token}",
+                    accept_invite=None,  # the portal has no invite page —
+                    # selecting it for invites fails closed, never a guessed link
+                    magic_link="/auth/magic-link?token={token}",
+                    oauth_success="/auth/oauth/callback",
+                    oauth_error="/sign-in",
+                ),
+                support_email=_env("MAIL_SUPPORT_EMAIL"),
+            ),
+        ],
+        local_dev=local_dev,
+    )
 
 
-def build_frontend_link(frontend_url: str, path: str) -> str:
-    return f"{_trim_trailing_slash(frontend_url)}{path}"
+def build_example_frontend_resolver(
+    registry: FrontendProfileRegistry,
+    *,
+    default_key: str = CONSOLE_PROFILE_KEY,
+) -> FrontendProfileResolver:
+    """
+    Resolve each operation to a registered profile.
+
+    ``route_by_root_entity_slug`` honors a frontend-originated requested key
+    when identity has no opinion and treats a requested key that contradicts
+    the identity-derived profile as a hard mismatch. The declared ``default``
+    is legitimate here because the example population is effectively
+    single-frontend — it is a declaration for unambiguous contexts, never an
+    exception fallback (resolver errors fail closed upstream).
+    """
+    return FrontendProfileResolver(
+        registry,
+        route_by_root_entity_slug(ROOT_SLUG_ROUTES),
+        default=default_key,
+    )
 
 
 class ConsoleMailProvider(TransactionalMailProvider):
@@ -117,24 +208,33 @@ class RecipientOverrideMailProvider(TransactionalMailProvider):
 
 
 class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
-    """Example-app composer showing host-owned copy, URLs, and branding."""
+    """Example-app composer showing host-owned copy on top of profile routing.
+
+    URLs and branding come from the ``FrontendProfile`` — a profile, not the
+    caller, owns link construction. This subclass only owns the message copy.
+    """
 
     def __init__(
         self,
         *,
-        frontend_url: str,
+        profile: FrontendProfile,
         support_email: Optional[str] = None,
     ) -> None:
-        self.frontend_url = _trim_trailing_slash(frontend_url)
+        self.profile = profile
         super().__init__(
-            app_name=APP_NAME,
-            invite_url_builder=lambda token: build_frontend_token_link(self.frontend_url, ACCEPT_INVITE_PATH, token),
-            password_reset_url_builder=lambda token: build_frontend_token_link(
-                self.frontend_url, PASSWORD_RESET_PATH, token
+            app_name=profile.app_name,
+            invite_url_builder=lambda token: profile.render_url(FrontendFlow.INVITE, token),
+            password_reset_url_builder=lambda token: profile.render_url(FrontendFlow.PASSWORD_RESET, token),
+            login_url_builder=(
+                (lambda: profile.render_url(FrontendFlow.ACCESS_GRANTED)) if profile.routes.login else None
             ),
-            login_url_builder=lambda: build_frontend_link(self.frontend_url, LOGIN_PATH),
-            support_email=support_email,
+            support_email=support_email or profile.support_email,
         )
+
+    @classmethod
+    def from_profile(cls, profile: FrontendProfile) -> "EnterpriseExampleMailComposer":
+        """Build the example composer for one registered profile."""
+        return cls(profile=profile)
 
     async def compose_invite(self, intent: InviteMailIntent) -> Optional[AuthMailMessage]:
         accept_link = self.invite_url_builder(intent.token)
@@ -144,7 +244,7 @@ class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
         role_line = f"\nRoles: {', '.join(role_names)}" if role_names else ""
         text_body = (
             f"Hello {recipient_name},\n\n"
-            f"You've been invited to join {target_entity_name} on {APP_NAME}.{role_line}\n\n"
+            f"You've been invited to join {target_entity_name} on {self.app_name}.{role_line}\n\n"
             "Click the link below to accept your invitation and set your password:\n\n"
             f"{accept_link}\n\n"
             f"{self._format_expiry(intent.expires_at)}"
@@ -152,7 +252,7 @@ class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
         html_body = (
             f"<p>Hello {escape(recipient_name)},</p>"
             f"<p>You've been invited to join <strong>{escape(target_entity_name)}</strong> on "
-            f"<strong>{escape(APP_NAME)}</strong>.</p>"
+            f"<strong>{escape(self.app_name)}</strong>.</p>"
             f"{f'<p><strong>Roles:</strong> {escape(', '.join(role_names))}</p>' if role_names else ''}"
             f'<p><a href="{escape(accept_link)}">Accept your invitation</a> and set your password.</p>'
             f"<p>{escape(self._format_expiry(intent.expires_at))}</p>"
@@ -160,7 +260,7 @@ class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
         return AuthMailMessage(
             to_email=intent.recipient.email,
             to_name=recipient_name,
-            subject=f"You're invited to {APP_NAME}",
+            subject=f"You're invited to {self.app_name}",
             text_body=text_body,
             html_body=html_body,
             reply_to=self.support_email,
@@ -208,12 +308,13 @@ class EnterpriseExampleMailComposer(DefaultAuthMailComposer):
         role_names = sorted({str(role) for role in intent.metadata.get("role_names", []) or []})
         role_line = f"\nRoles: {', '.join(role_names)}" if role_names else ""
         text_body = (
-            f"You now have access to {target_entity_name} on {APP_NAME}.{role_line}\n\n" f"Log in here: {login_link}"
+            f"You now have access to {target_entity_name} on {self.app_name}.{role_line}\n\n"
+            f"Log in here: {login_link}"
         )
         return AuthMailMessage(
             to_email=intent.recipient.email,
             to_name=intent.recipient.display_name,
-            subject=f"You have access to a new {APP_NAME} team",
+            subject=f"You have access to a new {self.app_name} team",
             text_body=text_body,
             reply_to=self.support_email,
             tags=("access-granted", "enterprise-example"),
@@ -225,9 +326,7 @@ def resolve_mail_provider_name(explicit: Optional[str] = None) -> str:
     """Resolve provider name: explicit arg, OUTLABS_AUTH_MAIL_PROVIDER, or auto."""
     name = (explicit or _env("OUTLABS_AUTH_MAIL_PROVIDER") or "auto").strip().lower()
     if name in {"", "auto"}:
-        if _env("MAILGUN_DOMAIN") and _env("MAILGUN_API_KEY") and (
-            _env("MAILGUN_FROM_EMAIL") or _env("MAIL_FROM")
-        ):
+        if _env("MAILGUN_DOMAIN") and _env("MAILGUN_API_KEY") and (_env("MAILGUN_FROM_EMAIL") or _env("MAIL_FROM")):
             return "mailgun"
         if _env("SENDGRID_API_KEY") and (_env("MAIL_FROM") or _env("SENDGRID_FROM_EMAIL")):
             return "sendgrid"
@@ -246,6 +345,7 @@ def resolve_mail_provider_name(explicit: Optional[str] = None) -> str:
 def build_enterprise_example_transactional_mail_service(
     *,
     frontend_url: str,
+    portal_frontend_url: Optional[str] = None,
     mail_provider: Optional[str] = None,
     mailgun_api_base_url: str = DEFAULT_MAILGUN_API_BASE_URL,
     mailgun_domain: Optional[str] = None,
@@ -257,6 +357,18 @@ def build_enterprise_example_transactional_mail_service(
     provider_override: Optional[TransactionalMailProvider] = None,
     console_output: Callable[[str], None] = print,
 ) -> ComposedAuthMailService:
+    """
+    Build the example's multi-frontend mail service.
+
+    Two profiles (console + portal), one resolver, per-profile composers; the
+    library selects the composer per send and fails closed on unknown or
+    unsupported selections. ``frontend_url`` is the console origin;
+    ``portal_frontend_url`` defaults to ``PORTAL_FRONTEND_URL`` /
+    ``http://localhost:3001``. The returned service exposes
+    ``frontend_resolver`` — OutlabsAuth picks it up automatically for
+    challenge flows, OAuth, and the sign-in gate when this service is passed
+    as ``transactional_mail_service``.
+    """
     provider_name = resolve_mail_provider_name(mail_provider)
     from_email = (
         mailgun_from_email
@@ -267,11 +379,7 @@ def build_enterprise_example_transactional_mail_service(
         or _env("RESEND_FROM_EMAIL")
         or _env("SMTP_FROM_EMAIL")
     )
-    from_name = (
-        _env("MAIL_FROM_NAME")
-        or mailgun_from_name
-        or APP_NAME
-    )
+    from_name = _env("MAIL_FROM_NAME") or mailgun_from_name or APP_NAME
 
     provider = provider_override or _build_mail_provider(
         provider_name=provider_name,
@@ -295,11 +403,17 @@ def build_enterprise_example_transactional_mail_service(
             override_email=override,
         )
 
-    composer = EnterpriseExampleMailComposer(
-        frontend_url=frontend_url,
-        support_email=from_email,
+    registry = build_example_frontend_registry(
+        console_url=frontend_url,
+        portal_url=portal_frontend_url or _env("PORTAL_FRONTEND_URL") or "http://localhost:3001",
     )
-    return ComposedAuthMailService(provider=provider, composer=composer)
+    resolver = build_example_frontend_resolver(registry)
+    composers = {key: EnterpriseExampleMailComposer.from_profile(registry.get(key)) for key in registry.keys()}
+    return ComposedAuthMailService(
+        provider=provider,
+        composers=composers,
+        resolver=resolver,
+    )
 
 
 def _require(value: Optional[str], name: str) -> str:
@@ -315,7 +429,7 @@ def _build_mail_provider(
     mailgun_domain: Optional[str],
     mailgun_api_key: Optional[str],
     from_email: Optional[str],
-    from_name: str,
+    from_name: Optional[str],
     console_output: Callable[[str], None],
 ) -> TransactionalMailProvider:
     if provider_name in {"none", "disabled", "off", "console"}:
@@ -327,9 +441,7 @@ def _build_mail_provider(
             domain=_require(mailgun_domain, "MAILGUN_DOMAIN"),
             from_email=_require(from_email, "MAILGUN_FROM_EMAIL or MAIL_FROM"),
             from_name=from_name,
-            base_url=_trim_trailing_slash(
-                _env("MAILGUN_API_BASE_URL") or mailgun_api_base_url
-            ),
+            base_url=_trim_trailing_slash(_env("MAILGUN_API_BASE_URL") or mailgun_api_base_url),
         )
 
     if provider_name == "sendgrid":
