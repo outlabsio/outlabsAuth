@@ -1,6 +1,6 @@
 # TaskQ Authenticated-Context Authorization Plan
 
-**Status:** Implementation candidate; joint TaskQ audit and release pending  
+**Status:** Joint acceptance complete; immutable a26 publication authorised
 **Created:** 2026-07-28  
 **Implemented locally:** 2026-07-29  
 **Consumer:** `outlabs-taskq` optional Outlabs adapter  
@@ -95,13 +95,16 @@ Full package result on Python 3.12:
 The skips are the repository's existing optional Redis/performance lanes. No
 schema migration is introduced.
 
-## Remaining release gate
+## Release gate
 
-The auth package is not published by this slice. Before release:
+The owner authorised immutable publication on 2026-07-29. Before the a26 tag:
 
-1. TaskQ must adopt this exact supported operation without raw-scope
-   interpretation.
-2. The installed Auth wheel and TaskQ `[outlabs]` wheel must pass the joint
+1. TaskQ adopted this exact supported operation without raw-scope
+   interpretation — complete at candidate `outlabs-taskq==0.1.0a13`.
+2. The installed Auth wheel and TaskQ `[outlabs]` wheel passed the joint
    cold/warm/five-queue/workflow denial matrix.
-3. Exact package versions and artifact hashes must be recorded in both plans.
-4. Publication requires separate owner authorization.
+3. The final tag, source, CI and independently downloaded artifact hashes must
+   be added after publication.
+4. TaskQ must remove its temporary Git source override, resolve the published
+   a26 artifact, repeat installed-artifact acceptance, and only then publish
+   a13.
