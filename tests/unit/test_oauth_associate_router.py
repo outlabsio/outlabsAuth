@@ -153,7 +153,9 @@ async def test_oauth_associate_authorize_uses_route_name_when_redirect_url_missi
     request = SimpleNamespace(
         url_for=lambda route_name: (
             "https://app.example.com/v1/oauth-associate/github/callback"
-            if route_name == "oauth-associate:github.callback"
+            # Route names are prefix-aware since DD-059 slice 3 so duplicate
+            # same-provider mounts stop colliding in url_for.
+            if route_name == "oauth-associate:github:v1.oauth-associate.github.callback"
             else None
         )
     )

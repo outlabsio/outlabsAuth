@@ -12,6 +12,8 @@ from outlabs_auth.routers.config import get_config_router
 from outlabs_auth.routers.entities import get_entities_router
 from outlabs_auth.routers.integration_principals import get_integration_principals_router
 from outlabs_auth.routers.memberships import get_memberships_router
+from outlabs_auth.routers.oauth import get_oauth_router
+from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
 from outlabs_auth.routers.permissions import get_permissions_router
 from outlabs_auth.routers.roles import get_roles_router
 from outlabs_auth.routers.self_service import get_self_service_users_router
@@ -32,4 +34,6 @@ __all__ = [
     "get_memberships_router",
     "get_config_router",
     "get_audit_router",
+    "get_oauth_router",
+    "get_oauth_associate_router",
 ]
