@@ -36,6 +36,7 @@ class FrontendFlow(str, Enum):
     ACCESS_CODE = "access_code"
     OAUTH_LOGIN = "oauth_login"
     OAUTH_ASSOCIATE = "oauth_associate"
+    SIGN_IN = "sign_in"
 
 
 #: Flows whose route template carries a ``{token}`` placeholder.
@@ -155,6 +156,7 @@ class FrontendRoutes:
             FrontendFlow.ACCESS_CODE: self.access_code,
             FrontendFlow.OAUTH_LOGIN: self.oauth_success,
             FrontendFlow.OAUTH_ASSOCIATE: self.oauth_associate_success,
+            FrontendFlow.SIGN_IN: self.login,
         }[flow]
 
     def error_route_for(self, flow: FrontendFlow) -> Optional[str]:

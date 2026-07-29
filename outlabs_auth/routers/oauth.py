@@ -21,7 +21,10 @@ from outlabs_auth.core.exceptions import (
     InvalidInputError,
     OutlabsAuthException,
 )
-from outlabs_auth.frontend.errors import UnknownFrontendProfileError
+from outlabs_auth.frontend.errors import (
+    UnknownFrontendProfileError,
+    WrongApplicationError,
+)
 from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
@@ -184,6 +187,8 @@ def _state_app(state_payload: Any) -> Optional[str]:
 
 
 def _oauth_error_code(exc: BaseException) -> str:
+    if isinstance(exc, WrongApplicationError):
+        return "wrong_application"
     if isinstance(exc, HTTPException):
         detail = str(exc.detail or "")
         if "No account found" in detail:
@@ -406,6 +411,8 @@ def get_oauth_router(
                 request=request,
             )
 
+            # DD-059: the sign-in gate runs inside create_tokens_for_user with
+            # the state-bound profile; sessions carry it as azp.
             tokens = await auth.auth_service.create_tokens_for_user(
                 session,
                 user,
@@ -413,6 +420,7 @@ def get_oauth_router(
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
                 auth_method=f"oauth:{oauth_client.name}",
+                app=state_app,
             )
 
             await auth.user_service.on_after_login(user, request)
@@ -421,7 +429,7 @@ def get_oauth_router(
             # OAuth callback is a GET endpoint; commit explicitly before the UoW
             # middleware's read-method rollback step runs.
             await session.commit()
-        except (HTTPException, OutlabsAuthException) as exc:
+        except (HTTPException, OutlabsAuthException, WrongApplicationError) as exc:
             return _maybe_error_redirect(exc)
 
         token_payload = cast(dict[str, Any], tokens.to_dict())

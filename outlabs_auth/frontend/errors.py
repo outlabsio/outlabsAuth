@@ -76,3 +76,15 @@ class UnknownRequestedProfileError(FrontendResolutionError):
 
     def __init__(self, message: str, *, details: Optional[dict[str, Any]] = None) -> None:
         super().__init__("frontend_profile_unknown", message, details=details)
+
+
+class WrongApplicationError(FrontendResolutionError):
+    """
+    Sign-in gate rejection (DD-059 slice 4): this user may not authenticate
+    through the requested application. Routers map it to a stable 403 with
+    code ``wrong_application``; the OAuth callback maps it to an error
+    redirect with the same code.
+    """
+
+    def __init__(self, message: str, *, details: Optional[dict[str, Any]] = None) -> None:
+        super().__init__("wrong_application", message, details=details)

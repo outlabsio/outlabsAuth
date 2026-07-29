@@ -59,6 +59,14 @@ class RefreshToken(BaseModel, table=True):
         sa_column=Column(PG_UUID(as_uuid=True), nullable=False),
         description="Refresh-token family used to detect replay after rotation",
     )
+    azp: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+        description=(
+            "Authorized party (DD-059): the frontend profile key this session "
+            "was minted for. Preserved and re-gated across rotation."
+        ),
+    )
     replaced_by_token_id: Optional[UUID] = Field(
         default=None,
         sa_column=Column(

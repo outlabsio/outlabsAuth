@@ -289,6 +289,7 @@ def create_token_pair(
     refresh_token_expire_days: int = 30,
     additional_claims: Optional[Dict[str, Any]] = None,
     audience: str = "outlabs-auth",
+    azp: Optional[str] = None,
 ) -> tuple[str, str]:
     """
     Create both access and refresh tokens for a user.
@@ -313,8 +314,11 @@ def create_token_pair(
         ... )
         >>> # access token valid for 15 min, refresh for 30 days
     """
-    # Base payload
+    # Base payload. ``azp`` (authorized party, DD-059) names the frontend
+    # profile this session was minted for; ``aud`` stays the resource audience.
     base_data = {"sub": user_id}
+    if azp:
+        base_data["azp"] = azp
     if additional_claims:
         base_data.update(additional_claims)
 
@@ -327,9 +331,15 @@ def create_token_pair(
         audience=audience,
     )
 
+    # Refresh token only needs user ID — plus azp so stateless deployments
+    # keep session provenance across rotation.
+    refresh_data = {"sub": user_id}
+    if azp:
+        refresh_data["azp"] = azp
+
     # Create refresh token
     refresh_token = create_refresh_token(
-        data={"sub": user_id},  # Refresh token only needs user ID
+        data=refresh_data,
         secret_key=secret_key,
         algorithm=algorithm,
         expires_delta=timedelta(days=refresh_token_expire_days),

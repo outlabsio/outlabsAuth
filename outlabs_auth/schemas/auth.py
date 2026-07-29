@@ -35,6 +35,15 @@ class LoginRequest(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key this sign-in is for (DD-059). "
+            "Sessions carry it as the azp claim; partitioned profiles reject "
+            "off-audience sign-ins with 403 wrong_application."
+        ),
+    )
 
 
 class LoginResponse(BaseModel):
@@ -256,6 +265,14 @@ class AcceptInviteRequest(BaseModel):
 
     token: str
     new_password: str = Field(..., min_length=8, max_length=128)
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key the auto-login session is for "
+            "(DD-059). A key, never a URL."
+        ),
+    )
 
 
 class AuthConfigResponse(BaseModel):

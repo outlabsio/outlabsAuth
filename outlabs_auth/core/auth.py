@@ -540,6 +540,9 @@ class OutlabsAuth:
         # Internal wiring for DD-059 intent enrichment (root-entity slug/type
         # and invite metadata cold-loads through the request-scoped cache).
         self.user_service._session_factory = self._session_factory
+        # DD-059 slice 4: the auth service runs the sign-in gate at every
+        # token-minting path against the same resolution component.
+        self.auth_service.frontend_resolver = self.frontend_resolver
         self.role_service = RoleService(
             self.config,
             role_history_service=self.role_history_service,

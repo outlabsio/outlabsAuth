@@ -15,9 +15,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from outlabs_auth.frontend.errors import FrontendResolutionError
+from fastapi import Depends, HTTPException, Request, status
+
+from outlabs_auth.frontend.errors import (
+    FrontendResolutionError,
+    WrongApplicationError,
+)
 from outlabs_auth.frontend.resolution import (
     FrontendProfileResolver,
     FrontendResolutionContext,
@@ -128,21 +133,26 @@ async def prepare_challenge_dispatch(
 async def _root_context(
     session: Any, user: Any
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Root-entity id/slug/type via the caller's session + request cache."""
+    """Root-entity id/slug/type via the caller's session + request cache.
+
+    The cache stores plain VALUES, never ORM instances: a cached Entity can
+    outlive the session that loaded it (post-commit attribute expiry;
+    shared-task test transports) and then raises DetachedInstanceError on
+    attribute access.
+    """
     root_entity_id = getattr(user, "root_entity_id", None)
     if root_entity_id is None:
         return None, None, None
-    key = ("entity", root_entity_id)
-    if request_cache.contains(key):
-        entity = request_cache.get(key)
+    key = ("frontend_root", root_entity_id)
+    cached = request_cache.get(key)
+    if isinstance(cached, tuple):
+        slug, entity_type = cached
     else:
         entity = await session.get(Entity, root_entity_id)
-        request_cache.set_value(key, entity)
-    return (
-        str(root_entity_id),
-        getattr(entity, "slug", None) if entity is not None else None,
-        getattr(entity, "entity_type", None) if entity is not None else None,
-    )
+        slug = getattr(entity, "slug", None) if entity is not None else None
+        entity_type = getattr(entity, "entity_type", None) if entity is not None else None
+        request_cache.set_value(key, (slug, entity_type))
+    return (str(root_entity_id), slug, entity_type)
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +200,140 @@ def consume_verified_challenge() -> dict[str, Optional[str]]:
     value = request_cache.get(_VERIFIED_CHALLENGE_KEY)
     request_cache.set_value(_VERIFIED_CHALLENGE_KEY, None)
     return value if isinstance(value, dict) else {}
+
+
+# ---------------------------------------------------------------------------
+# Sign-in gating (DD-059 slice 4)
+# ---------------------------------------------------------------------------
+
+
+async def enforce_sign_in_gate(
+    resolver: Optional[FrontendProfileResolver],
+    session: Any,
+    user: Any,
+    *,
+    app: Optional[str],
+    flow: FrontendFlow = FrontendFlow.SIGN_IN,
+) -> None:
+    """
+    Raise ``WrongApplicationError`` when ``user`` may not authenticate
+    through the frontend profile ``app``.
+
+    STANDING OBLIGATION (DD-059): every path that mints platform credentials
+    must consult this gate — today: password login, magic-link verify,
+    access-code verify, OAuth callback, invite-accept auto-login (all via
+    ``create_tokens_for_user`` or an inline gate), and refresh rotation. A
+    new minting path that skips it makes the gate porous.
+
+    Semantics: no resolver or no bound app → allowed (legacy / app-less
+    session). A profile with empty ``accepted_audiences`` accepts everyone —
+    the shared/SSO mode — with no resolver call. A partitioned profile runs
+    the host resolver with the requested key; resolution failures (mismatch,
+    unknown, unresolved, resolver error) reject, and the resolved audience
+    (the explicit ``FrontendResolution.audience``, else the resolved profile
+    key) must appear in ``accepted_audiences``.
+    """
+    if resolver is None or not isinstance(app, str) or not app:
+        return
+    registry = resolver.registry
+    if app not in registry:
+        raise WrongApplicationError(
+            f"Unknown application {app!r}", details={"app": app}
+        )
+    profile = registry.get(app)
+    if not profile.accepted_audiences:
+        return
+
+    root_entity_id, root_slug, root_type = await _root_context(session, user)
+    context = FrontendResolutionContext(
+        flow=flow,
+        recipient_user_id=str(user.id),
+        recipient_email=getattr(user, "email", None),
+        root_entity_id=root_entity_id,
+        root_entity_slug=root_slug,
+        root_entity_type=root_type,
+        requested_profile_key=app,
+        session=session,
+    )
+    try:
+        resolution = await resolver.resolve(context)
+    except WrongApplicationError:
+        raise
+    except FrontendResolutionError as exc:
+        logger.warning(
+            "sign_in_gate_rejected",
+            extra={"app": app, "reason": exc.reason, "user_id": str(user.id)},
+        )
+        raise WrongApplicationError(
+            f"Account is not eligible to sign in to application {app!r}",
+            details={"app": app, "reason": exc.reason},
+        ) from exc
+
+    audience = resolution.audience or resolution.profile_key
+    if audience not in profile.accepted_audiences:
+        logger.warning(
+            "sign_in_gate_rejected",
+            extra={"app": app, "audience": audience, "user_id": str(user.id)},
+        )
+        raise WrongApplicationError(
+            f"Account audience {audience!r} is not accepted by application {app!r}",
+            details={"app": app, "audience": audience},
+        )
+
+
+def require_app(auth: Any, *allowed_apps: str) -> Callable[..., Any]:
+    """
+    FastAPI dependency factory: the request's session must carry an ``azp``
+    claim naming one of ``allowed_apps`` (DD-059 slice 4).
+
+    Where a host declares an endpoint family app-scoped, this check is
+    enforcement, not advice: app-less sessions and sessions minted for other
+    profiles get a stable 403 ``wrong_application``. Layered on top of the
+    host's normal ``require_auth`` dependency, which still performs full
+    authentication.
+    """
+    if not allowed_apps:
+        raise ValueError("require_app needs at least one allowed profile key")
+    base_dependency = auth.deps.require_auth()
+
+    async def _require_app(
+        request: Request,
+        auth_context: Any = Depends(base_dependency),
+    ) -> Any:
+        azp = _bearer_azp(request, auth.config)
+        if azp not in allowed_apps:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This session was not issued for this application.",
+                },
+            )
+        return auth_context
+
+    return _require_app
+
+
+def _bearer_azp(request: Any, config: Any) -> Optional[str]:
+    """Extract the verified ``azp`` claim from the request's Bearer token."""
+    from outlabs_auth.utils.jwt import verify_token
+
+    header = ""
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        header = headers.get("authorization") or headers.get("Authorization") or ""
+    if not header.lower().startswith("bearer "):
+        return None
+    token = header[7:].strip()
+    try:
+        payload = verify_token(
+            token,
+            config.secret_key,
+            config.algorithm,
+            expected_type="access",
+            audience=config.jwt_audience,
+        )
+    except Exception:
+        return None
+    azp = payload.get("azp")
+    return azp if isinstance(azp, str) and azp else None

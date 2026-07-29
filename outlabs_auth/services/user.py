@@ -1667,27 +1667,43 @@ class UserService(BaseService[User]):
                 "root_entity_type": None,
                 "profile_id": profile_id,
             }
-        entity = await self._load_root_entity_cached(root_entity_id)
+        slug, entity_type = await self._load_root_context_cached(root_entity_id)
         return {
             "root_entity_id": str(root_entity_id),
-            "root_entity_slug": getattr(entity, "slug", None) if entity is not None else None,
-            "root_entity_type": getattr(entity, "entity_type", None) if entity is not None else None,
+            "root_entity_slug": slug,
+            "root_entity_type": entity_type,
             "profile_id": profile_id,
         }
 
-    async def _load_root_entity_cached(self, root_entity_id: UUID) -> Optional[Entity]:
-        key = ("entity", root_entity_id)
-        if request_cache.contains(key):
-            return cast(Optional[Entity], request_cache.get(key))
+    async def _load_root_context_cached(
+        self, root_entity_id: UUID
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Root-entity slug/type as plain strings.
+
+        Cached as VALUES, never ORM instances: the request cache can outlive
+        the session that loaded an Entity (post-commit attribute expiry;
+        shared-task test transports), and a detached instance raises on
+        attribute access.
+        """
+        key = ("frontend_root", root_entity_id)
+        cached = request_cache.get(key)
+        if isinstance(cached, tuple):
+            return cast("tuple[Optional[str], Optional[str]]", cached)
         session_factory = self._session_factory
         if session_factory is None:
-            return None
+            return None, None
 
-        async def loader() -> Optional[Entity]:
+        async def loader() -> tuple[Optional[str], Optional[str]]:
             async with session_factory() as session:
-                return cast(Optional[Entity], await session.get(Entity, root_entity_id))
+                entity = await session.get(Entity, root_entity_id)
+                if entity is None:
+                    return None, None
+                return entity.slug, entity.entity_type
 
-        return cast(Optional[Entity], await request_cache.get_or_load(key, loader))
+        return cast(
+            "tuple[Optional[str], Optional[str]]",
+            await request_cache.get_or_load(key, loader),
+        )
 
     async def _enrich_invite_metadata(self, user: User, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """

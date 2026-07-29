@@ -31,7 +31,7 @@ from outlabs_auth.core.exceptions import (
     TokenInvalidError,
     UserNotFoundError,
 )
-from outlabs_auth.frontend.flows import stash_verified_challenge
+from outlabs_auth.frontend.flows import enforce_sign_in_gate, stash_verified_challenge
 from outlabs_auth.models.sql.auth_challenge import AuthChallenge
 from outlabs_auth.models.sql.enums import AuthChallengeType, UserStatus
 from outlabs_auth.models.sql.token import RefreshToken
@@ -115,6 +115,7 @@ class AuthService:
         device_name: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
+        app: Optional[str] = None,
     ) -> Tuple[User, TokenPair]:
         """
         Authenticate user with email and password.
@@ -287,6 +288,11 @@ class AuthService:
 
         # Create JWT token pair
         _t = time.perf_counter()
+        # DD-059 sign-in gate: may this user authenticate through this app?
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=app
+        )
+
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -294,6 +300,7 @@ class AuthService:
             access_token_expire_minutes=self.config.access_token_expire_minutes,
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
+            azp=app,
         )
         phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
 
@@ -308,6 +315,7 @@ class AuthService:
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
+                azp=app,
             )
             session.add(refresh_token_model)
             # No flush — batched with user update and audit event at commit time.
@@ -366,12 +374,15 @@ class AuthService:
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
         auth_method: Optional[str] = None,
+        app: Optional[str] = None,
     ) -> TokenPair:
         """
         Create a token pair for an already-authenticated user.
 
         This is intended for non-password authentication flows
-        (for example, OAuth callbacks).
+        (for example, OAuth callbacks). ``app`` binds the session to a
+        registered frontend profile: the sign-in gate runs here (DD-059)
+        and the minted tokens carry it as the ``azp`` claim.
         """
         if user.is_locked:
             raise AccountLockedError(
@@ -385,6 +396,11 @@ class AuthService:
             )
         self._check_user_status(user)
 
+        # DD-059 sign-in gate: may this user authenticate through this app?
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=app
+        )
+
         previous_last_login = user.last_login
         login_recorded_at = datetime.now(timezone.utc)
         user.last_login = login_recorded_at
@@ -396,6 +412,7 @@ class AuthService:
             access_token_expire_minutes=self.config.access_token_expire_minutes,
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
+            azp=app,
         )
 
         if self.config.store_refresh_tokens:
@@ -407,6 +424,7 @@ class AuthService:
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
+                azp=app,
             )
             session.add(refresh_token_model)
             await session.flush()
@@ -648,6 +666,14 @@ class AuthService:
                 details={"reason": "password_changed"},
             )
 
+        # DD-059: sessions keep their authorized-party binding across rotation,
+        # and the sign-in gate re-runs so audience changes take effect here.
+        azp_raw = token_model.azp if token_model is not None else payload.get("azp")
+        azp = azp_raw if isinstance(azp_raw, str) and azp_raw else None
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=azp
+        )
+
         # Rotate the stored refresh token atomically with its replacement. The
         # SELECT ... FOR UPDATE above serializes concurrent refresh attempts for
         # the same credential; the loser sees ``rotated`` and triggers replay
@@ -659,6 +685,7 @@ class AuthService:
             access_token_expire_minutes=self.config.access_token_expire_minutes,
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
+            azp=azp,
         )
 
         # Store the replacement before revoking the old token so the lineage is
@@ -673,6 +700,7 @@ class AuthService:
                 device_fingerprint=token_model.device_fingerprint,
                 ip_address=token_model.ip_address,
                 user_agent=token_model.user_agent,
+                azp=azp,
             )
             session.add(replacement)
             await session.flush()
@@ -1503,6 +1531,7 @@ class AuthService:
             ip_address=ip_address,
             user_agent=user_agent,
             auth_method=f"access_code:{delivery_channel}",
+            app=matching_challenge.profile_id,
         )
 
         # Surface the challenge's frontend context (canonical next_url) to the
@@ -1729,6 +1758,7 @@ class AuthService:
             ip_address=ip_address,
             user_agent=user_agent,
             auth_method="magic_link",
+            app=challenge.profile_id,
         )
 
         # Surface the challenge's frontend context (canonical next_url) to the

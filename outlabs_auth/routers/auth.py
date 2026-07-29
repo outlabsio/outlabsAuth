@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import OutlabsAuthException
+from outlabs_auth.frontend.errors import WrongApplicationError
 from outlabs_auth.frontend.flows import (
     consume_verified_challenge,
     prepare_challenge_dispatch,
@@ -198,7 +199,9 @@ def get_auth_router(
         """
         try:
             # Authenticate user and get tokens
-            user, tokens = await auth.auth_service.login(session, email=data.email, password=data.password)
+            user, tokens = await auth.auth_service.login(
+                session, email=data.email, password=data.password, app=data.app
+            )
 
             # Check verification requirement
             if requires_verification:
@@ -220,6 +223,14 @@ def get_auth_router(
 
         except HTTPException:
             raise
+        except WrongApplicationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This account cannot sign in to the requested application.",
+                },
+            ) from exc
         except OutlabsAuthException:
             # Let the exception handler convert this to proper HTTP response
             raise
@@ -249,6 +260,14 @@ def get_auth_router(
             )
         except HTTPException:
             raise
+        except WrongApplicationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This session's application no longer accepts this account.",
+                },
+            ) from exc
         except OutlabsAuthException:
             # Let the exception handler convert this to proper HTTP response
             raise
@@ -544,6 +563,14 @@ def get_auth_router(
             )
         except HTTPException:
             raise
+        except WrongApplicationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This account cannot sign in to the requested application.",
+                },
+            ) from exc
         except OutlabsAuthException:
             raise
         except Exception as e:
@@ -734,6 +761,14 @@ def get_auth_router(
             )
         except HTTPException:
             raise
+        except WrongApplicationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This account cannot sign in to the requested application.",
+                },
+            ) from exc
         except OutlabsAuthException:
             raise
         except Exception as e:
@@ -854,6 +889,7 @@ def get_auth_router(
                 session,
                 user,
                 auth_method="invite_accept",
+                app=data.app,
             )
 
             obs.log_event("invite_accepted", user_id=str(user.id))
@@ -866,6 +902,14 @@ def get_auth_router(
             )
         except HTTPException:
             raise
+        except WrongApplicationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "wrong_application",
+                    "message": "This account cannot sign in to the requested application.",
+                },
+            ) from exc
         except OutlabsAuthException:
             raise
         except Exception as e:
