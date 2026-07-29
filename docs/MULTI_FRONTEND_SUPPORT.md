@@ -263,6 +263,15 @@ Standing posture: every rung is opt-in; single-frontend hosts pay nothing; and o
 - No library-owned email templates beyond the existing default composer, and no provider changes (DD-025 stands).
 - No change to hook signatures — but a canonical pipeline entry point is added so custom endpoints stop depending on hook-probing.
 
+## 10.1 Implementation notes — Slice 1 (2026-07-29)
+
+Slice 1 (profiles, resolution, mail) is implemented on `feat/dd-059-multi-frontend`: the `outlabs_auth.frontend` package (`FrontendProfile`/`FrontendRoutes`/`RedirectPolicy`, `FrontendProfileRegistry`, `FrontendProfileResolver` + `route_by_root_entity_slug`/`route_by_root_entity_type`), intent enrichment, invite-metadata population, `DefaultAuthMailComposer.from_profile`, and the dual-form `ComposedAuthMailService` with fail-closed `_select_composer`. Deviations and conscious simplifications to carry forward:
+
+- **`profile_id` on mail intents currently carries the *requested* key** (the Phase-3 `app` hint, once routers thread it), not the resolved profile — intents are frozen and resolution happens in the mail service after intent construction. The resolved key is persisted downstream from Slice 2 onward (challenge rows, sessions, audit); if this dual meaning proves confusing, rename the intent field to `requested_profile_key` before beta.
+- **Reset-confirmation fallback uses the declared default profile's composer** (link-free by construction, but default-branded) rather than a separately declared neutral notice profile. Acceptable v1; revisit if wrong-brand confirmations matter in practice.
+- **Enrichment cold-loads open sessions from an internal factory** (`UserService._session_factory`, wired by `OutlabsAuth` service construction) guarded by the request-scoped cache — hook signatures are frozen and receive no session, so the caller's UoW is not reachable from the send sites. Cost is at most one root-entity load per request per root. Hosts constructing `UserService` directly get `None` and enrichment degrades to `root_entity_id`-only.
+- `request_origin` on the resolution context is fed from `request_base_url` (the API origin, and `None` on the bundled forgot/invite paths) — evidence only, as specified.
+
 ## 11. Reconciliation record (r2)
 
 Independent second audit: [`MULTI_FRONTEND_SECOND_AUDIT.md`](./MULTI_FRONTEND_SECOND_AUDIT.md). Both audits converge on the core diagnosis and the profiles + host-resolver direction. Disposition of its material deltas:

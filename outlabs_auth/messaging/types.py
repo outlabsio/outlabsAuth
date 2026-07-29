@@ -29,11 +29,7 @@ class DeliveryRecipient:
 
     @property
     def display_name(self) -> str:
-        parts = [
-            part.strip()
-            for part in [self.first_name or "", self.last_name or ""]
-            if part and part.strip()
-        ]
+        parts = [part.strip() for part in [self.first_name or "", self.last_name or ""] if part and part.strip()]
         return " ".join(parts) or self.email
 
 
@@ -54,6 +50,10 @@ class AuthChallengeDeliveryIntent:
     redirect_url: Optional[str] = None
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 @dataclass(slots=True, frozen=True)

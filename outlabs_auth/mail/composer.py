@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from html import escape
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from outlabs_auth.mail.types import (
     AccessGrantedMailIntent,
@@ -14,6 +14,9 @@ from outlabs_auth.mail.types import (
     InviteMailIntent,
     PasswordResetConfirmationMailIntent,
 )
+
+if TYPE_CHECKING:
+    from outlabs_auth.frontend.types import FrontendProfile
 
 TokenUrlBuilder = Callable[[str], str]
 SimpleUrlBuilder = Callable[[], str]
@@ -59,6 +62,35 @@ class DefaultAuthMailComposer(AuthMailComposer):
         self.password_reset_url_builder = password_reset_url_builder
         self.login_url_builder = login_url_builder
         self.support_email = support_email
+
+    @classmethod
+    def from_profile(cls, profile: "FrontendProfile") -> "DefaultAuthMailComposer":
+        """
+        Build a composer whose URLs and branding come from a ``FrontendProfile``.
+
+        The builders render the profile's declared route templates (both token
+        placements first-class). A profile whose invite/reset/login route is
+        ``None`` yields a builder that raises ``FrontendRouteUnsupportedError``
+        if invoked — the delivery layer fails closed before composing instead.
+        """
+        from outlabs_auth.frontend.types import FrontendFlow
+
+        def _token_builder(flow: FrontendFlow) -> TokenUrlBuilder:
+            # render_url raises FrontendRouteUnsupportedError when the profile
+            # declares this flow unsupported (route None).
+            return lambda token: profile.render_url(flow, token)
+
+        login_url_builder: Optional[SimpleUrlBuilder] = None
+        if profile.routes.login is not None:
+            login_url_builder = lambda: profile.render_url(FrontendFlow.ACCESS_GRANTED)
+
+        return cls(
+            app_name=profile.app_name,
+            invite_url_builder=_token_builder(FrontendFlow.INVITE),
+            password_reset_url_builder=_token_builder(FrontendFlow.PASSWORD_RESET),
+            login_url_builder=login_url_builder,
+            support_email=profile.support_email,
+        )
 
     async def compose_invite(self, intent: InviteMailIntent) -> Optional[AuthMailMessage]:
         invite_url = self.invite_url_builder(intent.token)

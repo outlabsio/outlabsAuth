@@ -108,6 +108,10 @@ class InviteMailIntent:
     expires_at: Optional[datetime]
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -119,6 +123,10 @@ class ForgotPasswordMailIntent:
     expires_at: Optional[datetime]
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -129,6 +137,10 @@ class PasswordResetConfirmationMailIntent:
     changed_at: Optional[datetime]
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -138,6 +150,10 @@ class AccessGrantedMailIntent:
     recipient: MailRecipient
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 def coerce_metadata(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:

@@ -530,6 +530,9 @@ class OutlabsAuth:
             transactional_mail_service=self.transactional_mail_service,
             transactional_messaging_service=self.transactional_messaging_service,
         )
+        # Internal wiring for DD-059 intent enrichment (root-entity slug/type
+        # and invite metadata cold-loads through the request-scoped cache).
+        self.user_service._session_factory = self._session_factory
         self.role_service = RoleService(
             self.config,
             role_history_service=self.role_history_service,
