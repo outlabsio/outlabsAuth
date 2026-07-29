@@ -13,7 +13,7 @@ from uuid import UUID
 from fastapi import Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
@@ -23,6 +23,7 @@ from outlabs_auth.core.exceptions import (
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from outlabs_auth.frontend.flows import consume_send_next_url, consume_send_profile
 from outlabs_auth.mail.types import (
     AccessGrantedMailIntent,
     ForgotPasswordMailIntent,
@@ -38,7 +39,10 @@ from outlabs_auth.messaging.types import (
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
+from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
 from outlabs_auth.utils.validation import validate_email, validate_name, validate_phone
@@ -88,6 +92,11 @@ class UserService(BaseService[User]):
         self.user_audit_service = user_audit_service
         self.transactional_mail_service = transactional_mail_service
         self.transactional_messaging_service = transactional_messaging_service
+        # Internal session factory for intent enrichment (DD-059): root-entity
+        # slug/type and invite metadata cold-loads. Wired by OutlabsAuth at
+        # service construction; hosts that build UserService directly may leave
+        # it None — enrichment then degrades to root_entity_id-only, silently.
+        self._session_factory: Optional[Any] = None
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -205,8 +214,10 @@ class UserService(BaseService[User]):
             expires_at=expires_at,
             delivery_channel="email",
             redirect_url=redirect_url,
+            next_url=consume_send_next_url(),
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_messaging_service.send_auth_challenge(intent)
         return bool(getattr(result, "accepted", False))
@@ -238,8 +249,10 @@ class UserService(BaseService[User]):
             expires_at=expires_at,
             delivery_channel=delivery_channel,
             redirect_url=redirect_url,
+            next_url=consume_send_next_url(),
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_messaging_service.send_auth_challenge(intent)
         return bool(getattr(result, "accepted", False))
@@ -268,6 +281,7 @@ class UserService(BaseService[User]):
             delivery_channel=delivery_channel,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_messaging_service.send_auth_challenge(intent)
         return bool(getattr(result, "accepted", False))
@@ -349,12 +363,14 @@ class UserService(BaseService[User]):
         """Send an invite email via the configured transactional mail service."""
         if self.transactional_mail_service is None:
             return False
+        merged_metadata = await self._enrich_invite_metadata(user, self._merge_mail_metadata(metadata, extra_metadata))
         intent = InviteMailIntent(
             recipient=self._build_mail_recipient(user),
             token=token,
             expires_at=user.invite_token_expires,
             request_base_url=self._request_base_url(request),
-            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            metadata=merged_metadata,
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_mail_service.send_invite(intent)
         return bool(result.accepted)
@@ -377,6 +393,7 @@ class UserService(BaseService[User]):
             expires_at=user.password_reset_expires,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_mail_service.send_forgot_password(intent)
         return bool(result.accepted)
@@ -397,6 +414,7 @@ class UserService(BaseService[User]):
             changed_at=user.last_password_change,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_mail_service.send_password_reset_confirmation(intent)
         return bool(result.accepted)
@@ -416,6 +434,7 @@ class UserService(BaseService[User]):
             recipient=self._build_mail_recipient(user),
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
+            **await self._frontend_context_fields(user),
         )
         result = await self.transactional_mail_service.send_access_granted(intent)
         return bool(result.accepted)
@@ -1625,6 +1644,146 @@ class UserService(BaseService[User]):
             phone=getattr(user, "phone", None),
             phone_verified=bool(getattr(user, "phone_verified", False)),
         )
+
+    async def _frontend_context_fields(self, user: User) -> Dict[str, Optional[str]]:
+        """
+        Root-entity id/slug/type for intent enrichment (DD-059).
+
+        The id rides on the user row; slug/type come from the root Entity row
+        via the request-scoped cache — roots are few and effectively immutable,
+        so steady-state cost is ~zero and a cold load happens at most once per
+        request per root. Without an internal session factory, slug/type stay
+        None (resolvers that need them fail closed rather than guess).
+        """
+        # profile_id: the request-scoped profile key stashed by the bundled
+        # routers (requested key on forgot-password; resolved key on challenge
+        # flows). Consume-once; None when no router stashed anything.
+        profile_id = consume_send_profile()
+        root_entity_id = getattr(user, "root_entity_id", None)
+        if root_entity_id is None:
+            return {
+                "root_entity_id": None,
+                "root_entity_slug": None,
+                "root_entity_type": None,
+                "profile_id": profile_id,
+            }
+        slug, entity_type = await self._load_root_context_cached(root_entity_id)
+        return {
+            "root_entity_id": str(root_entity_id),
+            "root_entity_slug": slug,
+            "root_entity_type": entity_type,
+            "profile_id": profile_id,
+        }
+
+    async def _load_root_context_cached(
+        self, root_entity_id: UUID
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Root-entity slug/type as plain strings.
+
+        Cached as VALUES, never ORM instances: the request cache can outlive
+        the session that loaded an Entity (post-commit attribute expiry;
+        shared-task test transports), and a detached instance raises on
+        attribute access.
+        """
+        key = ("frontend_root", root_entity_id)
+        cached = request_cache.get(key)
+        if isinstance(cached, tuple):
+            return cast("tuple[Optional[str], Optional[str]]", cached)
+        session_factory = self._session_factory
+        if session_factory is None:
+            return None, None
+
+        async def loader() -> tuple[Optional[str], Optional[str]]:
+            async with session_factory() as session:
+                entity = await session.get(Entity, root_entity_id)
+                if entity is None:
+                    return None, None
+                return entity.slug, entity.entity_type
+
+        return cast(
+            "tuple[Optional[str], Optional[str]]",
+            await request_cache.get_or_load(key, loader),
+        )
+
+    async def _enrich_invite_metadata(self, user: User, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Populate the invite metadata the default composer reads (DD-059).
+
+        ``target_entity_name`` / ``role_names`` come from the user's entity
+        membership (or direct role assignments on SimpleRBAC), and
+        ``inviter_email`` from the inviting user — the library persisted all
+        of this at invite time but never produced it for the composer. Host-
+        supplied metadata keys always win. Without an internal session factory
+        the metadata is left untouched (previous behavior).
+        """
+        wanted = {
+            "target_entity_name",
+            "target_entity_id",
+            "target_entity_type",
+            "role_names",
+            "inviter_email",
+            "inviter_user_id",
+        }
+        missing = wanted - metadata.keys()
+        if not missing or self._session_factory is None:
+            return metadata
+
+        enriched = dict(metadata)
+        async with self._session_factory() as session:
+            if missing & {"target_entity_name", "target_entity_id", "target_entity_type", "role_names"}:
+                membership_stmt = (
+                    select(EntityMembership)
+                    .where(
+                        cast(Any, EntityMembership.user_id) == user.id,
+                        cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE.value,
+                    )
+                    .options(
+                        # entity is many-to-one (joinedload is fine); roles is a
+                        # collection — selectinload keeps LIMIT 1 correct and the
+                        # full role set loaded (joinedload + LIMIT truncates it).
+                        joinedload(cast(Any, EntityMembership.entity)),
+                        selectinload(cast(Any, EntityMembership.roles)),
+                    )
+                    .order_by(cast(Any, EntityMembership.created_at).desc())
+                    .limit(1)
+                )
+                membership_result = await session.execute(membership_stmt)
+                membership = membership_result.scalars().first()
+                if membership is not None:
+                    entity = membership.entity
+                    if entity is not None:
+                        enriched.setdefault("target_entity_name", entity.display_name or entity.name)
+                        enriched.setdefault("target_entity_id", str(membership.entity_id))
+                        enriched.setdefault("target_entity_type", entity.entity_type)
+                    role_names = sorted(set(membership.get_role_names()))
+                    if role_names:
+                        enriched.setdefault("role_names", role_names)
+                else:
+                    direct_role_stmt = (
+                        select(cast(Any, Role.name))
+                        .join(
+                            UserRoleMembership,
+                            cast(Any, UserRoleMembership.role_id) == cast(Any, Role.id),
+                        )
+                        .where(
+                            cast(Any, UserRoleMembership.user_id) == user.id,
+                            cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE.value,
+                        )
+                    )
+                    direct_role_result = await session.execute(direct_role_stmt)
+                    direct_names = sorted({str(name) for name in direct_role_result.scalars().all()})
+                    if direct_names:
+                        enriched.setdefault("role_names", direct_names)
+
+            if missing & {"inviter_email", "inviter_user_id"}:
+                invited_by_id = getattr(user, "invited_by_id", None)
+                if invited_by_id is not None:
+                    inviter = await session.get(User, invited_by_id)
+                    if inviter is not None:
+                        enriched.setdefault("inviter_email", inviter.email)
+                        enriched.setdefault("inviter_user_id", str(inviter.id))
+
+        return enriched
 
     @staticmethod
     def _request_base_url(request: Optional[Request]) -> Optional[str]:

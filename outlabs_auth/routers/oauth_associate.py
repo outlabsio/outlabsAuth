@@ -15,9 +15,19 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
-from outlabs_auth.routers.oauth_state_store import consume_oauth_state, issue_oauth_state
+from outlabs_auth.routers.oauth import (
+    _state_app,
+    resolve_frontend_targets,
+    validate_frontend_app,
+)
+from outlabs_auth.routers.oauth_state_store import (
+    consume_oauth_state,
+    issue_oauth_state,
+    oauth_callback_route_name,
+)
 from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse, SocialAccountResponse
 
@@ -90,7 +100,7 @@ def get_oauth_associate_router(
         verified=requires_verification,
     )
 
-    callback_route_name = f"oauth-associate:{oauth_client.name}.callback"
+    callback_route_name = oauth_callback_route_name("oauth-associate", oauth_client.name, prefix)
 
     if redirect_url is not None:
         oauth2_authorize_callback = OAuth2AuthorizeCallback(
@@ -115,8 +125,17 @@ def get_oauth_associate_router(
         session: AsyncSession = Depends(auth.uow),
         auth_context=Depends(get_current_user),
         scopes: list[str] = Query(None, description="OAuth scopes to request"),
+        app: Optional[str] = Query(
+            default=None,
+            max_length=64,
+            description=(
+                "Registered frontend profile key the linking flow should land "
+                "on (DD-059). A key, never a URL."
+            ),
+        ),
     ) -> OAuthAuthorizeResponse:
         user_id = auth_context.get("user_id")
+        app_key = validate_frontend_app(auth, app, flow=FrontendFlow.OAUTH_ASSOCIATE)
 
         if redirect_url is not None:
             authorize_redirect_url = redirect_url
@@ -124,6 +143,8 @@ def get_oauth_associate_router(
             authorize_redirect_url = str(request.url_for(callback_route_name))
 
         state_data = {"sub": user_id}
+        if app_key:
+            state_data["app"] = app_key
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
         try:
             user_uuid = UUID(str(user_id))
@@ -139,6 +160,7 @@ def get_oauth_associate_router(
             provider=oauth_client.name,
             flow="associate",
             user_id=user_uuid,
+            app=app_key,
             cookie_secure=cookie_secure,
         )
 
@@ -199,6 +221,14 @@ def get_oauth_associate_router(
                 detail="Invalid authenticated user ID",
             )
 
+        # The app claim rode inside the SIGNED state, so it is trusted here:
+        # resolve the bound profile's association landing (DD-059).
+        state_app = _state_app(state_data)
+        profile_success_url, _profile_error_url = resolve_frontend_targets(
+            auth, state_app, flow=FrontendFlow.OAUTH_ASSOCIATE
+        )
+        effective_success_url = profile_success_url or success_redirect_url
+
         await consume_oauth_state(
             session=session,
             request=request,
@@ -207,6 +237,7 @@ def get_oauth_associate_router(
             provider=oauth_client.name,
             flow="associate",
             expected_user_id=user_uuid,
+            app=state_app,
         )
 
         user_info = await get_oauth_user_info(oauth_client, token)
@@ -255,10 +286,10 @@ def get_oauth_associate_router(
             _append_auth_method(user, oauth_client.name)
             await session.flush()
             await session.commit()
-            if success_redirect_url:
+            if effective_success_url:
                 return RedirectResponse(
                     url=_build_success_redirect(
-                        success_redirect_url, provider=oauth_client.name
+                        effective_success_url, provider=oauth_client.name
                     ),
                     status_code=status.HTTP_302_FOUND,
                 )
@@ -313,10 +344,10 @@ def get_oauth_associate_router(
         # OAuth callback is GET; commit explicitly before read-method rollback.
         await session.commit()
 
-        if success_redirect_url:
+        if effective_success_url:
             return RedirectResponse(
                 url=_build_success_redirect(
-                    success_redirect_url, provider=oauth_client.name
+                    effective_success_url, provider=oauth_client.name
                 ),
                 status_code=status.HTTP_302_FOUND,
             )

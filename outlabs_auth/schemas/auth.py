@@ -35,6 +35,15 @@ class LoginRequest(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key this sign-in is for (DD-059). "
+            "Sessions carry it as the azp claim; partitioned profiles reject "
+            "off-audience sign-ins with 403 wrong_application."
+        ),
+    )
 
 
 class LoginResponse(BaseModel):
@@ -44,6 +53,15 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds
+    next_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical post-authentication destination for passwordless "
+            "verifications (DD-059): validated server-side against the "
+            "resolved frontend profile at request time. None for password "
+            "logins and for challenges issued without frontend profiles."
+        ),
+    )
 
 
 class RegisterRequest(BaseModel):
@@ -74,6 +92,15 @@ class ForgotPasswordRequest(BaseModel):
     """Forgot password request schema."""
 
     email: EmailStr
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key naming the app this request came "
+            "from (DD-059). A key, never a URL; unknown keys fail closed at "
+            "delivery while the response stays opaque."
+        ),
+    )
 
 
 class ResetPasswordRequest(BaseModel):
@@ -87,10 +114,23 @@ class MagicLinkRequest(BaseModel):
     """Request a magic-link login email."""
 
     email: EmailStr
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key naming the app this request came "
+            "from (DD-059). A key, never a URL."
+        ),
+    )
     redirect_url: Optional[str] = Field(
         default=None,
         max_length=2048,
-        description="Optional host-owned redirect URL to include when building the email link.",
+        description=(
+            "Post-login return target. With frontend profiles configured it "
+            "must be a relative path or normalize into the resolved profile's "
+            "allowed origins (invalid targets fail closed); without profiles "
+            "it passes through unvalidated (deprecated compat behavior)."
+        ),
     )
 
 
@@ -116,10 +156,23 @@ class AccessCodeRequest(BaseModel):
             "whatsapp (default) or sms when phone is set."
         ),
     )
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key naming the app this request came "
+            "from (DD-059). A key, never a URL."
+        ),
+    )
     redirect_url: Optional[str] = Field(
         default=None,
         max_length=2048,
-        description="Optional host-owned redirect URL to include in the access-code email.",
+        description=(
+            "Post-login return target. With frontend profiles configured it "
+            "must be a relative path or normalize into the resolved profile's "
+            "allowed origins (invalid targets fail closed); without profiles "
+            "it passes through unvalidated (deprecated compat behavior)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -212,6 +265,14 @@ class AcceptInviteRequest(BaseModel):
 
     token: str
     new_password: str = Field(..., min_length=8, max_length=128)
+    app: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Registered frontend profile key the auto-login session is for "
+            "(DD-059). A key, never a URL."
+        ),
+    )
 
 
 class AuthConfigResponse(BaseModel):

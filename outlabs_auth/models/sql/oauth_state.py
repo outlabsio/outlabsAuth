@@ -69,6 +69,11 @@ class OAuthState(BaseModel, table=True):
         sa_column=Column(String(255), nullable=True),
         description="OpenID Connect nonce",
     )
+    profile_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(64), nullable=True),
+        description="Registered frontend profile key this flow was started for (DD-059)",
+    )
 
     # === Expiration ===
     expires_at: datetime = Field(

@@ -21,9 +21,18 @@ from outlabs_auth.core.exceptions import (
     InvalidInputError,
     OutlabsAuthException,
 )
+from outlabs_auth.frontend.errors import (
+    UnknownFrontendProfileError,
+    WrongApplicationError,
+)
+from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
-from outlabs_auth.routers.oauth_state_store import consume_oauth_state, issue_oauth_state
+from outlabs_auth.routers.oauth_state_store import (
+    consume_oauth_state,
+    issue_oauth_state,
+    oauth_callback_route_name,
+)
 from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
 from outlabs_auth.utils.validation import validate_email
@@ -105,7 +114,81 @@ def _build_error_redirect(base_url: str, *, error_code: str) -> str:
     return f"{base_url}{separator}{urlencode({'oauth_error': error_code})}"
 
 
+def _frontend_registry(auth: Any) -> Any:
+    resolver = getattr(auth, "frontend_resolver", None)
+    return getattr(resolver, "registry", None)
+
+
+def validate_frontend_app(auth: Any, app: Optional[str], *, flow: FrontendFlow) -> Optional[str]:
+    """
+    Validate a requested frontend profile key on an OAuth authorize call.
+
+    Authorize is developer-facing and not enumeration-sensitive, so unlike
+    the challenge endpoints a bad ``app`` fails loudly with a 400 instead of
+    an opaque no-op: an unknown key, a missing registry, or a profile that
+    declares no landing route for this flow are all wiring errors.
+    """
+    # Direct (non-HTTP) invocations of the endpoint leave the FastAPI Query
+    # sentinel in place of a value; treat anything that is not a real string
+    # as absent.
+    if not isinstance(app, str) or not app.strip():
+        return None
+    registry = _frontend_registry(auth)
+    if registry is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="app was supplied but no frontend profiles are configured",
+        )
+    try:
+        profile = registry.get(app)
+    except UnknownFrontendProfileError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown frontend profile {app!r}",
+        ) from None
+    if profile.route_for(flow) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Frontend profile {app!r} does not declare a landing route for {flow.value!r}",
+        )
+    return app
+
+
+def resolve_frontend_targets(
+    auth: Any, app: Optional[str], *, flow: FrontendFlow
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    (success_url, error_url) for a state-bound profile, or (None, None).
+
+    Called at callback time with the app claim recovered from the SIGNED
+    state token, so the value is trusted. A profile that disappeared from
+    the registry between authorize and callback degrades to the
+    construction-time URLs rather than failing the flow.
+    """
+    if not app:
+        return None, None
+    registry = _frontend_registry(auth)
+    if registry is None or app not in registry:
+        return None, None
+    profile = registry.get(app)
+    success_route = profile.route_for(flow)
+    success = f"{profile.primary_origin}{success_route}" if success_route else None
+    error_route = profile.routes.error_route_for(flow)
+    error = f"{profile.primary_origin}{error_route}" if error_route else None
+    return success, error
+
+
+def _state_app(state_payload: Any) -> Optional[str]:
+    """Extract the trusted app claim from a decoded state payload."""
+    if not isinstance(state_payload, dict):
+        return None
+    raw_app = state_payload.get("app")
+    return raw_app if isinstance(raw_app, str) and raw_app else None
+
+
 def _oauth_error_code(exc: BaseException) -> str:
+    if isinstance(exc, WrongApplicationError):
+        return "wrong_application"
     if isinstance(exc, HTTPException):
         detail = str(exc.detail or "")
         if "No account found" in detail:
@@ -149,7 +232,7 @@ def get_oauth_router(
 
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
-    callback_route_name = f"oauth:{oauth_client.name}.callback"
+    callback_route_name = oauth_callback_route_name("oauth", oauth_client.name, prefix)
 
     if redirect_url is not None:
         oauth2_authorize_callback = OAuth2AuthorizeCallback(
@@ -173,13 +256,24 @@ def get_oauth_router(
         response: Response,
         session: AsyncSession = Depends(auth.uow),
         scopes: list[str] = Query(None, description="OAuth scopes to request"),
+        app: Optional[str] = Query(
+            default=None,
+            max_length=64,
+            description=(
+                "Registered frontend profile key this sign-in should land on "
+                "(DD-059). A key, never a URL; the callback resolves the "
+                "profile's declared success/error routes."
+            ),
+        ),
     ) -> OAuthAuthorizeResponse:
+        app_key = validate_frontend_app(auth, app, flow=FrontendFlow.OAUTH_LOGIN)
+
         if redirect_url is not None:
             authorize_redirect_url = redirect_url
         else:
             authorize_redirect_url = str(request.url_for(callback_route_name))
 
-        state_data: dict[str, str] = {}
+        state_data: dict[str, str] = {"app": app_key} if app_key else {}
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
         await issue_oauth_state(
             session=session,
@@ -187,6 +281,7 @@ def get_oauth_router(
             state=state,
             provider=oauth_client.name,
             flow="login",
+            app=app_key,
             cookie_secure=cookie_secure,
         )
 
@@ -250,12 +345,15 @@ def get_oauth_router(
             oauth2_authorize_callback
         ),
     ) -> Union[dict[str, Any], RedirectResponse]:
+        effective_success_url = success_redirect_url
+        effective_error_url = error_redirect_url
+
         def _maybe_error_redirect(exc: BaseException) -> RedirectResponse:
-            if not error_redirect_url:
+            if not effective_error_url:
                 raise exc
             return RedirectResponse(
                 url=_build_error_redirect(
-                    error_redirect_url, error_code=_oauth_error_code(exc)
+                    effective_error_url, error_code=_oauth_error_code(exc)
                 ),
                 status_code=status.HTTP_302_FOUND,
             )
@@ -263,14 +361,26 @@ def get_oauth_router(
         token, state = access_token_state
 
         try:
-            decode_state_token(state, state_secret)
+            state_payload = decode_state_token(state, state_secret)
         except Exception:
+            # The state cannot be trusted, so neither can any app claim in
+            # it: this error lands on the construction-time URL only.
             return _maybe_error_redirect(
                 HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid OAuth state token",
                 )
             )
+
+        # The app claim rode inside the SIGNED state, so once decoded it is
+        # trusted (DD-059): upgrade the landing targets to the bound profile
+        # before any failure below can redirect.
+        state_app = _state_app(state_payload)
+        profile_success_url, profile_error_url = resolve_frontend_targets(
+            auth, state_app, flow=FrontendFlow.OAUTH_LOGIN
+        )
+        effective_success_url = profile_success_url or effective_success_url
+        effective_error_url = profile_error_url or effective_error_url
 
         try:
             await consume_oauth_state(
@@ -280,6 +390,7 @@ def get_oauth_router(
                 state=state,
                 provider=oauth_client.name,
                 flow="login",
+                app=state_app,
             )
 
             user_info = await get_oauth_user_info(oauth_client, token)
@@ -300,6 +411,8 @@ def get_oauth_router(
                 request=request,
             )
 
+            # DD-059: the sign-in gate runs inside create_tokens_for_user with
+            # the state-bound profile; sessions carry it as azp.
             tokens = await auth.auth_service.create_tokens_for_user(
                 session,
                 user,
@@ -307,6 +420,7 @@ def get_oauth_router(
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
                 auth_method=f"oauth:{oauth_client.name}",
+                app=state_app,
             )
 
             await auth.user_service.on_after_login(user, request)
@@ -315,13 +429,13 @@ def get_oauth_router(
             # OAuth callback is a GET endpoint; commit explicitly before the UoW
             # middleware's read-method rollback step runs.
             await session.commit()
-        except (HTTPException, OutlabsAuthException) as exc:
+        except (HTTPException, OutlabsAuthException, WrongApplicationError) as exc:
             return _maybe_error_redirect(exc)
 
-        token_payload = tokens.to_dict()
-        if success_redirect_url:
+        token_payload = cast(dict[str, Any], tokens.to_dict())
+        if effective_success_url:
             return RedirectResponse(
-                url=_build_token_redirect(success_redirect_url, token_payload),
+                url=_build_token_redirect(effective_success_url, token_payload),
                 status_code=status.HTTP_302_FOUND,
             )
         return token_payload

@@ -29,11 +29,7 @@ class DeliveryRecipient:
 
     @property
     def display_name(self) -> str:
-        parts = [
-            part.strip()
-            for part in [self.first_name or "", self.last_name or ""]
-            if part and part.strip()
-        ]
+        parts = [part.strip() for part in [self.first_name or "", self.last_name or ""] if part and part.strip()]
         return " ".join(parts) or self.email
 
 
@@ -51,9 +47,18 @@ class AuthChallengeDeliveryIntent:
     secret: str
     expires_at: Optional[datetime]
     delivery_channel: DeliveryChannelName = "email"
+    #: Raw caller-supplied redirect (compat window). When frontend profiles
+    #: are configured this equals the validated ``next_url``; prefer that.
     redirect_url: Optional[str] = None
+    #: Canonical post-verification destination, validated against the resolved
+    #: profile's redirect policy at request time (DD-059 slice 2).
+    next_url: Optional[str] = None
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    root_entity_id: Optional[str] = None
+    root_entity_slug: Optional[str] = None
+    root_entity_type: Optional[str] = None
+    profile_id: Optional[str] = None
 
 
 @dataclass(slots=True, frozen=True)

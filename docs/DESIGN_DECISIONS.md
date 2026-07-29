@@ -3733,6 +3733,54 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 
 ---
 
+## DD-059: Multi-Frontend Support via App Profiles and a Host-Supplied Audience Resolver
+
+**Date**: 2026-07-29
+**Status**: Proposed, r2 (audit + design complete; revised same day after an independent second audit — reconciliation in [`MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md) §11 and [`MULTI_FRONTEND_SECOND_AUDIT.md`](./MULTI_FRONTEND_SECOND_AUDIT.md); implementation not started)
+**Deciders**: Maintainer
+**Context**: One FastAPI host can serve several frontends off a single outlabsAuth mount, and auth mail / redirects must land on the frontend the recipient's account belongs to. The library cannot express this: mail URL builders are `Callable[[str], str]` frozen at construction (`mail/composer.py`), `ComposedAuthMailService` holds one composer for all four sends, OAuth redirect URLs are router-constructor parameters, and the challenge seam's client-supplied `redirect_url` is an unvalidated pass-through. Live consequences: diverse-data-api shipped a host subclass (`AudienceRoutingAuthMailService`, d09eb10) that re-queries per send for root-entity data the library had in hand and still ships wrong per-audience paths; DiverseAPI-postgres *lost* the per-audience mail routing its legacy branch had (`AGENT_PORTAL_URL` is configured but unread — agent invites land on the admin console, which then rejects agents); qdarte-intake bypasses the composer entirely for its three origins. Full audit: [`docs/MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md).
+
+### Options Considered
+
+1. **Pass context to the URL builders** (smallest change)
+   - Pros: per-recipient URLs with one signature change.
+   - Cons: branding (app_name/subject/support) stays frozen per composer; breaks or complicates existing builder callables; no redirect allowlist; challenge/OAuth seams untouched. The composer already receives full intents — this is the right information at the wrong layer.
+2. **App profiles + host-supplied audience resolver** (chosen)
+   - Pros: additive (single-composer form unchanged); per-audience URLs, paths, and branding; deletes the host workaround's subclass, per-send DB lookups, and broad exception fallback; profile origins double as a `redirect_url` allowlist; config-level, per the DD-025 philosophy.
+   - Cons: one more injection surface; resolver remains host code (but pure, sync, unit-testable); library owns the resolver-failure → default-profile policy.
+3. **First-class application/client registry, OAuth-provider style**
+   - Pros: dynamic registration, third-party clients, per-client token audiences.
+   - Cons: migration for every consumer including SimpleRBAC hosts; admin CRUD + UI surface; second identity axis overlapping the entity tree. All known frontends are first-party and deploy-time-static. Deferred with explicit revisit triggers (third-party clients, per-client audiences, runtime-provisioned frontends).
+4. **Do nothing; document the host-side pattern**
+   - Cons: three hosts already diverged three ways and shipped two dead-link defect classes; one host regressed behavior it had pre-adoption; email is the least-observable channel (the dead links went months undetected). Rejected.
+
+### Decision
+
+- **A flow-wide `FrontendProfile` registry** — immutable, declared at construction: stable non-secret key, branding, registered public origins, **typed route templates per flow** (both token placements first-class; unsupported flows explicitly `None`), redirect policy, `accepted_audiences`. One concept spans mail, challenges, OAuth, and session provenance — not a mail profile with attachments.
+- **One resolution component, resolved once, persisted everywhere**: a host-supplied resolver (async-capable, may query within the caller's session, returns only a registered key) over typed context — flow kind, recipient, `root_entity_id/slug/type`, actor/target entity, and the requested profile key (`app`, a registered key, never a URL) for frontend-originated flows. The resolved `profile_id` is copied onto intents, challenge rows, OAuth state, session records, and audit events; downstream never re-resolves. The selector is a standalone component consumed by `ComposedAuthMailService` and equally callable from host-custom mail services and facade endpoints — one canonical pipeline entry point, so custom endpoints stop probing hook surfaces (see the RC dead-path finding).
+- **Fail closed** (r2 reversal of r1): unknown profile, unsupported flow, resolver error, or user/profile mismatch → no send, structured delivery-failure + audit record; outward responses on enumeration-resistant endpoints stay opaque. A declared default profile is for genuinely unambiguous contexts only, never an exception fallback; post-change security notices may fall back to a neutral, link-free notification. Matches the library's fail-closed precedent (`token_blacklist_failure_mode`, `api_key_rate_limit_failure_mode`).
+- **Challenges carry registered destinations**: magic-link/access-code requests name a registered `app` plus a relative-or-allowlisted return target, validated at request time; `profile_id` + canonical target persist on the challenge row (schema migration), and **verification returns the canonical `next_url`** so frontends stop navigating from an untrusted URL-query copy. The raw pass-through `redirect_url` is retired after a compatibility window.
+- **OAuth becomes profile-bound state, not one-router-per-frontend**: one provider callback per host/provider; `/authorize` accepts a registered profile key; signed + persisted state binds `profile_id` + a unique nonce; cookie binding supports concurrent flows; the callback resolves success/error destinations from the bound profile. Applied to login **and association**; prefix-aware route names and exporting `get_oauth_router` land as hygiene; tests cover concurrent same-provider flows.
+- **Root entity is an input, not the key**: audience := root entity would misroute two of four audited hosts (diverse-data-api routes by root slug; DiverseAPI-postgres needs canonical internal slug + explicit external types with `diverse-general`/null/unknown → unresolved; qdarte-intake routes by flow with no roots; creditos-del-norte's planned shared-root hierarchy needs role/membership inputs). The resolver owns the mapping; `MembershipService` root pinning is unchanged.
+- **Sessions carry `azp` provenance; sign-in is audience-gated**: minted tokens/sessions record the profile key as an `azp`-style claim bound to the refresh/session row and re-validated at rotation; `aud` stays the platform/resource audience (**no per-profile `aud`**). Every minting path (password login, magic-link verify, access-code verify, OAuth callback, invite-accept auto-login, refresh) enforces the profile's `accepted_audiences` server-side with a stable `wrong_application` rejection; default (no list) is the shared/SSO mode — partitioned and shared frontends are both plain configuration. Honest classification: this is level-2 separation — defense in depth, consistency, and audit signal on top of RBAC/DD-056 (which remain the data boundary), not credential isolation; endpoint families declared app-scoped get **enforced** `azp` checks, and anything stronger is separate deployments. Pulls the audience/provenance slice of option C forward; registry machinery stays deferred.
+- **Scope boundary, stated first-class**: one deployment = one platform (one user pool) serving N first-party frontends, each either partitioned (rejects off-audience sign-ins) or shared — both modes configuration; multi-frontend works both ways and is the default documented integration shape (single frontend = one profile). Running several unrelated SaaS products off one deployment stays out of scope; genuinely distinct products get separate deployments. **Q-004** records the open product decision on Referral Collection; its shared-mount profile is transitional until decided.
+- **Shipping shape**: four contract layers delivered as vertical slices per flow, with explicit schema migrations (challenge `profile_id`/target columns; session/token `azp`) — not characterized as purely additive. Library API compatibility is preserved (single-composer construction unchanged; **hook signatures do not change**), and invite intents finally populate their advertised `target_entity_name` / `inviter_email` / `role_names` metadata.
+
+### Consequences
+
+- **Positive**: diverse-data-api's workaround reduces to two profiles + a slug resolver (with RC's actual routes: `/auth/sign-in`, no invite); DiverseAPI-postgres restores its lost agent-portal routing and replaces two drifting client-side blocklists with server policy; both token placements become first-class, closing a shipped dead-link defect class; redirects become registered destinations with a verification-time canonical `next_url`.
+- **Positive**: the Diverse requirement — agent users must not be able to sign in to the internal admin console despite sharing the user table — becomes server-enforced policy driven by the same classification that routes mail, with honest level-2 semantics (defense in depth over RBAC, not credential isolation).
+- **Positive**: fail-closed delivery surfaces silent breakage instead of standardizing wrong-brand mail — the class of failure that let RC reset mail die unnoticed.
+- **Negative**: schema migrations (challenge, session/token rows) and host rewiring for custom mail services; DiverseAPI-postgres must bump from 0.1.0a23 and adapt `LoggedAuthMailService`; per-frontend route-contract tests become an obligation.
+- **Negative**: the sign-in gate is only as complete as its coverage — every current and future token-minting path must consult it or it is porous, a standing review obligation on new auth flows.
+- **Neutral**: challenge-mail composition stays host-owned (DD-058) — the resolution component and enriched context are what the library owes that seam.
+
+### Related Decisions
+
+- DD-024 (passwordless), DD-025 (no built-in email/SMS), DD-043 (OAuth router factory), DD-056 (tenant isolation / root pinning), DD-058 (host-owned challenge delivery)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3747,6 +3795,11 @@ Track questions that need decisions:
 **Status**: Open
 **Proposed Decision**: v1.1 or v2.0
 **Needs Decision By**: Week 4
+
+### Q-004: Does Referral Collection stay on the shared Diverse auth mount, or graduate to its own deployment?
+**Status**: Open (raised by the DD-059 second audit, 2026-07-29)
+**Context**: RC is customer-facing with its own domain, brand, and bespoke portal endpoints; the host's own source calls it "a different product". Sharing the mount means one user namespace (one email cannot hold both an agent and an RC customer account, per root pinning), shared keys, shared admin plane, and shared incident radius. The second audit recommends a separate deployment; the shared-mount profile treatment is labeled transitional until this is decided.
+**Proposed Decision**: separate deployment when RC graduates to a real standalone product; explicit maintainer sign-off required to keep it permanently on the shared mount.
 
 ---
 
@@ -3774,8 +3827,10 @@ Track questions that need decisions:
 | 2026-03-17 | **DD-055** | **Accepted (Entity Authorization Remains Role-Only)** |
 | 2026-06-10 | **DD-056** | **Accepted (Tenant Isolation on User Routes; System-Wide Roles Grant Global Scope)** |
 | 2026-06-26 | **DD-057** | **Proposed (Cache Backend Abstraction — Redis-optional permission caching)** |
+| 2026-07-16 | **DD-058** | **Accepted (WhatsApp as Host-Owned Delivery Channel for Auth Challenges)** |
+| 2026-07-29 | **DD-059** | **Proposed (Multi-Frontend Support — Frontend Profiles + Audience Resolver); r2 same day after independent second audit (fail-closed, flow-wide profile, profile-bound OAuth state, azp provenance, Q-004)** |
 
 ---
 
-**Last Updated**: 2026-06-26 (DD-057 proposed: cache backend abstraction — Redis-optional in-process permission caching; implementation tracked in `NEXT_PASS_BACKLOG.md`)
+**Last Updated**: 2026-07-29 (DD-059 r2: multi-frontend support via flow-wide frontend profiles and a host-supplied resolver, reconciled with the independent second audit — see `MULTI_FRONTEND_SUPPORT.md` §11; implementation not started)
 **Next Review**: After testing all examples

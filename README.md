@@ -6,6 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Stage: Alpha](https://img.shields.io/badge/stage-alpha-red.svg)](#status)
 [![PyPI](https://img.shields.io/pypi/v/outlabs-auth.svg)](https://pypi.org/project/outlabs-auth/)
+[![Source](https://img.shields.io/badge/source-GitHub-black.svg)](https://github.com/outlabsio/outlabsAuth)
 
 > **Alpha** — packaged on PyPI; the public API is still settling before 1.0.
 
