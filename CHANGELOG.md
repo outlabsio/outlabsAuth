@@ -7,7 +7,52 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0a25] - 2026-07-29
+
 ### Added
+
+- **Multi-frontend support (DD-059)** — one mount serving N first-party frontends as a designed-in
+  concept. New `outlabs_auth.frontend` package: immutable flow-wide `FrontendProfile` /
+  `FrontendRoutes` / `RedirectPolicy`, a startup-validated `FrontendProfileRegistry`, and the
+  fail-closed `FrontendProfileResolver` (host resolver sync or async; registered keys only) with
+  `route_by_root_entity_slug` / `route_by_root_entity_type` helpers.
+- **Multi-frontend transactional mail** — `ComposedAuthMailService(composers=/resolver=/default=)`
+  selects a per-recipient composer per send; `DefaultAuthMailComposer.from_profile()`; intents carry
+  `root_entity_id/slug/type` + `profile_id`; invite metadata (`target_entity_name`,
+  `inviter_email`, `role_names`) is finally populated by the library. Single-composer construction
+  is behavior-identical.
+- **Challenge flows resolve profiles** — optional `app` (registered profile key, never a URL) on
+  forgot-password / magic-link / access-code requests; request-time resolution fails closed on
+  unknown keys, identity mismatches, disallowed return targets, and magic-link profiles with no
+  landing route; verification returns the canonical `next_url` on `LoginResponse`.
+- **Profile-bound OAuth state** (login and association) — `app` on `/authorize`, carried in the
+  signed state and persisted; per-profile binding cookies so concurrent same-provider flows
+  coexist; callbacks resolve the bound profile's success/error landings; prefix-aware callback
+  route names; `get_oauth_router` / `get_oauth_associate_router` exported from
+  `outlabs_auth.routers`.
+- **azp session provenance + audience-gated sign-in** — sessions carry the profile key as an `azp`
+  claim (tokens + refresh rows), preserved and re-gated at rotation; `enforce_sign_in_gate` runs at
+  every minting path; stable 403 `wrong_application`; `require_app()` dependency for app-scoped
+  endpoint families. `aud` semantics unchanged.
+- **Cross-repo route-contract helpers** (`outlabs_auth.frontend.contract`) — assert a profile's
+  declared route templates against a frontend's actual route tree (Nuxt, TanStack flat-file, and
+  route-constants adapters), plus reference contract tests for the known sibling frontends.
+
+### Database migrations
+
+- `20260729_0021` — `auth_challenges.profile_id` + `auth_challenges.next_url` (nullable).
+- `20260729_0022` — `oauth_states.profile_id` (nullable).
+- `20260729_0023` — `refresh_tokens.azp` (nullable).
+
+### Fixed
+
+- Request-scoped enrichment caches plain values instead of live ORM instances
+  (`DetachedInstanceError` once the loading session closed).
+- README restored the GitHub source link required by the release-packaging checks.
+
+### Also in this release — work that was pending under Unreleased
 
 - **Implementer handbook (`docs-library/`)** — reading paths, Introduction / Choosing a Preset,
   Getting Started, routers, configuration, OAuth, sessions/audit, passwordless, roles/permissions,
