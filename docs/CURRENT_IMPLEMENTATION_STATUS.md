@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-07-17
+**Updated**: 2026-07-29
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -162,6 +162,24 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   being recalculated again during member-user projection.
 - Checked-in query-budget coverage now includes a non-superuser `/v1/roles/`
   scope path alongside the existing superuser/admin route budgets.
+
+### Two-Phase Authenticated-Context Authorization
+
+- `AuthDeps.authorize_authenticated(...)` is the supported operation for
+  authorizing a result already produced by Outlabs Auth. It does not run a
+  credential backend or record API-key usage.
+- `AuthDeps.authenticated_authorization_requires_session(...)` lets
+  infrastructure consumers acquire a database session only for policy paths
+  that need one, without interpreting auth metadata themselves.
+- `require_permission(...)` now prefers the request-bound authentication result
+  before the warm snapshot path. A route that composes `require_auth()` with
+  one or many permission checks therefore records API-key usage once for the
+  request.
+- Permission-only routes retain the warm snapshot fast path and its one usage
+  event.
+- The implementation is locally green but remains unreleased until the paired
+  TaskQ adapter and installed-artifact conformance matrix pass. See
+  [`TASKQ_AUTHENTICATED_CONTEXT_PLAN.md`](./TASKQ_AUTHENTICATED_CONTEXT_PLAN.md).
 
 ## Accepted Implementation Nuances
 

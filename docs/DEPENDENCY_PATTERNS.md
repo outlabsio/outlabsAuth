@@ -186,6 +186,41 @@ async def delete_user(
 It also accepts `allow_entity_context_header` and a `resource_context_provider`
 callable for supplying ABAC resource attributes.
 
+#### Two-phase infrastructure consumers
+
+Ordinary routes should keep using `require_permission(...)`. A component that
+must authenticate once and then authorize several resources in the same HTTP
+request can use the supported two-phase operation:
+
+```python
+ctx = await auth.deps.require_auth()(request=request, session=auth_session)
+
+if auth.deps.authenticated_authorization_requires_session(ctx):
+    async with auth_session_factory() as policy_session:
+        await auth.deps.authorize_authenticated(
+            request,
+            ctx,
+            "queue_a:run",
+            "queue_b:run",
+            require_all=True,
+            session=policy_session,
+        )
+else:
+    await auth.deps.authorize_authenticated(
+        request,
+        ctx,
+        "queue_a:run",
+        "queue_b:run",
+        require_all=True,
+    )
+```
+
+`authorize_authenticated(...)` never authenticates credentials or records
+API-key usage. It applies the same user, API-key, integration-principal,
+entity/tree, ABAC, and service-token rules as `require_permission(...)`.
+Consumers must treat `ctx` as auth-owned and must not authorize by inspecting
+its raw scope metadata.
+
 #### require_source
 
 Takes a single source string, not a list:

@@ -1180,6 +1180,11 @@ Key `AuthDeps` methods:
   `entity_id` path or query param, and from the `X-Entity-Context` header only when
   `allow_entity_context_header=True` (the header is untrusted by default; see
   `trust_resource_context_header`).
+- `authorize_authenticated(request, auth_result, *permissions, ...)` — enforce
+  the same policy against an auth-owned result without another credential or
+  API-key usage pass; two-phase infrastructure consumers use
+  `authenticated_authorization_requires_session(...)` to acquire a policy
+  session lazily.
 - `require_in_entity(*permissions, entity_id)` — entity-scoped check
 - `require_superuser()` — superuser gate (DD-051)
 

@@ -1,6 +1,6 @@
 # Next Pass Backlog
 
-**Updated**: 2026-07-17
+**Updated**: 2026-07-29
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
@@ -123,6 +123,18 @@ Known next-pass work:
   - application workers start only after that succeeds
 
 ## Runtime Performance Follow-Ups
+
+### Two-phase authenticated-context authorization — IMPLEMENTED, RELEASE PENDING
+
+The auth-owned implementation and regression matrix are complete locally.
+`authorize_authenticated(...)` preserves the existing policy engine without a
+second credential or usage-accounting pass, and the ordinary permission-only
+snapshot path is unchanged.
+
+The remaining work is cross-package: TaskQ must adopt the supported operation,
+the two installed artifacts must pass the joint accounting/denial matrix, and an
+exact release must be owner-authorized. See
+[`TASKQ_AUTHENTICATED_CONTEXT_PLAN.md`](./TASKQ_AUTHENTICATED_CONTEXT_PLAN.md).
 
 First data-plane auth slices implemented on 2026-04-20:
 

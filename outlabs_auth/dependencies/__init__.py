@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import logging
 from inspect import Parameter, Signature
-from typing import Any, Callable, Dict, Optional, Sequence, cast
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence, cast
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -88,7 +88,7 @@ class AuthDeps:
     def _permission_set_allows(
         self,
         required_permission: str,
-        granted_permissions: Sequence[str],
+        granted_permissions: Iterable[str],
     ) -> bool:
         permission_service = self.services.get("permission_service")
         normalized = {
@@ -119,7 +119,7 @@ class AuthDeps:
 
     @staticmethod
     def _api_key_header(request: Request) -> Optional[str]:
-        return request.headers.get("X-API-Key")
+        return cast(Optional[str], request.headers.get("X-API-Key"))
 
     @staticmethod
     def _snapshot_ip_allowed(snapshot: dict[str, Any], request: Request) -> bool:
@@ -282,11 +282,11 @@ class AuthDeps:
         self,
         *,
         auth_result: dict,
-        session: AsyncSession,
+        session: Any,
         entity_id: Optional[UUID],
         abac_enabled: bool,
         resource_context: Optional[dict],
-        env_context: Optional[dict],
+        env_context: Optional[Any],
     ) -> Callable[[str], Any]:
         """
         Return an async `check(permission) -> bool` that memoizes the user's
@@ -311,6 +311,7 @@ class AuthDeps:
             and permission_service is not None
             and user_id_raw is not None
             and hasattr(permission_service, "get_user_permissions")
+            and session is not None
         )
 
         # Parsed once, reused across permissions.
@@ -322,7 +323,7 @@ class AuthDeps:
                 fast_path_applicable = False
 
         superuser_shortcut = bool(user_obj and getattr(user_obj, "is_superuser", False))
-        cached_permissions: Optional[set] = None
+        cached_permissions: Optional[set[str]] = None
 
         async def _check(permission: str) -> bool:
             nonlocal cached_permissions
@@ -332,6 +333,9 @@ class AuthDeps:
                     return True
 
                 if cached_permissions is None:
+                    assert permission_service is not None
+                    assert session is not None
+                    assert user_id_uuid is not None
                     try:
                         fetched = await permission_service.get_user_permissions(
                             session,
@@ -366,11 +370,11 @@ class AuthDeps:
         self,
         *,
         auth_result: dict,
-        session: AsyncSession,
+        session: Any,
         permission: str,
         entity_id: Optional[UUID],
         resource_context: Optional[dict],
-        env_context: Optional[dict],
+        env_context: Optional[Any],
     ) -> bool:
         source = auth_result.get("source")
         permission_service = self.services.get("permission_service")
@@ -400,6 +404,11 @@ class AuthDeps:
             if not api_key_service.principal_scopes_allow_permission(principal_allowed_scopes, permission):
                 return False
             if entity_id is not None:
+                if session is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Database session not configured for auth dependencies",
+                    )
                 has_entity_access = await api_key_service.check_entity_access_with_tree(
                     session,
                     api_key,
@@ -412,6 +421,11 @@ class AuthDeps:
                 return True
 
             if getattr(getattr(permission_service, "config", None), "enable_abac", False):
+                if session is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Database session not configured for auth dependencies",
+                    )
                 if await permission_service.permission_has_conditions(session, permission):
                     return False
             return True
@@ -433,6 +447,11 @@ class AuthDeps:
 
         if permission_service is None:
             return False
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database session not configured for auth dependencies",
+            )
 
         abac_enabled = bool(
             getattr(getattr(permission_service, "config", None), "enable_abac", False)
@@ -540,7 +559,7 @@ class AuthDeps:
         if is_default:
             cached = getattr(request.state, "_outlabs_auth_result", None)
             if cached is not None:
-                return cached
+                return cast(dict[Any, Any], cached)
 
         # Short-circuit: if no backend sees anything that looks like credentials,
         # skip the full backend loop (avoids JWT decode setup, DB session work, etc.)
@@ -579,7 +598,7 @@ class AuthDeps:
                     if is_default:
                         request.state._outlabs_auth_result = result
 
-                    return result
+                    return cast(dict[Any, Any], result)
 
             except RateLimitError as exc:
                 raise self._rate_limit_http_exception(exc) from exc
@@ -645,6 +664,146 @@ class AuthDeps:
 
         return cast(Callable[..., Any], dependency)
 
+    def authenticated_authorization_requires_session(
+        self,
+        auth_result: dict,
+        *,
+        entity_id: Optional[UUID] = None,
+    ) -> bool:
+        """Whether this authenticated result needs a DB session to authorize.
+
+        Consumers may use this supported decision instead of inspecting auth
+        metadata themselves. The answer is deliberately conservative for user
+        and JWT identities. Service tokens are self-contained; integration
+        principals are self-contained only when neither entity traversal nor
+        ABAC policy evaluation is involved.
+        """
+        source = auth_result.get("source")
+        if source == "service_token":
+            return False
+
+        if source == "api_key" and auth_result.get("integration_principal_id"):
+            permission_service = self.services.get("permission_service")
+            abac_enabled = bool(
+                permission_service
+                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            )
+            return entity_id is not None or abac_enabled
+
+        return True
+
+    async def authorize_authenticated(
+        self,
+        request: Request,
+        auth_result: dict,
+        *permissions: str,
+        require_all: bool = False,
+        session: Optional[AsyncSession] = None,
+        entity_id: Optional[UUID] = None,
+        resource_context_provider: Optional[
+            Callable[[Request, AsyncSession, dict], Any]
+        ] = None,
+    ) -> dict:
+        """Authorize an auth-owned result without authenticating it again.
+
+        This operation never enters a credential backend or records API-key
+        usage. It is the supported boundary for two-phase consumers that
+        authenticate once and then authorize one or more resources.
+        """
+        if not auth_result:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+        if not permissions:
+            raise ValueError("At least one permission is required")
+
+        cached_auth_result = getattr(request.state, "_outlabs_auth_result", None)
+        if cached_auth_result is not None and cached_auth_result is not auth_result:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authenticated context does not match this request",
+            )
+
+        permission_service = self.services.get("permission_service")
+        abac_enabled = bool(
+            permission_service
+            and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+        )
+        if self.authenticated_authorization_requires_session(
+            auth_result,
+            entity_id=entity_id,
+        ) and session is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database session not configured for auth dependencies",
+            )
+
+        resource_context: Optional[dict] = None
+        env_context: Optional[Any] = None
+        if abac_enabled:
+            request_resource_context = getattr(request.state, "resource_context", None)
+            request_resource_context = (
+                request_resource_context
+                if isinstance(request_resource_context, dict)
+                else None
+            )
+
+            if resource_context_provider is not None:
+                # ABAC always requires a session, checked above.
+                assert session is not None
+                maybe_context = resource_context_provider(request, session, auth_result)
+                if inspect.isawaitable(maybe_context):
+                    maybe_context = await maybe_context
+                if isinstance(maybe_context, dict):
+                    resource_context = (
+                        {**request_resource_context, **maybe_context}
+                        if request_resource_context
+                        else maybe_context
+                    )
+            else:
+                resource_context = request_resource_context
+
+            env_context = _EnvContextSupplier(request)
+
+        check_permission_callable = self._build_permission_check_cache(
+            auth_result=auth_result,
+            session=session,
+            entity_id=entity_id,
+            abac_enabled=abac_enabled,
+            resource_context=resource_context,
+            env_context=env_context,
+        )
+
+        if require_all:
+            allowed = True
+            for permission in permissions:
+                if not await check_permission_callable(permission):
+                    allowed = False
+                    break
+        else:
+            allowed = False
+            for permission in permissions:
+                if await check_permission_callable(permission):
+                    allowed = True
+                    break
+
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+
+        if not abac_enabled and session is not None:
+            await self._cache_api_key_auth_snapshot(
+                request=request,
+                session=session,
+                auth_result=auth_result,
+                entity_id=entity_id,
+            )
+
+        return cast(dict[Any, Any], auth_result)
+
     def require_permission(
         self,
         *permissions: str,
@@ -699,7 +858,8 @@ class AuthDeps:
             )
 
             entity_id = _parse_entity_context_id(request)
-            if session is not None and not abac_enabled:
+            auth_result = getattr(request.state, "_outlabs_auth_result", None)
+            if auth_result is None and session is not None and not abac_enabled:
                 snapshot_auth_result = await self._try_api_key_auth_snapshot(
                     request=request,
                     permissions=permissions,
@@ -709,82 +869,23 @@ class AuthDeps:
                 if snapshot_auth_result is not None:
                     return snapshot_auth_result
 
-            auth_result = await self._authenticate_request(
-                request, session, active=True, verified=False, optional=False
-            )
+            if auth_result is None:
+                auth_result = await self._authenticate_request(
+                    request, session, active=True, verified=False, optional=False
+                )
 
             if not auth_result:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-            if session is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Database session not configured for auth dependencies",
-                )
-
-            resource_context: Optional[dict] = None
-            env_context: Optional[dict] = None
-            if abac_enabled:
-                request_resource_context = getattr(request.state, "resource_context", None)
-                request_resource_context = (
-                    request_resource_context
-                    if isinstance(request_resource_context, dict)
-                    else None
-                )
-
-                if resource_context_provider is not None:
-                    maybe_context = resource_context_provider(request, session, auth_result)
-                    if inspect.isawaitable(maybe_context):
-                        maybe_context = await maybe_context
-                    if isinstance(maybe_context, dict):
-                        resource_context = (
-                            {**request_resource_context, **maybe_context}
-                            if request_resource_context
-                            else maybe_context
-                        )
-                else:
-                    resource_context = request_resource_context
-
-                env_context = _EnvContextSupplier(request)
-
-            check_permission_callable = self._build_permission_check_cache(
-                auth_result=auth_result,
+            return await self.authorize_authenticated(
+                request,
+                auth_result,
+                *permissions,
+                require_all=require_all,
                 session=session,
                 entity_id=entity_id,
-                abac_enabled=abac_enabled,
-                resource_context=resource_context,
-                env_context=env_context,
+                resource_context_provider=resource_context_provider,
             )
-
-            if require_all:
-                for perm in permissions:
-                    if not await check_permission_callable(perm):
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Insufficient permissions",
-                        )
-            else:
-                has_any = False
-                for perm in permissions:
-                    if await check_permission_callable(perm):
-                        has_any = True
-                        break
-
-                if not has_any:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Insufficient permissions",
-                    )
-
-            if not abac_enabled:
-                await self._cache_api_key_auth_snapshot(
-                    request=request,
-                    session=session,
-                    auth_result=auth_result,
-                    entity_id=entity_id,
-                )
-
-            return cast(dict[Any, Any], auth_result)
 
         return cast(Callable[..., Any], dependency)
 

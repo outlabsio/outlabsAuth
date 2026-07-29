@@ -9,6 +9,22 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 _Nothing yet._
 
+## [0.1.0a26] - Unreleased
+
+### Added
+
+- `AuthDeps.authorize_authenticated(...)` and
+  `authenticated_authorization_requires_session(...)` provide an auth-owned
+  two-phase boundary for infrastructure consumers that authenticate once and
+  authorize several resources without interpreting raw scopes.
+
+### Fixed
+
+- `require_auth()` followed by one or more `require_permission(...)` checks in
+  the same request no longer re-enters the warm API-key snapshot usage counter.
+  API-key usage and fixed-window quota accounting now occur once per request,
+  while permission-only routes retain their one-event snapshot fast path.
+
 ## [0.1.0a25] - 2026-07-29
 
 ### Added

@@ -27,6 +27,16 @@ class _StaticAuthResultStrategy:
         return self.auth_result
 
 
+class _CountingAuthResultStrategy(_StaticAuthResultStrategy):
+    def __init__(self, auth_result: dict) -> None:
+        super().__init__(auth_result)
+        self.usage_events = 0
+
+    async def authenticate(self, credentials: str, **kwargs):
+        self.usage_events += 1
+        return await super().authenticate(credentials, **kwargs)
+
+
 class _PermissionServiceStub:
     def __init__(
         self,
@@ -187,13 +197,15 @@ def _api_key_model(
     prefix: str = "sk_live_cached_1",
     entity_id: UUID | None = None,
     inherit_from_tree: bool = False,
+    key_kind: APIKeyKind = APIKeyKind.PERSONAL,
+    owner_type: str = "user",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=key_id,
         prefix=prefix,
         status=APIKeyStatus.ACTIVE,
-        key_kind=APIKeyKind.PERSONAL,
-        owner_type="user",
+        key_kind=key_kind,
+        owner_type=owner_type,
         resolved_owner_id=None,
         expires_at=None,
         entity_id=entity_id,
@@ -251,6 +263,228 @@ async def test_require_permission_allows_cached_api_key_snapshot_without_backend
     assert resolved["metadata"]["auth_snapshot"] is True
     assert permission_service.calls == []
     assert redis.counters[f"apikey:{key_id}:usage"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("warm_snapshot", [False, True], ids=["cold", "warm"])
+async def test_require_auth_then_five_permissions_records_api_key_usage_once(
+    test_session,
+    auth_config,
+    warm_snapshot,
+):
+    api_key_string = "sk_live_two_phase_context_key_123456"
+    key_id = uuid4()
+    permissions = [f"taskq_queue_{index}:run" for index in range(5)]
+    redis = _SnapshotRedis()
+    snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    principal_id = uuid4()
+    api_key = _api_key_model(
+        key_id,
+        key_kind=APIKeyKind.SYSTEM_INTEGRATION,
+        owner_type="integration_principal",
+    )
+    auth_result = {
+        "user": None,
+        "user_id": None,
+        "integration_principal_id": str(principal_id),
+        "source": "api_key",
+        "api_key": api_key,
+        "metadata": {
+            "scopes": permissions,
+            "principal_allowed_scopes": permissions,
+            "owner_type": "integration_principal",
+            "owner_id": str(principal_id),
+        },
+    }
+    if warm_snapshot:
+        await api_key_service.set_api_key_auth_snapshot(
+            api_key_string,
+            auth_result=auth_result,
+            effective_permissions=permissions,
+            ip_whitelist=[],
+        )
+    strategy = _CountingAuthResultStrategy(auth_result)
+    backend = AuthBackend(
+        name="api_key",
+        transport=ApiKeyTransport(header_name="X-API-Key"),
+        strategy=strategy,
+    )
+    permission_service = _PermissionServiceStub(result=False)
+    deps = AuthDeps(
+        backends=[backend],
+        permission_service=permission_service,
+        api_key_service=api_key_service,
+        get_session=lambda: None,
+    )
+    request = _make_request(
+        "POST",
+        "/taskq/workers/presence",
+        headers={"X-API-Key": api_key_string},
+    )
+
+    authenticated = await deps.require_auth()(request=request, session=test_session)
+    for permission in permissions:
+        resolved = await deps.require_permission(permission)(
+            request=request,
+            session=test_session,
+        )
+        assert resolved is authenticated
+
+    assert strategy.usage_events == 1
+    assert redis.counters.get(f"apikey:{key_id}:usage", 0) == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_authorize_authenticated_checks_user_owner_and_key_scopes(
+    test_session,
+    auth_config,
+):
+    user_id = uuid4()
+    auth_result = {
+        "user": None,
+        "user_id": str(user_id),
+        "source": "api_key",
+        "api_key": SimpleNamespace(id=uuid4()),
+        "metadata": {"scopes": ["taskq_courts:run"]},
+    }
+    permission_service = _PermissionServiceStub(result=True)
+    deps = AuthDeps(
+        backends=[],
+        permission_service=permission_service,
+        api_key_service=APIKeyService(auth_config),
+    )
+    request = _make_request("POST", "/taskq/claim")
+    request.state._outlabs_auth_result = auth_result
+
+    with pytest.raises(HTTPException) as missing_session:
+        await deps.authorize_authenticated(
+            request,
+            auth_result,
+            "taskq_courts:run",
+        )
+    assert missing_session.value.status_code == 500
+
+    resolved = await deps.authorize_authenticated(
+        request,
+        auth_result,
+        "taskq_courts:run",
+        session=test_session,
+    )
+    assert resolved is auth_result
+
+    with pytest.raises(HTTPException) as denied:
+        await deps.authorize_authenticated(
+            request,
+            auth_result,
+            "taskq_agents:run",
+            session=test_session,
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_authorize_authenticated_integration_principal_needs_no_session(
+    auth_config,
+):
+    auth_result = {
+        "user": None,
+        "user_id": None,
+        "integration_principal_id": str(uuid4()),
+        "source": "api_key",
+        "api_key": SimpleNamespace(id=uuid4(), entity_id=None, inherit_from_tree=False),
+        "metadata": {
+            "scopes": ["taskq_courts:run", "taskq_agents:run"],
+            "principal_allowed_scopes": ["taskq_courts:run", "taskq_agents:run"],
+        },
+    }
+    deps = AuthDeps(
+        backends=[],
+        permission_service=_PermissionServiceStub(result=False),
+        api_key_service=APIKeyService(auth_config),
+    )
+    request = _make_request("POST", "/taskq/workflows")
+    request.state._outlabs_auth_result = auth_result
+
+    assert (
+        deps.authenticated_authorization_requires_session(
+            auth_result,
+            entity_id=None,
+        )
+        is False
+    )
+    resolved = await deps.authorize_authenticated(
+        request,
+        auth_result,
+        "taskq_courts:run",
+        "taskq_agents:run",
+        require_all=True,
+    )
+
+    assert resolved is auth_result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_authorize_authenticated_service_token_needs_no_session(
+    auth_config,
+):
+    service_token_service = ServiceTokenService(auth_config)
+    auth_result = {
+        "source": "service_token",
+        "service_id": "taskq-worker",
+        "metadata": {"permissions": ["taskq_courts:run"]},
+    }
+    deps = AuthDeps(
+        backends=[],
+        service_token_service=service_token_service,
+    )
+    request = _make_request("POST", "/taskq/claim")
+    request.state._outlabs_auth_result = auth_result
+
+    assert deps.authenticated_authorization_requires_session(auth_result) is False
+    resolved = await deps.authorize_authenticated(
+        request,
+        auth_result,
+        "taskq_courts:run",
+    )
+
+    assert resolved is auth_result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_authorize_authenticated_rejects_context_from_another_request(
+    auth_config,
+):
+    cached = {
+        "source": "service_token",
+        "service_id": "taskq-worker-a",
+        "metadata": {"permissions": ["taskq_courts:run"]},
+    }
+    supplied = {
+        "source": "service_token",
+        "service_id": "taskq-worker-b",
+        "metadata": {"permissions": ["taskq_courts:run"]},
+    }
+    deps = AuthDeps(
+        backends=[],
+        service_token_service=ServiceTokenService(auth_config),
+    )
+    request = _make_request("POST", "/taskq/claim")
+    request.state._outlabs_auth_result = cached
+
+    with pytest.raises(HTTPException) as exc_info:
+        await deps.authorize_authenticated(
+            request,
+            supplied,
+            "taskq_courts:run",
+        )
+
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.unit
