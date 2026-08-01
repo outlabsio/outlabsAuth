@@ -1,0 +1,1618 @@
+"""
+Observability service for OutlabsAuth.
+
+Unified service for emitting structured logs and Prometheus metrics.
+"""
+
+import asyncio
+import json
+import logging
+import socket
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional
+
+from prometheus_client import REGISTRY, CollectorRegistry, Counter, Gauge, Histogram
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from .config import LogsFormat, LogsLevel, ObservabilityConfig, PermissionCheckLogging
+
+# Context variable for correlation ID
+correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+
+
+class _EventLogger:
+    """Emit auth events through either a host logger or stdlib logging."""
+
+    def __init__(
+        self,
+        base_logger: Any,
+        *,
+        config: ObservabilityConfig,
+        hostname: str,
+    ):
+        self._base_logger = base_logger
+        self._config = config
+        self._hostname = hostname
+        self._supports_structured_kwargs = hasattr(base_logger, "bind") or ("structlog" in type(base_logger).__module__)
+
+    def debug(self, event: str, **fields: Any) -> None:
+        self._log("debug", event, **fields)
+
+    def info(self, event: str, **fields: Any) -> None:
+        self._log("info", event, **fields)
+
+    def warning(self, event: str, **fields: Any) -> None:
+        self._log("warning", event, **fields)
+
+    def error(self, event: str, **fields: Any) -> None:
+        self._log("error", event, **fields)
+
+    _LEVEL_NUMBERS = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
+
+    def _log(self, level: str, event: str, **fields: Any) -> None:
+        # Skip payload construction entirely for filtered levels: per-request
+        # debug emits previously built (and JSON-serialized) the full payload
+        # only for the stdlib level filter to drop it.
+        is_enabled_for = getattr(self._base_logger, "isEnabledFor", None)
+        if is_enabled_for is not None and not is_enabled_for(
+            self._LEVEL_NUMBERS.get(level, logging.INFO)
+        ):
+            return
+
+        log_method = getattr(self._base_logger, level, self._base_logger.info)
+        payload = self._build_payload(event, level, fields)
+
+        if self._supports_structured_kwargs:
+            try:
+                log_method(event, **payload)
+                return
+            except TypeError:
+                self._supports_structured_kwargs = False
+
+        log_method(self._render_message(payload))
+
+    def _build_payload(self, event: str, level: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(fields)
+        payload.setdefault("event", event)
+        payload.setdefault("level", level)
+
+        if self._config.logs_include_timestamps:
+            payload.setdefault(
+                "timestamp",
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+
+        if self._config.logs_include_correlation_id:
+            correlation_id = correlation_id_var.get()
+            if correlation_id:
+                payload.setdefault("correlation_id", correlation_id)
+
+        if self._config.metrics_include_hostname:
+            payload.setdefault("hostname", self._hostname)
+
+        return payload
+
+    def _render_message(self, payload: Dict[str, Any]) -> str:
+        if self._config.logs_format == LogsFormat.JSON:
+            return json.dumps(payload, default=self._serialize_value, sort_keys=True)
+
+        timestamp = f"{payload['timestamp']} " if "timestamp" in payload else ""
+        event = str(payload.get("event", "outlabs_auth_event"))
+        level = str(payload.get("level", "info")).upper()
+        details = " ".join(
+            f"{key}={self._serialize_value(value)}"
+            for key, value in payload.items()
+            if key not in {"event", "level", "timestamp"}
+        )
+        if details:
+            return f"{timestamp}[{level}] {event} {details}"
+        return f"{timestamp}[{level}] {event}"
+
+    @staticmethod
+    def _serialize_value(value: Any) -> str:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return str(value)
+        return repr(value)
+
+
+class ObservabilityService:
+    """
+    Unified observability service for structured logging and metrics.
+
+    Provides a single emission point for both logs and metrics to ensure
+    consistency and simplify instrumentation.
+
+    Examples:
+        >>> obs = ObservabilityService(config)
+        >>> await obs.initialize()
+        >>>
+        >>> # Emit login success (logs + metrics)
+        >>> obs.log_and_count(
+        ...     event="user_login_success",
+        ...     level="info",
+        ...     user_id="123",
+        ...     method="password"
+        ... )
+        >>>
+        >>> # Time an operation
+        >>> with obs.time_operation("login", method="password"):
+        ...     await authenticate_user()
+    """
+
+    def __init__(
+        self,
+        config: ObservabilityConfig,
+        *,
+        logger: Optional[Any] = None,
+        metrics_registry: Optional[CollectorRegistry] = None,
+    ):
+        """
+        Initialize observability service.
+
+        Args:
+            config: Observability configuration
+            logger: Optional host-owned logger adapter
+            metrics_registry: Optional Prometheus collector registry
+        """
+        self.config = config
+        self.hostname = socket.gethostname()
+        self.logger: Optional[_EventLogger] = None
+        self._base_logger = logger
+        self._log_queue: Optional[
+            asyncio.Queue[tuple[Callable[..., None], tuple[Any, ...], Dict[str, Any]]]
+        ] = None
+        self._log_worker_task: Optional[asyncio.Task[None]] = None
+        self.metrics_registry = metrics_registry or REGISTRY
+
+        # Prometheus metrics (will be initialized in initialize())
+        self.metrics: Dict[str, Any] = {}
+        self._sqlalchemy_instrumented: bool = False
+        self._sqlalchemy_engine_id: Optional[int] = None
+
+    async def initialize(self) -> None:
+        """
+        Initialize observability service.
+
+        Sets up a logger adapter and defines Prometheus metrics.
+        """
+        self._configure_logger()
+
+        # Initialize Prometheus metrics if enabled
+        if self.config.enable_metrics:
+            self._initialize_metrics()
+
+        # Start async log worker if enabled
+        if self.config.async_logging:
+            self._log_queue = asyncio.Queue(maxsize=self.config.max_log_queue_size)
+            self._log_worker_task = asyncio.create_task(self._log_worker())
+
+        logger = self.logger
+        if logger is None:
+            return
+
+        logger.info(
+            "observability_initialized",
+            logs_format=self.config.logs_format,
+            logs_level=self.config.logs_level,
+            metrics_enabled=self.config.enable_metrics,
+            async_logging=self.config.async_logging,
+        )
+
+    async def shutdown(self) -> None:
+        """Shutdown observability service gracefully."""
+        log_worker_task = self._log_worker_task
+        if log_worker_task is not None:
+            # Wait for queue to drain
+            log_queue = self._log_queue
+            if log_queue is not None:
+                await log_queue.join()
+            log_worker_task.cancel()
+            try:
+                await log_worker_task
+            except asyncio.CancelledError:
+                pass
+
+        logger = self.logger
+        if logger is not None:
+            logger.info("observability_shutdown")
+
+    def instrument_sqlalchemy(self, engine: Optional[AsyncEngine]) -> None:
+        """
+        Instrument SQLAlchemy engine to emit `db_query` logs/metrics.
+
+        Uses SQLAlchemy cursor events to time query execution (DBAPI-level).
+        """
+        if not engine or not self.config.log_db_queries:
+            return
+
+        if self._sqlalchemy_instrumented and self._sqlalchemy_engine_id == id(engine):
+            return
+
+        sync_engine: Engine = engine.sync_engine
+
+        import time
+
+        def before_cursor_execute(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ):
+            conn.info.setdefault("outlabs_auth_query_start_time", []).append(time.perf_counter())
+
+        def after_cursor_execute(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ):
+            start_stack = conn.info.get("outlabs_auth_query_start_time")
+            start = start_stack.pop() if start_stack else None
+            if start is None:
+                return
+
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            operation = (statement or "").lstrip().split(" ", 1)[0].lower() or "unknown"
+
+            # Avoid logging parameters; they may contain secrets/PII.
+            self.log_db_query(
+                operation=operation,
+                duration_ms=duration_ms,
+                collection=None,
+                executemany=bool(executemany),
+            )
+
+        event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        event.listen(sync_engine, "after_cursor_execute", after_cursor_execute)
+
+        self._sqlalchemy_instrumented = True
+        self._sqlalchemy_engine_id = id(engine)
+
+    def _configure_logger(self) -> None:
+        """Wrap either a host logger or a namespaced stdlib logger."""
+        base_logger = self._base_logger or logging.getLogger(self.config.logger_name)
+        if self._base_logger is None and isinstance(base_logger, logging.Logger):
+            base_logger.setLevel(self._get_log_level_int())
+        self.logger = _EventLogger(
+            base_logger,
+            config=self.config,
+            hostname=self.hostname,
+        )
+
+    def _get_log_level_int(self) -> int:
+        """Convert log level string to int."""
+        levels = {
+            LogsLevel.DEBUG: 10,
+            LogsLevel.INFO: 20,
+            LogsLevel.WARNING: 30,
+            LogsLevel.ERROR: 40,
+        }
+        return levels.get(self.config.logs_level, 20)
+
+    def _initialize_metrics(self) -> None:
+        """Initialize Prometheus metrics."""
+        # Authentication metrics
+        self.metrics["login_attempts"] = self._counter(
+            "outlabs_auth_login_attempts_total",
+            "Total login attempts",
+            ["status", "method"],
+        )
+        self.metrics["login_duration"] = self._histogram(
+            "outlabs_auth_login_duration_seconds",
+            "Login duration in seconds",
+            ["method"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+        )
+        self.metrics["account_locked"] = self._counter(
+            "outlabs_auth_account_locked_total",
+            "Total account lockouts",
+        )
+        self.metrics["password_reset_requests"] = self._counter(
+            "outlabs_auth_password_reset_requests_total",
+            "Total password reset requests",
+        )
+        self.metrics["email_verifications"] = self._counter(
+            "outlabs_auth_email_verifications_total",
+            "Total email verifications",
+            ["status"],
+        )
+
+        # Authorization metrics
+        self.metrics["permission_checks"] = self._counter(
+            "outlabs_auth_permission_checks_total",
+            "Total permission checks",
+            ["result", "permission"],
+        )
+        self.metrics["permission_check_duration"] = self._histogram(
+            "outlabs_auth_permission_check_duration_seconds",
+            "Permission check duration in seconds",
+            labelnames=None,
+            buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
+        )
+        self.metrics["role_assignments"] = self._counter(
+            "outlabs_auth_role_assignments_total",
+            "Total role assignments",
+            ["operation"],
+        )
+
+        # Session metrics
+        self.metrics["active_sessions"] = self._gauge(
+            "outlabs_auth_active_sessions",
+            "Number of active sessions",
+        )
+        self.metrics["session_duration"] = self._histogram(
+            "outlabs_auth_session_duration_seconds",
+            "Session duration in seconds",
+            labelnames=None,
+            buckets=[60, 300, 900, 1800, 3600, 7200, 14400, 28800],
+        )
+        self.metrics["token_refreshes"] = self._counter(
+            "outlabs_auth_token_refreshes_total",
+            "Total token refresh operations",
+            ["status"],
+        )
+        self.metrics["token_blacklist_checks"] = self._counter(
+            "outlabs_auth_token_blacklist_checks_total",
+            "Total token blacklist checks",
+            ["result"],
+        )
+
+        # API key metrics
+        self.metrics["api_key_validations"] = self._counter(
+            "outlabs_auth_api_key_validations_total",
+            "Total API key validations",
+            ["status"],
+        )
+        self.metrics["api_key_rate_limit_hits"] = self._counter(
+            "outlabs_auth_api_key_rate_limit_hits_total",
+            "Total API key rate limit hits",
+        )
+        self.metrics["api_key_usage"] = self._counter(
+            "outlabs_auth_api_key_usage_total",
+            "Total API key usage",
+        )
+        self.metrics["api_key_policy_decisions"] = self._counter(
+            "outlabs_auth_api_key_policy_decisions_total",
+            "Total API key policy decisions",
+            ["surface", "outcome", "reason"],
+        )
+        self.metrics["api_key_lifecycle"] = self._counter(
+            "outlabs_auth_api_key_lifecycle_total",
+            "Total API key lifecycle operations",
+            ["operation", "key_kind"],
+        )
+
+        # Security metrics
+        self.metrics["suspicious_activity"] = self._counter(
+            "outlabs_auth_suspicious_activity_total",
+            "Suspicious activity detected",
+            ["type"],
+        )
+        self.metrics["failed_login_attempts"] = self._counter(
+            "outlabs_auth_failed_login_attempts_total",
+            "Failed login attempts",
+            ["reason"],
+        )
+
+        # Performance metrics
+        self.metrics["cache_hits"] = self._counter(
+            "outlabs_auth_cache_hits_total",
+            "Cache hits",
+            ["cache_type"],
+        )
+        self.metrics["cache_misses"] = self._counter(
+            "outlabs_auth_cache_misses_total",
+            "Cache misses",
+            ["cache_type"],
+        )
+        self.metrics["db_query_duration"] = self._histogram(
+            "outlabs_auth_db_query_duration_seconds",
+            "Database query duration in seconds",
+            ["operation"],
+            buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
+        )
+
+        # Error metrics
+        self.metrics["errors_total"] = self._counter(
+            "outlabs_auth_errors_total",
+            "Total errors by type and location",
+            ["error_type", "location"],
+        )
+        self.metrics["500_errors_total"] = self._counter(
+            "outlabs_auth_500_errors_total",
+            "Total 500 Internal Server Errors",
+            ["endpoint", "error_class"],
+        )
+        self.metrics["router_errors_total"] = self._counter(
+            "outlabs_auth_router_errors_total",
+            "Total router-level errors",
+            ["router", "endpoint"],
+        )
+        self.metrics["service_errors_total"] = self._counter(
+            "outlabs_auth_service_errors_total",
+            "Total service-level errors",
+            ["service", "operation"],
+        )
+
+        # Entity operations metrics
+        self.metrics["entity_operations_total"] = self._counter(
+            "outlabs_auth_entity_operations_total",
+            "Entity operations",
+            ["operation"],
+        )
+        self.metrics["entity_operation_duration"] = self._histogram(
+            "outlabs_auth_entity_operation_duration_seconds",
+            "Entity operation duration in seconds",
+            ["operation"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+        )
+
+        # Membership operations metrics
+        self.metrics["membership_operations_total"] = self._counter(
+            "outlabs_auth_membership_operations_total",
+            "Membership operations",
+            ["operation"],
+        )
+        self.metrics["membership_operation_duration"] = self._histogram(
+            "outlabs_auth_membership_operation_duration_seconds",
+            "Membership operation duration in seconds",
+            ["operation"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
+        )
+
+        # Activity tracking metrics
+        self.metrics["activity_track_total"] = self._counter(
+            "outlabs_auth_activity_track_total",
+            "Activity tracking operations",
+            ["period"],
+        )
+        self.metrics["activity_sync_duration"] = self._histogram(
+            "outlabs_auth_activity_sync_duration_seconds",
+            "Activity sync duration in seconds",
+            labelnames=None,
+            buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0],
+        )
+        self.metrics["activity_sync_records"] = self._counter(
+            "outlabs_auth_activity_sync_records_total",
+            "Activity records synced",
+            ["metric_type"],
+        )
+
+        # Redis operations metrics
+        self.metrics["redis_operation_duration"] = self._histogram(
+            "outlabs_auth_redis_operation_duration_seconds",
+            "Redis operation duration in seconds",
+            ["operation"],
+            buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+        )
+        self.metrics["redis_errors_total"] = self._counter(
+            "outlabs_auth_redis_errors_total",
+            "Redis operation errors",
+            ["operation"],
+        )
+
+        # Notification metrics
+        self.metrics["notification_events_total"] = self._counter(
+            "outlabs_auth_notification_events_total",
+            "Notification events emitted",
+            ["event_type"],
+        )
+        self.metrics["notification_delivery_failures"] = self._counter(
+            "outlabs_auth_notification_delivery_failures_total",
+            "Notification delivery failures",
+            ["channel", "event_type"],
+        )
+
+    def _counter(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+    ) -> Counter:
+        return Counter(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
+        )
+
+    def _histogram(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+        *,
+        buckets: Optional[List[float]] = None,
+    ) -> Histogram:
+        if buckets is None:
+            return Histogram(
+                name,
+                documentation,
+                labelnames or (),
+                registry=self.metrics_registry,
+            )
+        return Histogram(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
+            buckets=buckets,
+        )
+
+    def _gauge(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+    ) -> Gauge:
+        return Gauge(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
+        )
+
+    async def _log_worker(self) -> None:
+        """Background worker for async logging."""
+        while True:
+            try:
+                log_queue = self._log_queue
+                if log_queue is None:
+                    return
+                log_func, args, kwargs = await log_queue.get()
+                log_func(*args, **kwargs)
+                log_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                # Can't log errors in the logger itself, print to stderr
+                print(f"Error in log worker: {e}", file=__import__("sys").stderr)
+
+    def _emit_log(self, level: str, event: str, **kwargs: Any) -> None:
+        """Emit a structured log event."""
+        if not self.logger:
+            return
+
+        log_method = getattr(self.logger, level, self.logger.info)
+
+        if self.config.async_logging and self._log_queue:
+            try:
+                self._log_queue.put_nowait((log_method, (event,), kwargs))
+            except asyncio.QueueFull:
+                # Drop log if queue is full (prevents memory issues)
+                pass
+        else:
+            log_method(event, **kwargs)
+
+    def _increment_counter(
+        self,
+        metric_name: str,
+        labels: Optional[Dict[str, str]] = None,
+        value: float = 1.0,
+    ) -> None:
+        """Increment a Prometheus counter."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).inc(value)
+        else:
+            metric.inc(value)
+
+    def _observe_histogram(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """Observe a value in a Prometheus histogram."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).observe(value)
+        else:
+            metric.observe(value)
+
+    def _set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+        """Set a Prometheus gauge value."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).set(value)
+        else:
+            metric.set(value)
+
+    def _increment_gauge(
+        self,
+        metric_name: str,
+        value: float = 1.0,
+        labels: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Increment a Prometheus gauge value."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).inc(value)
+        else:
+            metric.inc(value)
+
+    def _decrement_gauge(
+        self,
+        metric_name: str,
+        value: float = 1.0,
+        labels: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Decrement a Prometheus gauge value."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).dec(value)
+        else:
+            metric.dec(value)
+
+    # Public API - Authentication Events
+
+    def log_login_success(
+        self,
+        user_id: str,
+        email: str,
+        method: str,
+        duration_ms: float,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log successful login and increment metrics."""
+        self._emit_log(
+            "info",
+            "user_login_success",
+            user_id=user_id,
+            email=email,
+            method=method,
+            duration_ms=duration_ms,
+            ip_address=ip_address if self.config.log_ip_addresses else None,
+            **extra,
+        )
+        self._increment_counter("login_attempts", {"status": "success", "method": method})
+        self._observe_histogram("login_duration", duration_ms / 1000.0, {"method": method})
+        # Increment active sessions gauge
+        self._increment_gauge("active_sessions")
+
+    def log_login_failed(
+        self,
+        email: str,
+        reason: str,
+        method: str,
+        failed_attempts: int,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log failed login and increment metrics."""
+        self._emit_log(
+            "warning",
+            "user_login_failed",
+            email=email,
+            reason=reason,
+            method=method,
+            failed_attempts=failed_attempts,
+            ip_address=ip_address if self.config.log_ip_addresses else None,
+            **extra,
+        )
+        self._increment_counter("login_attempts", {"status": "failed", "method": method})
+        self._increment_counter("failed_login_attempts", {"reason": reason})
+
+    def log_account_locked(
+        self,
+        user_id: str,
+        email: str,
+        reason: str,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log account lockout and increment metrics."""
+        self._emit_log(
+            "warning",
+            "account_locked",
+            user_id=user_id,
+            email=email,
+            reason=reason,
+            ip_address=ip_address if self.config.log_ip_addresses else None,
+            **extra,
+        )
+        self._increment_counter("account_locked")
+
+    def log_logout(
+        self,
+        user_id: str,
+        session_duration_seconds: float,
+        revoke_all_tokens: bool = False,
+        **extra: Any,
+    ) -> None:
+        """Log logout and observe session duration."""
+        self._emit_log(
+            "info",
+            "user_logout",
+            user_id=user_id,
+            session_duration_seconds=session_duration_seconds,
+            revoke_all_tokens=revoke_all_tokens,
+            **extra,
+        )
+        self._observe_histogram("session_duration", session_duration_seconds)
+        # Decrement active sessions gauge
+        self._decrement_gauge("active_sessions")
+
+    # Public API - Authorization Events
+
+    def log_permission_check(
+        self,
+        user_id: str,
+        permission: str,
+        result: str,  # "granted" or "denied"
+        duration_ms: float,
+        reason: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log permission check and increment metrics."""
+        # Respect log_permission_checks config
+        should_log = self.config.log_permission_checks == PermissionCheckLogging.ALL or (
+            self.config.log_permission_checks == PermissionCheckLogging.FAILURES_ONLY and result == "denied"
+        )
+
+        if should_log:
+            level = "info" if result == "granted" else "warning"
+            self._emit_log(
+                level,
+                f"permission_check_{result}",
+                user_id=user_id,
+                permission=permission,
+                result=result,
+                duration_ms=duration_ms,
+                reason=reason,
+                **extra,
+            )
+
+        self._increment_counter("permission_checks", {"result": result, "permission": permission})
+        self._observe_histogram("permission_check_duration", duration_ms / 1000.0)
+
+    def log_role_assigned(
+        self,
+        user_id: str,
+        role_id: str,
+        entity_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log role assignment."""
+        self._emit_log(
+            "info",
+            "role_assigned",
+            user_id=user_id,
+            role_id=role_id,
+            entity_id=entity_id,
+            **extra,
+        )
+        self._increment_counter("role_assignments", {"operation": "assign"})
+
+    def log_role_revoked(
+        self,
+        user_id: str,
+        role_id: str,
+        entity_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log role revocation."""
+        self._emit_log(
+            "info",
+            "role_revoked",
+            user_id=user_id,
+            role_id=role_id,
+            entity_id=entity_id,
+            **extra,
+        )
+        self._increment_counter("role_assignments", {"operation": "revoke"})
+
+    # Public API - API Key Events
+
+    def log_api_key_validated(
+        self,
+        prefix: str,
+        status: str,  # "valid" or "invalid"
+        reason: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log API key validation."""
+        if self.config.log_api_key_hits:
+            level = "info" if status == "valid" else "warning"
+            self._emit_log(
+                level,
+                f"api_key_{status}",
+                prefix=prefix,
+                status=status,
+                reason=reason,
+                ip_address=ip_address if self.config.log_ip_addresses else None,
+                **extra,
+            )
+
+        self._increment_counter("api_key_validations", {"status": status})
+        if status == "valid":
+            self._increment_counter("api_key_usage")
+
+    def log_api_key_rate_limited(
+        self,
+        prefix: str,
+        current_count: int,
+        limit: int,
+        **extra: Any,
+    ) -> None:
+        """Log API key rate limit hit."""
+        self._emit_log(
+            "warning",
+            "api_key_rate_limited",
+            prefix=prefix,
+            current_count=current_count,
+            limit=limit,
+            **extra,
+        )
+        self._increment_counter("api_key_rate_limit_hits")
+
+    def log_api_key_policy_decision(
+        self,
+        *,
+        surface: str,
+        outcome: str,
+        reason: str,
+        key_kind: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log API key policy decisions with bounded reason codes."""
+        should_log = outcome != "allowed" or self.config.log_api_key_hits
+        if should_log:
+            level = "info" if outcome == "allowed" else "warning"
+            self._emit_log(
+                level,
+                f"api_key_policy_{outcome}",
+                surface=surface,
+                outcome=outcome,
+                reason=reason,
+                key_kind=key_kind,
+                **extra,
+            )
+
+        self._increment_counter(
+            "api_key_policy_decisions",
+            {
+                "surface": surface,
+                "outcome": outcome,
+                "reason": reason,
+            },
+        )
+
+    def log_api_key_lifecycle(
+        self,
+        *,
+        operation: str,
+        key_kind: str,
+        status: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log API key lifecycle operations."""
+        self._emit_log(
+            "info",
+            f"api_key_{operation}",
+            operation=operation,
+            key_kind=key_kind,
+            status=status,
+            **extra,
+        )
+        self._increment_counter(
+            "api_key_lifecycle",
+            {
+                "operation": operation,
+                "key_kind": key_kind,
+            },
+        )
+
+    # Public API - Security Events
+
+    def log_suspicious_activity(
+        self,
+        activity_type: str,
+        severity: str,
+        details: Dict[str, Any],
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log suspicious activity detection."""
+        self._emit_log(
+            "error",
+            "suspicious_activity_detected",
+            type=activity_type,
+            severity=severity,
+            details=details,
+            ip_address=ip_address if self.config.log_ip_addresses else None,
+            **extra,
+        )
+        self._increment_counter("suspicious_activity", {"type": activity_type})
+
+    # Public API - Performance Events
+
+    def log_cache_event(
+        self,
+        cache_type: str,
+        result: str,  # "hit" or "miss"
+        key: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log cache hit/miss."""
+        if self.config.log_cache_hits:
+            self._emit_log(
+                "debug",
+                f"cache_{result}",
+                cache_type=cache_type,
+                result=result,
+                key=key,
+                **extra,
+            )
+
+        if result == "hit":
+            self._increment_counter("cache_hits", {"cache_type": cache_type})
+        else:
+            self._increment_counter("cache_misses", {"cache_type": cache_type})
+
+    def log_db_query(
+        self,
+        operation: str,
+        duration_ms: float,
+        collection: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log database query."""
+        if self.config.log_db_queries:
+            self._emit_log(
+                "debug",
+                "db_query",
+                operation=operation,
+                duration_ms=duration_ms,
+                collection=collection,
+                **extra,
+            )
+
+        self._observe_histogram("db_query_duration", duration_ms / 1000.0, {"operation": operation})
+
+    # Public API - Session Management
+
+    def set_active_sessions(self, count: int) -> None:
+        """Update active sessions gauge."""
+        self._set_gauge("active_sessions", count)
+
+    def log_token_refreshed(
+        self,
+        user_id: str,
+        status: str,  # "success" or "failed"
+        reason: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log token refresh attempt."""
+        level = "info" if status == "success" else "warning"
+        self._emit_log(
+            level,
+            f"token_refresh_{status}",
+            user_id=user_id,
+            status=status,
+            reason=reason,
+            **extra,
+        )
+        self._increment_counter("token_refreshes", {"status": status})
+
+    def log_token_blacklist_check(
+        self,
+        token_jti: str,
+        result: str,  # "blacklisted" or "valid"
+        **extra: Any,
+    ) -> None:
+        """Log token blacklist check."""
+        if self.config.log_jwt_validations:
+            self._emit_log(
+                "debug",
+                "token_blacklist_check",
+                token_jti=token_jti,
+                result=result,
+                **extra,
+            )
+
+        self._increment_counter("token_blacklist_checks", {"result": result})
+
+    # Utility methods
+
+    @staticmethod
+    def set_correlation_id(correlation_id: str) -> None:
+        """Set correlation ID for current context."""
+        correlation_id_var.set(correlation_id)
+
+    @staticmethod
+    def get_correlation_id() -> Optional[str]:
+        """Get correlation ID from current context."""
+        return correlation_id_var.get()
+
+    @staticmethod
+    def clear_correlation_id() -> None:
+        """Clear correlation ID from current context."""
+        correlation_id_var.set(None)
+
+    # Context managers for timing operations
+
+    def time_login(self, method: str):
+        """
+        Context manager to time login operations.
+
+        Args:
+            method: Authentication method (password, google, api_key, etc.)
+
+        Example:
+            >>> with obs.time_login("password"):
+            ...     await authenticate_user()
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            try:
+                yield
+            finally:
+                duration = (time.time() - start) * 1000  # Convert to ms
+                self._observe_histogram("login_duration", duration / 1000.0, {"method": method})
+
+        return _timer()
+
+    def time_permission_check(self):
+        """
+        Context manager to time permission check operations.
+
+        Example:
+            >>> with obs.time_permission_check() as timer:
+            ...     result = await check_permission()
+            ...     timer.set_duration_ms()  # Records duration
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            duration_ms = [0.0]  # Mutable container for duration
+
+            class Timer:
+                def set_duration(self):
+                    duration_ms[0] = (time.time() - start) * 1000
+
+            timer = Timer()
+            try:
+                yield timer
+            finally:
+                if duration_ms[0] == 0:
+                    # Auto-record if not manually set
+                    duration_ms[0] = (time.time() - start) * 1000
+                self._observe_histogram("permission_check_duration", duration_ms[0] / 1000.0)
+
+        return _timer()
+
+    def time_db_query(self, operation: str):
+        """
+        Context manager to time database query operations.
+
+        Args:
+            operation: Database operation type (find, insert, update, delete, etc.)
+
+        Example:
+            >>> with obs.time_db_query("find"):
+            ...     results = await collection.find(query)
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            try:
+                yield
+            finally:
+                duration = (time.time() - start) * 1000  # Convert to ms
+                if self.config.log_db_queries:
+                    self.log_db_query(operation=operation, duration_ms=duration)
+
+        return _timer()
+
+    # Public API - Error Logging (NEW - for 500 error tracking)
+
+    def log_error(
+        self,
+        event: str,
+        error_type: str,
+        error_message: str,
+        location: str,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a general error with structured context.
+
+        Args:
+            event: Event name (e.g., "router_error", "service_error")
+            error_type: Error class name (e.g., "ValueError", "DatabaseError")
+            error_message: Error message
+            location: Where error occurred (e.g., "users_router.list_users")
+            endpoint: Optional API endpoint (e.g., "/v1/users")
+            user_id: Optional user ID if available
+            stack_trace: Optional stack trace for debugging
+            **extra: Additional context fields
+
+        Example:
+            >>> obs.log_error(
+            ...     event="router_error",
+            ...     error_type="ValueError",
+            ...     error_message="Invalid user ID format",
+            ...     location="users_router.get_user",
+            ...     endpoint="/v1/users/{user_id}",
+            ...     user_id="invalid_id"
+            ... )
+        """
+        self._emit_log(
+            "error",
+            event,
+            error_type=error_type,
+            error_message=error_message,
+            location=location,
+            endpoint=endpoint,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter("errors_total", {"error_type": error_type, "location": location})
+
+    def log_500_error(
+        self,
+        endpoint: str,
+        error_class: str,
+        error_message: str,
+        method: Optional[str] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a 500 Internal Server Error with full context.
+
+        Args:
+            endpoint: API endpoint that failed (e.g., "/v1/users")
+            error_class: Exception class name (e.g., "DatabaseError")
+            error_message: Error message
+            method: HTTP method (GET, POST, etc.)
+            user_id: User ID if authenticated
+            request_id: Request/correlation ID
+            stack_trace: Full stack trace for debugging
+            **extra: Additional context fields
+
+        Example:
+            >>> obs.log_500_error(
+            ...     endpoint="/v1/users",
+            ...     error_class="DatabaseConnectionError",
+            ...     error_message="Unable to connect to PostgreSQL",
+            ...     method="GET",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "http_500_internal_server_error",
+            endpoint=endpoint,
+            error_class=error_class,
+            error_message=error_message,
+            method=method,
+            user_id=user_id,
+            request_id=request_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter("500_errors_total", {"endpoint": endpoint, "error_class": error_class})
+
+    def log_router_error(
+        self,
+        router: str,
+        endpoint: str,
+        operation: str,
+        error_type: str,
+        error_message: str,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a router-level error (e.g., in FastAPI route handlers).
+
+        Args:
+            router: Router name (e.g., "users", "roles", "auth")
+            endpoint: Full endpoint path (e.g., "/v1/users/{user_id}")
+            operation: Operation being performed (e.g., "list_users", "create_role")
+            error_type: Exception class name
+            error_message: Error message
+            user_id: User ID if available
+            stack_trace: Stack trace
+            **extra: Additional context
+
+        Example:
+            >>> obs.log_router_error(
+            ...     router="users",
+            ...     endpoint="/v1/users",
+            ...     operation="list_users",
+            ...     error_type="DatabaseError",
+            ...     error_message="Connection timeout",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "router_error",
+            router=router,
+            endpoint=endpoint,
+            operation=operation,
+            error_type=error_type,
+            error_message=error_message,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter("router_errors_total", {"router": router, "endpoint": endpoint})
+        self._increment_counter("errors_total", {"error_type": error_type, "location": f"{router}_router"})
+
+    def log_service_error(
+        self,
+        service: str,
+        operation: str,
+        error_type: str,
+        error_message: str,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a service-level error (e.g., in business logic services).
+
+        Args:
+            service: Service name (e.g., "auth", "user", "role", "permission")
+            operation: Operation being performed (e.g., "login", "create_user")
+            error_type: Exception class name
+            error_message: Error message
+            user_id: User ID if available
+            stack_trace: Stack trace
+            **extra: Additional context
+
+        Example:
+            >>> obs.log_service_error(
+            ...     service="auth",
+            ...     operation="login",
+            ...     error_type="DatabaseError",
+            ...     error_message="Failed to query users collection",
+            ...     user_id="507f1f77bcf86cd799439011",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "service_error",
+            service=service,
+            operation=operation,
+            error_type=error_type,
+            error_message=error_message,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter("service_errors_total", {"service": service, "operation": operation})
+        self._increment_counter("errors_total", {"error_type": error_type, "location": f"{service}_service"})
+
+    def log_exception(
+        self,
+        exception: Exception,
+        context: str,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log an exception with automatic stack trace capture.
+
+        Args:
+            exception: The exception that occurred
+            context: Context where exception occurred (e.g., "users_router.create_user")
+            user_id: User ID if available
+            **extra: Additional context fields
+
+        Example:
+            >>> try:
+            ...     await some_operation()
+            ... except Exception as e:
+            ...     obs.log_exception(e, context="users_router.create_user")
+            ...     raise
+        """
+        import traceback
+
+        error_type = type(exception).__name__
+        error_message = str(exception)
+        stack_trace = traceback.format_exc() if self.config.log_stack_traces else None
+
+        self._emit_log(
+            "error",
+            "exception_occurred",
+            error_type=error_type,
+            error_message=error_message,
+            context=context,
+            user_id=user_id,
+            stack_trace=stack_trace,
+            **extra,
+        )
+        self._increment_counter("errors_total", {"error_type": error_type, "location": context})
+
+    # Public API - Entity Operations
+
+    def log_entity_operation(
+        self,
+        operation: str,
+        entity_id: str,
+        entity_type: str,
+        duration_ms: Optional[float] = None,
+        parent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log entity operation (create, update, delete, move).
+
+        Args:
+            operation: Operation type (create, update, delete, move)
+            entity_id: Entity ID
+            entity_type: Entity type
+            duration_ms: Operation duration in milliseconds
+            parent_id: Parent entity ID (for create/move)
+            user_id: User who performed the operation
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            f"entity_{operation}",
+            entity_id=entity_id,
+            entity_type=entity_type,
+            duration_ms=duration_ms,
+            parent_id=parent_id,
+            user_id=user_id,
+            **extra,
+        )
+        self._increment_counter("entity_operations_total", {"operation": operation})
+        if duration_ms is not None:
+            self._observe_histogram(
+                "entity_operation_duration",
+                duration_ms / 1000.0,
+                {"operation": operation},
+            )
+
+    # Public API - Membership Operations
+
+    def log_membership_operation(
+        self,
+        operation: str,
+        user_id: str,
+        entity_id: str,
+        duration_ms: Optional[float] = None,
+        roles: Optional[List[str]] = None,
+        status: Optional[str] = None,
+        performed_by: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log membership operation (add, remove, update, suspend, reactivate).
+
+        Args:
+            operation: Operation type
+            user_id: User being added/removed
+            entity_id: Entity ID
+            duration_ms: Operation duration
+            roles: Roles assigned (for add/update)
+            status: Membership status (for status changes)
+            performed_by: User who performed the operation
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            f"membership_{operation}",
+            user_id=user_id,
+            entity_id=entity_id,
+            duration_ms=duration_ms,
+            roles=roles,
+            status=status,
+            performed_by=performed_by,
+            **extra,
+        )
+        self._increment_counter("membership_operations_total", {"operation": operation})
+        if duration_ms is not None:
+            self._observe_histogram(
+                "membership_operation_duration",
+                duration_ms / 1000.0,
+                {"operation": operation},
+            )
+
+    # Public API - Activity Tracking
+
+    def log_activity_tracked(
+        self,
+        user_id: str,
+        period: str,
+        **extra: Any,
+    ) -> None:
+        """
+        Log user activity tracking.
+
+        Args:
+            user_id: User ID
+            period: Period type (daily, monthly, quarterly)
+            **extra: Additional context
+        """
+        self._emit_log(
+            "debug",
+            "activity_tracked",
+            user_id=user_id,
+            period=period,
+            **extra,
+        )
+        self._increment_counter("activity_track_total", {"period": period})
+
+    def log_activity_sync(
+        self,
+        duration_ms: float,
+        records_synced: int,
+        metric_types: Optional[Dict[str, int]] = None,
+        errors: int = 0,
+        **extra: Any,
+    ) -> None:
+        """
+        Log activity sync to database.
+
+        Args:
+            duration_ms: Sync duration in milliseconds
+            records_synced: Total records synced
+            metric_types: Breakdown by metric type (dau, mau, qau)
+            errors: Number of errors during sync
+            **extra: Additional context
+        """
+        level = "info" if errors == 0 else "warning"
+        self._emit_log(
+            level,
+            "activity_sync_complete",
+            duration_ms=duration_ms,
+            records_synced=records_synced,
+            metric_types=metric_types,
+            errors=errors,
+            **extra,
+        )
+        self._observe_histogram("activity_sync_duration", duration_ms / 1000.0)
+        if metric_types:
+            for metric_type, count in metric_types.items():
+                self._increment_counter("activity_sync_records", {"metric_type": metric_type}, value=count)
+
+    # Public API - Redis Operations
+
+    def log_redis_operation(
+        self,
+        operation: str,
+        duration_ms: float,
+        success: bool = True,
+        key: Optional[str] = None,
+        error: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log Redis operation with timing.
+
+        Args:
+            operation: Operation type (get, set, delete, sadd, etc.)
+            duration_ms: Operation duration in milliseconds
+            success: Whether operation succeeded
+            key: Redis key (optional, may be redacted)
+            error: Error message if failed
+            **extra: Additional context
+        """
+        if not success:
+            self._emit_log(
+                "warning",
+                "redis_operation_failed",
+                operation=operation,
+                duration_ms=duration_ms,
+                error=error,
+                **extra,
+            )
+            self._increment_counter("redis_errors_total", {"operation": operation})
+        else:
+            # Only log at debug level to avoid noise
+            self._emit_log(
+                "debug",
+                "redis_operation",
+                operation=operation,
+                duration_ms=duration_ms,
+                **extra,
+            )
+
+        self._observe_histogram("redis_operation_duration", duration_ms / 1000.0, {"operation": operation})
+
+    # Public API - Notification Events
+
+    def log_notification_event(
+        self,
+        event_type: str,
+        channels_count: int = 0,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log notification event emission.
+
+        Args:
+            event_type: Event type (user.login, user.created, etc.)
+            channels_count: Number of channels notified
+            user_id: Related user ID
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            "notification_event_emitted",
+            event_type=event_type,
+            channels_count=channels_count,
+            user_id=user_id,
+            **extra,
+        )
+        self._increment_counter("notification_events_total", {"event_type": event_type})
+
+    def log_notification_delivery_failure(
+        self,
+        event_type: str,
+        channel: str,
+        error: str,
+        **extra: Any,
+    ) -> None:
+        """
+        Log notification delivery failure.
+
+        Args:
+            event_type: Event type
+            channel: Channel that failed
+            error: Error message
+            **extra: Additional context
+        """
+        self._emit_log(
+            "error",
+            "notification_delivery_failed",
+            event_type=event_type,
+            channel=channel,
+            error=error,
+            **extra,
+        )
+        self._increment_counter(
+            "notification_delivery_failures",
+            {"channel": channel, "event_type": event_type},
+        )

@@ -1,0 +1,2108 @@
+"""
+Users router factory.
+
+Provides ready-to-use user management routes (DD-041).
+"""
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, List, Optional, cast
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from outlabs_auth.models.sql.entity_membership import EntityMembership
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, UserStatus
+from outlabs_auth.models.sql.role import Role
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.response_builders import (
+    build_role_response,
+    build_user_response_async,
+    build_user_responses,
+)
+from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.membership_history import (
+    MembershipHistoryEventResponse,
+    OrphanedUserResponse,
+)
+from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
+from outlabs_auth.schemas.role import RoleResponse
+from outlabs_auth.schemas.user_audit import UserAuditEventResponse
+from outlabs_auth.core.exceptions import (
+    InvalidInputError,
+    MembershipNotFoundError,
+    OutlabsAuthException,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
+)
+from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
+from outlabs_auth.schemas.user import (
+    AdminResetPasswordRequest,
+    ChangePasswordRequest,
+    PhoneVerifyCodeRequest,
+    UserCreateRequest,
+    UserResponse,
+    UserStatusUpdateRequest,
+    UserSuperuserUpdateRequest,
+    UserUpdateRequest,
+)
+from outlabs_auth.utils.rate_limit import (
+    check_phone_verify_confirm_rate_limit,
+    check_phone_verify_request_rate_limit,
+)
+from outlabs_auth.routers._api_key_response import build_api_key_responses
+from outlabs_auth.schemas.api_key import ApiKeyResponse
+from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.oauth.exceptions import CannotUnlinkLastMethodError
+from outlabs_auth.schemas.oauth import SocialAccountResponse
+from outlabs_auth.schemas.session import UserSessionResponse
+from outlabs_auth.schemas.user_role_membership import (
+    AssignRoleRequest,
+    UserRoleMembershipDetailResponse,
+    UserRoleMembershipResponse,
+    UserRoleMembershipUpdate,
+)
+
+
+def get_users_router(
+    auth: Any,
+    prefix: str = "",
+    tags: Optional[list[str | Enum]] = None,
+    requires_verification: bool = False,
+) -> APIRouter:
+    """
+    Generate user management router.
+
+    Args:
+        auth: OutlabsAuth instance (SimpleRBAC or EnterpriseRBAC)
+        prefix: Router prefix (default: "")
+        tags: OpenAPI tags (default: ["users"])
+        requires_verification: Require email verification (default: False)
+
+    Returns:
+        APIRouter with user management endpoints
+
+    Routes:
+        POST / - Create new user (admin only, requires user:create permission)
+        GET / - List users with pagination (requires user:read permission)
+        GET /me - Get current user profile
+        PATCH /me - Update current user profile
+        POST /me/change-password - Change password
+        GET /{user_id} - Get user by ID (requires user:read permission)
+        PATCH /{user_id} - Update user by ID (requires user:update permission)
+        DELETE /{user_id} - Delete user by ID (requires user:delete permission)
+
+    Example:
+        ```python
+        from outlabs_auth import SimpleRBAC
+        from outlabs_auth.routers import get_users_router
+
+        auth = SimpleRBAC(database=db)
+        app.include_router(get_users_router(auth, prefix="/users"))
+        ```
+    """
+    router = APIRouter(prefix=prefix, tags=tags or ["users"])
+
+    async def _get_actor_user_or_401(session: AsyncSession, actor_user_id: Optional[str]) -> Any:
+        if not actor_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+        try:
+            actor_uuid = UUID(str(actor_user_id))
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid user identity",
+            )
+
+        actor_user = await auth.user_service.get_user_by_id(session, actor_uuid)
+        if not actor_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+        return actor_user
+
+    async def _resolve_actor_scope(session: AsyncSession, actor_user: Any) -> dict[str, Any]:
+        scope = cast(
+            dict[str, Any],
+            await auth.access_scope_service.resolve_for_auth_result(
+                session,
+                {"source": "jwt", "user_id": str(actor_user.id), "user": actor_user},
+                include_member_user_ids=False,
+            ),
+        )
+        if not auth.config.enable_entity_hierarchy:
+            scope["is_global"] = True
+        return scope
+
+    async def _target_user_in_scope(
+        session: AsyncSession,
+        target_user: Any,
+        scope: dict[str, Any],
+    ) -> bool:
+        entity_ids = set(scope.get("entity_ids") or [])
+        if not entity_ids:
+            return False
+
+        target_root_entity_id = getattr(target_user, "root_entity_id", None)
+        if target_root_entity_id is not None and str(target_root_entity_id) in entity_ids:
+            return True
+
+        # Evaluated from the target side (DD-056): O(target's memberships),
+        # and covers root-assigned users with no membership rows.
+        now = datetime.now(timezone.utc)
+        stmt = select(cast(Any, EntityMembership.entity_id)).where(
+            cast(Any, EntityMembership.user_id) == target_user.id,
+            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            or_(
+                cast(Any, EntityMembership.valid_from).is_(None),
+                cast(Any, EntityMembership.valid_from) <= now,
+            ),
+            or_(
+                cast(Any, EntityMembership.valid_until).is_(None),
+                cast(Any, EntityMembership.valid_until) >= now,
+            ),
+        )
+        result = await session.execute(stmt)
+        target_entity_ids = {str(entity_id) for (entity_id,) in result.all() if entity_id is not None}
+        return bool(target_entity_ids & entity_ids)
+
+    async def _require_target_user_in_scope(
+        session: AsyncSession,
+        target_user: Any,
+        actor_user: Any,
+        *,
+        for_mutation: bool = False,
+    ) -> None:
+        if not auth.config.enforce_user_scope:
+            return
+        if actor_user.id == target_user.id:
+            return
+
+        scope = await _resolve_actor_scope(session, actor_user)
+        if scope.get("is_global"):
+            return
+
+        if not await _target_user_in_scope(session, target_user, scope):
+            # 404, not 403: don't confirm that users exist in other trees (DD-056).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        if for_mutation and bool(getattr(target_user, "is_superuser", False)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only global administrators can modify a superuser account",
+            )
+
+    async def _get_target_user_or_404(
+        session: AsyncSession,
+        target_user_id: UUID,
+        actor_user: Any,
+        *,
+        for_mutation: bool = False,
+    ) -> Any:
+        target_user = await auth.user_service.get_user_by_id(session, target_user_id)
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        await _require_target_user_in_scope(
+            session,
+            target_user,
+            actor_user,
+            for_mutation=for_mutation,
+        )
+        return target_user
+
+    def _serialize_membership_history_event(event: Any) -> MembershipHistoryEventResponse:
+        return MembershipHistoryEventResponse(
+            id=str(event.id),
+            membership_id=str(event.membership_id),
+            user_id=str(event.user_id),
+            entity_id=str(event.entity_id),
+            root_entity_id=str(event.root_entity_id) if event.root_entity_id else None,
+            actor_user_id=str(event.actor_user_id) if event.actor_user_id else None,
+            event_type=event.event_type,
+            event_source=event.event_source,
+            event_at=event.event_at,
+            reason=event.reason,
+            status=event.status,
+            previous_status=event.previous_status,
+            valid_from=event.valid_from,
+            valid_until=event.valid_until,
+            previous_valid_from=event.previous_valid_from,
+            previous_valid_until=event.previous_valid_until,
+            role_ids=[str(role_id) for role_id in (event.role_ids or [])],
+            previous_role_ids=[str(role_id) for role_id in (event.previous_role_ids or [])],
+            role_names=list(event.role_names or []),
+            previous_role_names=list(event.previous_role_names or []),
+            entity_display_name=event.entity_display_name,
+            entity_path=list(event.entity_path or []),
+            root_entity_name=event.root_entity_name,
+        )
+
+    def _serialize_user_audit_event(event: Any) -> UserAuditEventResponse:
+        return UserAuditEventResponse(
+            id=str(event.id),
+            occurred_at=event.occurred_at,
+            event_category=event.event_category,
+            event_type=event.event_type,
+            event_source=event.event_source,
+            actor_user_id=str(event.actor_user_id) if event.actor_user_id else None,
+            subject_user_id=str(event.subject_user_id) if event.subject_user_id else None,
+            subject_email_snapshot=event.subject_email_snapshot,
+            root_entity_id=str(event.root_entity_id) if event.root_entity_id else None,
+            entity_id=str(event.entity_id) if event.entity_id else None,
+            role_id=str(event.role_id) if event.role_id else None,
+            request_id=event.request_id,
+            ip_address=event.ip_address,
+            user_agent=event.user_agent,
+            reason=event.reason,
+            before=event.before,
+            after=event.after,
+            metadata=event.event_metadata,
+        )
+
+    @router.post(
+        "/",
+        response_model=UserResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Create user",
+        description="Create a new user account (requires user:create permission)",
+    )
+    async def create_user(
+        data: UserCreateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:create"),
+            )
+        ),
+    ):
+        """
+        Create a new user (admin only).
+
+        Allows admins to create users with specific settings including is_superuser.
+        Different from /auth/register which is for self-registration.
+
+        Triggers on_after_register hook.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            if data.is_superuser and not actor_user.is_superuser:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only superusers can create superusers",
+                )
+
+            user = await auth.user_service.create_user(
+                session,
+                email=data.email,
+                password=data.password,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                is_superuser=data.is_superuser,
+                root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
+            )
+
+            # Trigger on_after_register hook
+            await auth.user_service.on_after_register(user, None)
+
+            # Log successful user creation
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_created",
+                    user_id=str(user.id),
+                    email=user.email,
+                    created_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, email=data.email)
+            raise
+
+    @router.get(
+        "/",
+        response_model=PaginatedResponse[UserResponse],
+        summary="List users",
+        description="List all users with pagination and optional search filtering (requires user:read permission)",
+    )
+    async def list_users(
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
+        user_status: Optional[str] = Query(None, alias="status", description="Filter by account status"),
+        is_superuser: Optional[bool] = Query(None, description="Filter by superuser flag"),
+        root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        List users with pagination and optional search.
+
+        If search term is provided, searches across email, first_name, and last_name fields.
+        Returns paginated results with total count.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            # DD-056: non-global actors only see users inside their own trees.
+            # The root_entity_id param narrows within scope, never widens it.
+            scope_entity_ids: Optional[list[UUID]] = None
+            if auth.config.enforce_user_scope:
+                scope = await _resolve_actor_scope(session, actor_user)
+                if not scope.get("is_global"):
+                    scope_entity_ids = [UUID(entity_id) for entity_id in scope.get("entity_ids") or []]
+
+            parsed_status = None
+            if user_status is not None:
+                try:
+                    parsed_status = UserStatus(user_status)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid status: {user_status}. Must be one of: active, suspended, banned, deleted",
+                    )
+
+            if search:
+                # SQL-side pagination + COUNT (previously fetched up to 1,000
+                # rows to slice a page of `limit` in Python).
+                users, total = await auth.user_service.search_users_with_total(
+                    session,
+                    search_term=search,
+                    skip=(page - 1) * limit,
+                    limit=limit,
+                    status=parsed_status,
+                    is_superuser=is_superuser,
+                    root_entity_id=root_entity_id,
+                    scope_entity_ids=scope_entity_ids,
+                )
+            else:
+                # Use standard list with pagination
+                users, total = await auth.user_service.list_users(
+                    session,
+                    page=page,
+                    limit=limit,
+                    status=parsed_status,
+                    is_superuser=is_superuser,
+                    root_entity_id=root_entity_id,
+                    scope_entity_ids=scope_entity_ids,
+                )
+
+            # Calculate total pages
+            pages = (total + limit - 1) // limit if total > 0 else 0
+
+            # Convert to response schema
+            items = await build_user_responses(session, users)
+
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, page=page, limit=limit, search=search)
+            raise
+
+    @router.get(
+        "/me",
+        response_model=UserResponse,
+        summary="Get current user",
+        description="Get the authenticated user's profile",
+    )
+    async def get_me(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        """Get current user profile."""
+        user = auth_result["user"]
+        return await build_user_response_async(session, user)
+
+    @router.patch(
+        "/me",
+        response_model=UserResponse,
+        summary="Update current user",
+        description="Update the authenticated user's profile",
+    )
+    async def update_me(
+        data: UserUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        """
+        Update current user profile.
+
+        Triggers on_after_update hook.
+        """
+        try:
+            update_dict = data.model_dump(exclude_unset=True)
+            user = await auth.user_service.update_user_fields(
+                session,
+                user_id=UUID(obs.user_id),
+                email=update_dict.get("email"),
+                first_name=update_dict.get("first_name"),
+                last_name=update_dict.get("last_name"),
+                phone=update_dict.get("phone"),
+                phone_provided="phone" in update_dict,
+                changed_by_id=UUID(obs.user_id),
+            )
+            obs.log_event("user_updated", user_id=obs.user_id)
+            await auth.user_service.on_after_update(user, update_dict, None)
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+    @router.post(
+        "/me/change-password",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Change password",
+        description="Change the authenticated user's password",
+    )
+    async def change_password(
+        data: ChangePasswordRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        """
+        Change user password.
+
+        Requires current password for verification.
+        """
+        try:
+            await auth.user_service.change_password_with_current(
+                session,
+                user_id=UUID(obs.user_id),
+                current_password=data.current_password,
+                new_password=data.new_password,
+            )
+
+            # Log password change
+            if auth.observability:
+                auth.observability.logger.info("user_password_changed", user_id=obs.user_id)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+        return None
+
+    @router.post(
+        "/me/phone/request-code",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Request phone verification code",
+        description=(
+            "Generate a one-time code to verify the authenticated user's registered "
+            "phone number and deliver it via the host messaging service (WhatsApp/SMS)."
+        ),
+    )
+    async def request_phone_verification_code(
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        is_limited, seconds_until_reset = await check_phone_verify_request_rate_limit(
+            str(obs.user_id),
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_request_rate_limit_max,
+            window_seconds=auth.config.access_code_request_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many phone verification requests. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            await auth.user_service.request_phone_verification(
+                session,
+                user_id=UUID(obs.user_id),
+                request=request,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            obs.log_event("phone_verify_requested", user_id=obs.user_id)
+        except OutlabsAuthException:
+            raise
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+        return None
+
+    @router.post(
+        "/me/phone/verify-code",
+        response_model=UserResponse,
+        summary="Confirm phone verification code",
+        description="Confirm a phone verification code and mark the phone as verified.",
+    )
+    async def confirm_phone_verification_code(
+        data: PhoneVerifyCodeRequest,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        is_limited, seconds_until_reset = await check_phone_verify_confirm_rate_limit(
+            str(obs.user_id),
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_verify_rate_limit_max,
+            window_seconds=auth.config.access_code_verify_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many phone verification attempts. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            user = await auth.user_service.confirm_phone_verification(
+                session,
+                user_id=UUID(obs.user_id),
+                code=data.code,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            obs.log_event("phone_verified", user_id=obs.user_id)
+            return await build_user_response_async(session, user)
+        except (TokenInvalidError, TokenExpiredError, InvalidInputError):
+            raise
+        except OutlabsAuthException:
+            raise
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+    def _serialize_user_session(token: Any) -> UserSessionResponse:
+        return UserSessionResponse(
+            id=token.id,
+            device_name=token.device_name,
+            ip_address=token.ip_address,
+            user_agent=token.user_agent,
+            created_at=token.created_at,
+            last_used_at=token.last_used_at,
+            expires_at=token.expires_at,
+            usage_count=int(token.usage_count or 0),
+        )
+
+    async def _record_admin_session_revoke_audit(
+        session: AsyncSession,
+        *,
+        actor_user: Any,
+        subject_user: Any,
+        session_id: Optional[UUID],
+        revoked_count: int,
+        reason: str,
+        request: Optional[Request] = None,
+    ) -> None:
+        if not getattr(auth, "user_audit_service", None) or revoked_count <= 0:
+            return
+        await auth.user_audit_service.record_event(
+            session,
+            event_category="authentication",
+            event_type="user.sessions_revoked",
+            event_source="users_router.revoke_user_sessions",
+            subject_user_id=subject_user.id,
+            subject_email_snapshot=subject_user.email,
+            actor_user_id=actor_user.id,
+            root_entity_id=getattr(subject_user, "root_entity_id", None),
+            ip_address=request.client.host if request and request.client else None,
+            user_agent=request.headers.get("user-agent") if request else None,
+            reason=reason,
+            after={
+                "revoked_count": revoked_count,
+                "session_id": str(session_id) if session_id else None,
+            },
+            metadata={"admin_action": True},
+        )
+
+    @router.get(
+        "/me/sessions",
+        response_model=List[UserSessionResponse],
+        summary="List my active sessions",
+        description="List the authenticated user's active refresh-token sessions.",
+    )
+    async def list_my_sessions(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        tokens = await auth.auth_service.list_user_sessions(
+            session, UUID(str(auth_result["user_id"]))
+        )
+        return [_serialize_user_session(token) for token in tokens]
+
+    @router.delete(
+        "/me/sessions/{session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke one of my sessions",
+        description="Revoke a single active session belonging to the authenticated user.",
+    )
+    async def revoke_my_session(
+        session_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        try:
+            await auth.auth_service.revoke_user_session(
+                session,
+                UUID(str(auth_result["user_id"])),
+                session_id,
+                reason="User revoked session",
+            )
+            return None
+        except TokenInvalidError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            ) from exc
+
+    @router.delete(
+        "/me/sessions",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke all of my sessions",
+        description="Revoke every active refresh-token session for the authenticated user.",
+    )
+    async def revoke_all_my_sessions(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        await auth.auth_service.revoke_all_user_tokens(
+            session,
+            UUID(str(auth_result["user_id"])),
+            reason="User revoked all sessions",
+        )
+        return None
+
+    def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse:
+        return SocialAccountResponse(
+            id=account.id,
+            provider=account.provider,
+            provider_user_id=account.provider_user_id,
+            email=account.provider_email or "",
+            email_verified=account.provider_email_verified,
+            display_name=account.display_name,
+            avatar_url=account.avatar_url,
+            linked_at=account.created_at.isoformat(),
+            last_used_at=(
+                account.last_login_at.isoformat() if account.last_login_at else None
+            ),
+        )
+
+    @router.get(
+        "/me/social-accounts",
+        response_model=List[SocialAccountResponse],
+        summary="List my linked social accounts",
+        description="List OAuth/social accounts linked to the authenticated user.",
+    )
+    async def list_my_social_accounts(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        user_id = UUID(str(auth_result["user_id"]))
+        result = await session.execute(
+            select(SocialAccount)
+            .where(cast(Any, SocialAccount.user_id) == user_id)
+            .order_by(cast(Any, SocialAccount.created_at).desc())
+        )
+        return [_to_social_account_response(account) for account in result.scalars().all()]
+
+    @router.delete(
+        "/me/social-accounts/{account_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Unlink a social account",
+        description=(
+            "Unlink one OAuth/social account from the authenticated user. "
+            "Fails if it would remove the last authentication method."
+        ),
+    )
+    async def unlink_my_social_account(
+        account_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        user_id = UUID(str(auth_result["user_id"]))
+        user = await auth.user_service.get_user_by_id(session, user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+
+        account_result = await session.execute(
+            select(SocialAccount).where(
+                cast(Any, SocialAccount.id) == account_id,
+                cast(Any, SocialAccount.user_id) == user_id,
+            )
+        )
+        account = account_result.scalar_one_or_none()
+        if account is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Social account not found",
+            )
+
+        remaining_accounts = await session.execute(
+            select(func.count())
+            .select_from(SocialAccount)
+            .where(cast(Any, SocialAccount.user_id) == user_id)
+        )
+        social_count = int(remaining_accounts.scalar_one())
+        # Usable password login is tracked via auth_methods, not merely a hash
+        # (OAuth self-register used to leave a placeholder hash + PASSWORD flag).
+        has_password_login = bool(
+            getattr(user, "has_auth_method", None)
+            and user.has_auth_method("PASSWORD")
+            and getattr(user, "hashed_password", None)
+        )
+        if social_count <= 1 and not has_password_login:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(CannotUnlinkLastMethodError()),
+            )
+
+        await session.delete(account)
+
+        provider_method = str(account.provider).upper()
+        methods = [
+            method
+            for method in list(getattr(user, "auth_methods", None) or [])
+            if str(method).upper() != provider_method
+        ]
+        user.auth_methods = methods
+        await session.flush()
+        return None
+
+    @router.get(
+        "/orphaned",
+        response_model=PaginatedResponse[OrphanedUserResponse],
+        summary="List orphaned users",
+        description="List users with no active entity memberships but historical assignments (requires user:read permission)",
+    )
+    async def list_orphaned_users(
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
+        root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """List orphaned users with latest membership history context."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            # Orphaned users belong to no tree, so they match only global scopes (DD-056).
+            if auth.config.enforce_user_scope:
+                scope = await _resolve_actor_scope(session, actor_user)
+                if not scope.get("is_global"):
+                    return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            if not getattr(auth, "membership_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            orphaned_records, total = await auth.membership_service.list_orphaned_users(
+                session,
+                page=page,
+                limit=limit,
+                search=search,
+                root_entity_id=root_entity_id,
+            )
+
+            user_payloads = await build_user_responses(session, [record.user for record in orphaned_records])
+            user_by_id = {payload.id: payload for payload in user_payloads}
+            items = [
+                OrphanedUserResponse(
+                    user=user_by_id[str(record.user.id)],
+                    active_membership_count=record.active_membership_count,
+                    total_membership_count=record.total_membership_count,
+                    last_membership_event_type=record.last_event_type,
+                    last_membership_event_at=record.last_event_at,
+                    last_entity_id=str(record.last_entity_id) if record.last_entity_id else None,
+                    last_entity_name=record.last_entity_name,
+                )
+                for record in orphaned_records
+            ]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, page=page, limit=limit, search=search)
+            raise
+
+    @router.get(
+        "/{user_id}/membership-history",
+        response_model=PaginatedResponse[MembershipHistoryEventResponse],
+        summary="Get user membership history",
+        description="Get append-only entity membership lifecycle history for a user (requires user:read permission)",
+    )
+    async def get_user_membership_history(
+        user_id: UUID,
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(50, ge=1, le=100, description="Results per page"),
+        entity_id: Optional[UUID] = Query(None, description="Filter to one entity"),
+        event_type: Optional[str] = Query(None, description="Filter by event type"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """Get paginated entity membership history for a user."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            if not getattr(auth, "membership_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            events, total = await auth.membership_service.get_user_membership_history(
+                session,
+                user_id,
+                page=page,
+                limit=limit,
+                entity_id=entity_id,
+                event_type=event_type,
+            )
+            items = [_serialize_membership_history_event(event) for event in events]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                page=page,
+                limit=limit,
+                event_type=event_type,
+            )
+            raise
+
+    @router.get(
+        "/{user_id}/audit-events",
+        response_model=PaginatedResponse[UserAuditEventResponse],
+        summary="Get user audit events",
+        description="Get high-signal user lifecycle audit events (requires user:read permission)",
+    )
+    async def get_user_audit_events(
+        user_id: UUID,
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(50, ge=1, le=100, description="Results per page"),
+        category: Optional[str] = Query(None, description="Filter by audit event category"),
+        event_type: Optional[str] = Query(None, description="Filter by audit event type"),
+        entity_id: Optional[UUID] = Query(None, description="Filter by related entity"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """Get paginated user-centric audit events."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            if not getattr(auth, "user_audit_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            events, total = await auth.user_audit_service.list_user_events(
+                session,
+                user_id,
+                page=page,
+                limit=limit,
+                event_category=category,
+                event_type=event_type,
+                entity_id=entity_id,
+            )
+            items = [_serialize_user_audit_event(event) for event in events]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                page=page,
+                limit=limit,
+                category=category,
+                event_type=event_type,
+            )
+            raise
+
+    @router.get(
+        "/{user_id}",
+        response_model=UserResponse,
+        summary="Get user by ID",
+        description="Get any user's profile (requires user:read permission)",
+    )
+    async def get_user(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """Get user by ID (admin only)."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            user = await _get_target_user_or_404(session, user_id, actor_user)
+
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.patch(
+        "/{user_id}",
+        response_model=UserResponse,
+        summary="Update user by ID",
+        description="Update any user's profile (requires user:update permission)",
+    )
+    async def update_user(
+        user_id: UUID,
+        data: UserUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Update user by ID (admin only).
+
+        Triggers on_after_update hook.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            update_data = data.model_dump(exclude_unset=True)
+            user = await auth.user_service.update_user_fields(
+                session,
+                user_id=user_id,
+                email=update_data.get("email"),
+                first_name=update_data.get("first_name"),
+                last_name=update_data.get("last_name"),
+                phone=update_data.get("phone"),
+                phone_provided="phone" in update_data,
+                changed_by_id=actor_user.id,
+            )
+            await auth.user_service.on_after_update(user, update_data, None)
+            # TODO: Add proper observability logging for user updates
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.patch(
+        "/{user_id}/password",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Reset user password (admin)",
+        description="Reset user password without requiring current password (requires user:update permission)",
+    )
+    async def admin_reset_password(
+        user_id: UUID,
+        data: AdminResetPasswordRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Reset user password (admin only).
+
+        Allows administrators to reset a user's password without knowing their current password.
+        This is different from /me/change-password which requires the current password.
+
+        Triggers password_changed notification.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            # Change user password using user service
+            await auth.user_service.change_password(
+                session,
+                user_id=user_id,
+                new_password=data.new_password,
+                changed_by_id=actor_user.id,
+            )
+
+            # Log admin password reset
+            if auth.observability:
+                auth.observability.logger.info("admin_password_reset", target_user_id=user_id, reset_by=obs.user_id)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+        return None
+
+    @router.patch(
+        "/{user_id}/superuser",
+        response_model=UserResponse,
+        summary="Update superuser privileges",
+        description="Grant or revoke platform superuser privileges. Requires current superuser privileges.",
+    )
+    async def update_user_superuser(
+        user_id: UUID,
+        data: UserSuperuserUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_superuser(),
+            )
+        ),
+    ):
+        """
+        Update a user's platform-wide superuser flag.
+
+        Superuser is intentionally not a role. This endpoint is restricted to
+        current superusers and records a durable user audit event.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            if not actor_user.is_superuser:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Superuser privileges required",
+                )
+
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+            if actor_user.id == user_id and not data.is_superuser:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="You cannot revoke your own superuser privileges",
+                )
+
+            user = await auth.user_service.update_superuser_status(
+                session,
+                user_id=user_id,
+                is_superuser=data.is_superuser,
+                changed_by_id=actor_user.id,
+                reason=data.reason,
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_superuser_status_changed",
+                    target_user_id=str(user_id),
+                    is_superuser=data.is_superuser,
+                    changed_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.patch(
+        "/{user_id}/status",
+        response_model=UserResponse,
+        summary="Update user status",
+        description="Change user account status (activate, suspend, ban). Requires user:update permission.",
+    )
+    async def update_user_status(
+        user_id: UUID,
+        data: UserStatusUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Update user account status.
+
+        Allows administrators to:
+        - Activate a suspended/banned user
+        - Suspend a user temporarily
+        - Ban a user permanently
+
+        Note: Cannot change status to 'deleted' via this endpoint.
+        Use DELETE /{user_id} for soft deletion.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            target_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            # Convert string status to enum
+            try:
+                new_status = UserStatus(data.status)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid status: {data.status}. Must be one of: active, suspended, banned",
+                )
+
+            # Prevent setting status to deleted via this endpoint
+            if new_status == UserStatus.DELETED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot set status to 'deleted'. Use DELETE endpoint instead.",
+                )
+            if target_user.status == UserStatus.DELETED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot change status for a deleted user. Use the restore endpoint instead.",
+                )
+
+            # Parse suspended_until if provided
+            suspended_until = None
+            if data.suspended_until and new_status == UserStatus.SUSPENDED:
+                from datetime import datetime as dt
+
+                try:
+                    suspended_until = dt.fromisoformat(data.suspended_until.replace("Z", "+00:00"))
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid suspended_until format. Use ISO 8601 datetime.",
+                    )
+
+            user = await auth.user_service.update_user_status(
+                session,
+                user_id=user_id,
+                status=new_status,
+                suspended_until=suspended_until,
+                changed_by_id=actor_user.id,
+                reason=data.reason,
+            )
+
+            # Log status change
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_status_changed",
+                    target_user_id=str(user_id),
+                    new_status=data.status,
+                    reason=data.reason,
+                    suspended_until=data.suspended_until,
+                    changed_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.post(
+        "/{user_id}/restore",
+        response_model=UserResponse,
+        summary="Restore user",
+        description="Restore a deleted user identity only (requires user:update permission)",
+    )
+    async def restore_user(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Restore a deleted user without restoring access grants or credentials."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            user = await auth.user_service.restore_user(
+                session,
+                user_id=user_id,
+                restored_by_id=actor_user.id,
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_restored",
+                    target_user_id=str(user_id),
+                    restored_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.delete(
+        "/{user_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Delete user",
+        description="Delete user account (requires user:delete permission)",
+    )
+    async def delete_user(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:delete"),
+            )
+        ),
+    ):
+        """
+        Delete user by ID (admin only).
+
+        Triggers on_before_delete and on_after_delete hooks.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            await auth.user_service.on_before_delete(user, None)
+            deleted = await auth.user_service.delete_user(
+                session,
+                user_id,
+                deleted_by_id=actor_user.id,
+            )
+            if not deleted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            await auth.user_service.on_after_delete(user, None)
+
+            # Log event
+            if auth.observability:
+                auth.observability.logger.info("user_deleted", target_user_id=user_id, deleted_by=obs.user_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+        return None
+
+    @router.post(
+        "/{user_id}/resend-invite",
+        response_model=UserResponse,
+        summary="Resend invitation",
+        description="Resend invitation email to an INVITED user (requires user:update permission)",
+    )
+    async def resend_invite(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Resend invitation by regenerating the invite token.
+
+        Only works for users with INVITED status.
+        Triggers on_after_invite hook with the new token.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            user, plain_token = await auth.user_service.resend_invite(
+                session,
+                user_id,
+                resent_by_id=actor_user.id,
+            )
+
+            # Trigger hook
+            await auth.user_service.on_after_invite(user, plain_token)
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "invite_resent",
+                    target_user_id=str(user_id),
+                    resent_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    # ============================================================
+    # USER ROLE MANAGEMENT ENDPOINTS
+    # ============================================================
+
+    @router.get(
+        "/{user_id}/roles",
+        response_model=List[RoleResponse],
+        summary="Get user's roles",
+        description="Get all roles assigned to a user (requires user:read permission)",
+    )
+    async def get_user_roles(
+        user_id: UUID,
+        include_inactive: bool = Query(False, description="Include inactive memberships"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        Get all roles assigned to a user.
+
+        Returns list of roles with their details. Optionally includes inactive memberships.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            # Get roles using role service
+            roles = await auth.role_service.get_user_roles(session, user_id=user_id, include_inactive=include_inactive)
+
+            # Convert to response schema
+            return [await build_role_response(session, role) for role in roles]
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.get(
+        "/{user_id}/role-memberships",
+        response_model=List[UserRoleMembershipDetailResponse],
+        summary="Get user's direct role memberships",
+        description="Get direct role assignment records with lifecycle metadata (requires user:read permission)",
+    )
+    async def get_user_role_memberships(
+        user_id: UUID,
+        include_inactive: bool = Query(False, description="Include inactive role memberships"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        Get direct role membership records for a user.
+
+        Returns assignment metadata such as validity windows and revocation info
+        alongside the embedded role definition.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            memberships = await auth.role_service.get_user_role_memberships(
+                session,
+                user_id=user_id,
+                include_inactive=include_inactive,
+            )
+
+            response_items = []
+            for membership in memberships:
+                response_items.append(
+                    UserRoleMembershipDetailResponse(
+                        id=str(membership.id),
+                        user_id=str(membership.user_id),
+                        role_id=str(membership.role_id),
+                        assigned_at=membership.assigned_at,
+                        assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
+                        valid_from=membership.valid_from,
+                        valid_until=membership.valid_until,
+                        status=membership.status,
+                        revoked_at=membership.revoked_at,
+                        revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
+                        revocation_reason=membership.revocation_reason,
+                        is_currently_valid=membership.is_currently_valid(),
+                        can_grant_permissions=membership.can_grant_permissions(),
+                        role=await build_role_response(session, membership.role),
+                    )
+                )
+
+            return response_items
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.post(
+        "/{user_id}/roles",
+        response_model=UserRoleMembershipResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Assign role to user",
+        description="Assign a role to a user (requires user:update permission)",
+    )
+    async def assign_role_to_user_endpoint(
+        user_id: UUID,
+        data: AssignRoleRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Assign a role to a user.
+
+        Creates a new role membership with optional time-based validity.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            # Validate role exists
+            role = await auth.role_service.get_role_by_id(session, UUID(data.role_id))
+            if not role:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+            # SEC-2: assigning a role grants its permissions — the actor must already
+            # hold every permission the role carries (superusers bypass naturally).
+            role_permission_names = await auth.role_service.get_role_permission_names(session, role.id)
+            await require_can_delegate_permissions(
+                session,
+                auth=auth,
+                actor_user_id=UUID(obs.user_id),
+                permission_names=role_permission_names,
+            )
+
+            # Assign role
+            membership = await auth.role_service.assign_role_to_user(
+                session,
+                user_id=user_id,
+                role_id=UUID(data.role_id),
+                assigned_by_id=UUID(obs.user_id),
+                valid_from=data.valid_from,
+                valid_until=data.valid_until,
+            )
+
+            # Log event
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_assigned",
+                    user_id=user_id,
+                    role_id=data.role_id,
+                    assigned_by=obs.user_id,
+                )
+
+            return UserRoleMembershipResponse(
+                id=str(membership.id),
+                user_id=str(membership.user_id),
+                role_id=str(membership.role_id),
+                assigned_at=membership.assigned_at,
+                assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
+                valid_from=membership.valid_from,
+                valid_until=membership.valid_until,
+                status=membership.status,
+                revoked_at=membership.revoked_at,
+                revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
+                is_currently_valid=membership.is_currently_valid(),
+                can_grant_permissions=membership.can_grant_permissions(),
+            )
+
+        except HTTPException:
+            raise
+        except PermissionDeniedError:
+            # Delegation containment (SEC-2) — surface as 403, not a logged 500.
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id), role_id=data.role_id)
+            raise
+
+    @router.delete(
+        "/{user_id}/roles/{role_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Remove role from user",
+        description="Revoke a role from a user (requires user:update permission)",
+    )
+    async def remove_role_from_user_endpoint(
+        user_id: UUID,
+        role_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Revoke a role from a user.
+
+        Soft deletes the role membership (changes status to REVOKED).
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            # Revoke role
+            success = await auth.role_service.revoke_role_from_user(
+                session,
+                user_id=user_id,
+                role_id=role_id,
+                revoked_by_id=UUID(obs.user_id),
+            )
+
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User does not have this role assigned",
+                )
+
+            # Log event
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_revoked",
+                    user_id=str(user_id),
+                    role_id=str(role_id),
+                    revoked_by=obs.user_id,
+                )
+
+            return None
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id), role_id=str(role_id))
+            raise
+
+
+    def _serialize_user_role_membership(membership: Any) -> UserRoleMembershipResponse:
+        return UserRoleMembershipResponse(
+            id=str(membership.id),
+            user_id=str(membership.user_id),
+            role_id=str(membership.role_id),
+            assigned_at=membership.assigned_at,
+            assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
+            valid_from=membership.valid_from,
+            valid_until=membership.valid_until,
+            status=membership.status,
+            revoked_at=membership.revoked_at,
+            revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
+            revocation_reason=membership.revocation_reason,
+            is_currently_valid=membership.is_currently_valid(),
+            can_grant_permissions=membership.can_grant_permissions(),
+        )
+
+    @router.patch(
+        "/{user_id}/role-memberships/{membership_id}",
+        response_model=UserRoleMembershipResponse,
+        summary="Update user role membership",
+        description=(
+            "Update a direct role membership validity window and/or status "
+            "(requires user:update permission)."
+        ),
+    )
+    async def update_user_role_membership_endpoint(
+        user_id: UUID,
+        membership_id: UUID,
+        data: UserRoleMembershipUpdate,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Update a direct role membership for a user."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            fields_set = data.model_fields_set
+            if not fields_set:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No fields provided to update",
+                )
+
+            membership = await auth.role_service.update_user_role_membership(
+                session,
+                user_id=user_id,
+                membership_id=membership_id,
+                valid_from=data.valid_from,
+                update_valid_from="valid_from" in fields_set,
+                valid_until=data.valid_until,
+                update_valid_until="valid_until" in fields_set,
+                status=data.status,
+                update_status="status" in fields_set,
+                updated_by_id=UUID(obs.user_id),
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_membership_updated",
+                    user_id=str(user_id),
+                    membership_id=str(membership_id),
+                    updated_by=obs.user_id,
+                    fields=sorted(fields_set),
+                )
+
+            return _serialize_user_role_membership(membership)
+
+        except HTTPException:
+            raise
+        except (InvalidInputError, MembershipNotFoundError):
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                membership_id=str(membership_id),
+            )
+            raise
+
+    @router.get(
+        "/{user_id}/sessions",
+        response_model=List[UserSessionResponse],
+        summary="List a user's active sessions",
+        description=(
+            "List active refresh-token sessions for a user (requires user:read permission). "
+            "Does not return token secrets."
+        ),
+    )
+    async def list_user_sessions_endpoint(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+            tokens = await auth.auth_service.list_user_sessions(session, user_id)
+            return [_serialize_user_session(token) for token in tokens]
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.delete(
+        "/{user_id}/sessions/{session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke a user's session",
+        description="Revoke one active session for a user (requires user:update permission).",
+    )
+    async def revoke_user_session_endpoint(
+        user_id: UUID,
+        session_id: UUID,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            subject_user = await _get_target_user_or_404(
+                session, user_id, actor_user, for_mutation=True
+            )
+            reason = "Session revoked by admin"
+            try:
+                revoked_count = await auth.auth_service.revoke_user_session(
+                    session,
+                    user_id,
+                    session_id,
+                    reason=reason,
+                )
+            except TokenInvalidError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Session not found",
+                ) from exc
+
+            await _record_admin_session_revoke_audit(
+                session,
+                actor_user=actor_user,
+                subject_user=subject_user,
+                session_id=session_id,
+                revoked_count=revoked_count,
+                reason=reason,
+                request=request,
+            )
+            return None
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                session_id=str(session_id),
+            )
+            raise
+
+    @router.delete(
+        "/{user_id}/sessions",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke all of a user's sessions",
+        description="Revoke every active session for a user (requires user:update permission).",
+    )
+    async def revoke_all_user_sessions_endpoint(
+        user_id: UUID,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            subject_user = await _get_target_user_or_404(
+                session, user_id, actor_user, for_mutation=True
+            )
+            reason = "All sessions revoked by admin"
+            revoked_count = await auth.auth_service.revoke_all_user_tokens(
+                session,
+                user_id,
+                reason=reason,
+            )
+            await _record_admin_session_revoke_audit(
+                session,
+                actor_user=actor_user,
+                subject_user=subject_user,
+                session_id=None,
+                revoked_count=revoked_count,
+                reason=reason,
+                request=request,
+            )
+            return None
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.get(
+        "/{user_id}/api-keys",
+        response_model=List[ApiKeyResponse],
+        summary="List a user's personal API keys",
+        description=(
+            "List personal API keys owned by a user (requires user:read permission). "
+            "Does not return key secrets."
+        ),
+    )
+    async def list_user_api_keys_endpoint(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """List personal API keys for another user (admin)."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            api_keys = await auth.api_key_service.list_user_api_keys(session, user_id)
+            return await build_api_key_responses(auth, session, api_keys)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.delete(
+        "/{user_id}/api-keys/{key_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke a user's personal API key",
+        description=(
+            "Revoke a personal API key owned by a user (requires user:update permission)."
+        ),
+    )
+    async def revoke_user_api_key_endpoint(
+        user_id: UUID,
+        key_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Revoke a personal API key owned by another user (admin)."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            api_key = await auth.api_key_service.get_api_key(session, key_id)
+            if not api_key or api_key.owner_id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="API key not found",
+                )
+
+            await auth.api_key_service.revoke_api_key(
+                session,
+                key_id,
+                actor_user_id=UUID(obs.user_id),
+                reason="API key revoked by admin",
+                event_source="users_router.revoke_user_api_key",
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_api_key_revoked",
+                    user_id=str(user_id),
+                    key_id=str(key_id),
+                    revoked_by=obs.user_id,
+                )
+
+            return None
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                key_id=str(key_id),
+            )
+            raise
+
+    @router.get(
+        "/{user_id}/permissions",
+        response_model=List[UserPermissionSource],
+        summary="Get user's permissions",
+        description=(
+            "Get all effective permissions for a user with source information. "
+            "Users may read their own permissions; reading another user's permissions "
+            "requires user:read permission."
+        ),
+    )
+    async def get_user_permissions(
+        user_id: UUID,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+        session: AsyncSession = Depends(auth.uow),
+    ):
+        """
+        Get all effective permissions for a user with source information.
+
+        Returns detailed permission objects with information about which role granted each permission.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            is_self_request = actor_user.id == user_id
+            if not is_self_request and not actor_user.is_superuser:
+                can_read_users = await auth.permission_service.check_permission(
+                    session,
+                    user_id=UUID(str(actor_user.id)),
+                    permission="user:read",
+                )
+                if not can_read_users:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Not enough permissions",
+                    )
+
+            permission_sources = []
+            seen_permissions = set()
+            roles_for_lookup: list[Any] = []
+
+            def _append_role_permissions(
+                role: Any,
+                permissions_by_role_id: dict[UUID, list[Any]],
+            ) -> None:
+                if role is None:
+                    return
+                if getattr(role, "status", DefinitionStatus.ACTIVE) != DefinitionStatus.ACTIVE:
+                    return
+
+                role_permissions = permissions_by_role_id.get(role.id, [])
+                for perm in role_permissions:
+                    if perm.name in seen_permissions:
+                        continue
+                    permission_sources.append(
+                        UserPermissionSource(
+                            permission=PermissionResponse(
+                                id=str(perm.id),
+                                name=perm.name,
+                                display_name=perm.display_name,
+                                description=perm.description,
+                                resource=perm.resource,
+                                action=perm.action,
+                                scope=perm.scope,
+                                is_system=perm.is_system,
+                                is_active=perm.is_active,
+                                tags=[],
+                                metadata={},
+                            ),
+                            source="role",
+                            source_id=str(role.id),
+                            source_name=role.name,
+                        )
+                    )
+                    seen_permissions.add(perm.name)
+
+            # Direct user role memberships.
+            direct_role_memberships_stmt = (
+                select(UserRoleMembership)
+                .options(selectinload(cast(Any, UserRoleMembership.role)))
+                .where(
+                    cast(Any, UserRoleMembership.user_id) == user_id,
+                )
+            )
+            direct_role_memberships_result = await session.execute(direct_role_memberships_stmt)
+            direct_role_memberships = direct_role_memberships_result.scalars().all()
+            for membership in direct_role_memberships:
+                if not membership.is_currently_valid():
+                    continue
+                role = membership.role
+                if role is None:
+                    continue
+                if getattr(role, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ARCHIVED:
+                    continue
+                roles_for_lookup.append(role)
+
+            # Enterprise entity memberships also grant permissions and must be
+            # reflected here so host/UI permission gates match runtime behavior.
+            entity_memberships_stmt = (
+                select(EntityMembership)
+                .options(selectinload(cast(Any, EntityMembership.roles)))
+                .where(
+                    cast(Any, EntityMembership.user_id) == user_id,
+                )
+            )
+            entity_memberships_result = await session.execute(entity_memberships_stmt)
+            entity_memberships = entity_memberships_result.scalars().all()
+
+            for membership in entity_memberships:
+                if not membership.can_grant_permissions():
+                    continue
+                roles_for_lookup.extend(role for role in membership.roles if role is not None)
+
+            permissions_by_role_id = await auth.permission_service.get_permissions_for_roles(
+                session,
+                [cast(UUID, role.id) for role in roles_for_lookup if getattr(role, "id", None) is not None],
+            )
+
+            for role in roles_for_lookup:
+                _append_role_permissions(role, permissions_by_role_id)
+
+            # Sort by permission name
+            permission_sources.sort(key=lambda x: x.permission.name)
+
+            return permission_sources
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    return router

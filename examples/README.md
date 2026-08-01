@@ -1,0 +1,427 @@
+# OutlabsAuth Examples
+
+Runnable consumer apps that show how to mount the library. Prefer these over
+abstract specs when you are learning the integration shape.
+
+Also see the [user docs index](../docs-library/) and
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI).
+
+## Available Examples
+
+### 1. [SimpleRBAC — Blog API](./simple_rbac/)
+
+**Best for**: Flat role structure
+
+- JWT auth, roles (reader / writer / editor / admin)
+- Permission checks and owner-based access
+- Optional [OutlabsAuth UI](../docs/AUTH_UI.md) against port `8003`
+
+**Run**: `cd simple_rbac && uv sync && uv run uvicorn main:app --reload --port 8003`
+
+[Documentation →](./simple_rbac/README.md)
+
+---
+
+### 2. [EnterpriseRBAC — Real Estate Leads](./enterprise_rbac/)
+
+**Best for**: Org hierarchy, multi-root isolation, tree permissions
+
+- ACME + Summit seeded personas (`reset_test_env.py`)
+- Entities, memberships, leads domain, API-key admin surfaces
+- Optional OutlabsAuth UI against port `8004`
+
+**Run**: `cd enterprise_rbac && uv sync && uv run uvicorn main:app --reload --port 8004`
+
+[Documentation →](./enterprise_rbac/README.md) · [Quick start →](./enterprise_rbac/QUICKSTART.md)
+
+---
+
+### 3. [ABAC Cookbook](./abac_cookbook/)
+
+**Best for**: ABAC conditions + condition groups
+
+- Role conditions / groups (AND/OR)
+- Server-derived `resource.*` context
+- Public `/roles/{id}/conditions` configuration
+
+**Run**: `cd abac_cookbook && uv run uvicorn main:app --port 8005`
+
+[Documentation →](./abac_cookbook/README.md)
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+```bash
+# PostgreSQL (required for all examples)
+docker run -d -p 5432:5432 --name postgres -e POSTGRES_PASSWORD=postgres postgres:16
+
+# Redis (optional; recommended for cache-backed flows)
+docker run -d -p 6379:6379 --name redis redis:latest
+```
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/outlabsio/outlabsAuth.git
+cd outlabsAuth
+
+# Navigate to an example app
+cd examples/simple_rbac
+
+# Install the example as a real consumer app
+uv sync
+
+# Optional: validate a local release candidate wheel instead of PyPI
+# uv pip install --reinstall ../../dist/outlabs_auth-<version>-py3-none-any.whl
+
+# Bootstrap auth schema
+uv run outlabs-auth migrate
+
+# Seed/reset example-owned data
+uv run python reset_test_env.py
+
+# Run the example
+uv run uvicorn main:app --reload --port 8003
+```
+
+### Production-style baseline
+
+Use the examples as consumer references, but keep production defaults explicit:
+
+- use a direct `postgresql+asyncpg://...` runtime URL instead of a transaction-pooler URL
+- set an explicit auth schema such as `OUTLABS_AUTH_SCHEMA=outlabs_auth`
+- keep runtime `auto_migrate=False`
+- run `uv run outlabs-auth migrate` and `uv run outlabs-auth seed-system` in a single-process prestart or release hook before starting multi-worker app processes
+- provide `REDIS_URL` for production counters, rate limits, and permission caching
+
+If you are validating a packaged integration, prefer the library README's
+production baseline over the convenience local-demo settings used by the
+examples.
+
+## Choosing an Example
+
+### Use SimpleRBAC Example if:
+- ✅ You have a simple application structure
+- ✅ Users have ONE role globally
+- ✅ No organizational hierarchy needed
+- ✅ Permissions don't vary by context
+- ✅ Quick to implement and understand
+
+**Examples**: Personal blogs, SaaS products, simple APIs
+
+---
+
+### Use EnterpriseRBAC Example if:
+- ✅ You have departments, teams, or divisions
+- ✅ Users need different roles in different parts of the org
+- ✅ Managers need to control descendant entities
+- ✅ You need entity-scoped permissions
+- ✅ Complex organizational structures
+
+**Examples**: Corporate systems, entity-isolated apps, project management
+
+---
+
+### Use ABAC Cookbook if:
+- ✅ You need attribute-based conditions (budget limits, etc.)
+- ✅ Permissions should adapt based on resource context
+- ✅ You want a focused lab for `/roles/{id}/conditions` (not a full product demo)
+
+**Examples**: Financial rules, ownership checks, multi-condition groups
+
+---
+
+## Learning Path
+
+### 1. Start with SimpleRBAC (30 minutes)
+- Understand basic authentication flow
+- Learn JWT token handling
+- Practice permission checks
+- Implement owner-based access
+- Optionally connect [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI)
+
+### 2. Progress to EnterpriseRBAC (1-2 hours)
+- Create entity hierarchies
+- Assign multiple roles
+- Use tree permissions
+- Implement entity-scoped checks
+- Connect OutlabsAuth UI for hierarchy admin
+
+### 3. Explore ABAC (optional)
+- Add ABAC conditions via the cookbook example
+- Enable `enable_abac=True` on EnterpriseRBAC when you need it in-product
+- Configure `REDIS_URL` for production counters and permission caching
+
+---
+
+## Example Comparison
+
+| Feature | SimpleRBAC | EnterpriseRBAC | ABAC Cookbook |
+|---------|-----------|----------------|---------------|
+| **Authentication** | ✅ JWT | ✅ JWT + API keys | ✅ JWT |
+| **Roles per User** | Multiple (flat) | Multiple (per entity) | Multiple |
+| **Entity Hierarchy** | ❌ | ✅ | ✅ (minimal) |
+| **Tree Permissions** | ❌ | ✅ | ✅ |
+| **ABAC Conditions** | ❌ | Optional flag | ✅ Focus |
+| **Context-Aware Roles** | ❌ | Optional flag | ❌ |
+| **Redis Caching** | Optional | Optional | Optional |
+| **Complexity** | Low | Medium | Intermediate |
+| **Setup Time** | 15 min | 30 min | 20 min |
+| **Best For** | Simple apps | Orgs with hierarchy | Learning ABAC |
+| **Admin UI** | Optional | Optional | Not primary |
+
+Optional shared admin console for Simple/Enterprise hosts:
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) — see [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
+
+---
+
+## API Endpoints Comparison
+
+### SimpleRBAC Endpoints
+```
+POST   /register              # Register new user
+POST   /login                 # Login
+GET    /me                    # Current user
+GET    /posts                 # List posts (public)
+POST   /posts                 # Create post
+GET    /posts/{id}            # Get post
+PUT    /posts/{id}            # Update post
+DELETE /posts/{id}            # Delete post
+POST   /admin/users/{id}/role # Assign role
+```
+
+### EnterpriseRBAC Endpoints
+```
+POST   /register                     # Register new user
+POST   /login                        # Login
+GET    /me                           # Current user + entities
+GET    /entities                     # List entities
+POST   /entities                     # Create entity
+GET    /entities/{id}                # Get entity
+GET    /entities/{id}/hierarchy      # Get hierarchy
+POST   /entities/{id}/members        # Add member
+GET    /entities/{id}/members        # List members
+POST   /entities/{id}/projects       # Create project
+GET    /entities/{id}/projects       # List projects
+```
+
+---
+
+## Common Patterns
+
+### Pattern 1: Protect an Endpoint
+
+```python
+from outlabs_auth.dependencies import AuthDeps
+
+deps = AuthDeps(auth)
+
+# Require authentication
+@app.get("/protected")
+async def protected_route(ctx = Depends(deps.require_auth())):
+    user = ctx.metadata.get("user")
+    return {"message": f"Hello, {user.username}!"}
+```
+
+### Pattern 2: Check Permission
+
+```python
+# Require specific permission
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    ctx = Depends(deps.require_permission("user:delete"))
+):
+    await auth.user_service.delete_user(user_id)
+    return {"success": True}
+```
+
+### Pattern 3: Optional Authentication
+
+```python
+# Public endpoint with optional auth
+@app.get("/posts")
+async def list_posts(ctx = Depends(deps.optional_auth())):
+    if ctx:
+        # Authenticated - show all posts
+        return await get_all_posts()
+    else:
+        # Public - show only published
+        return await get_published_posts()
+```
+
+### Pattern 4: Entity-Scoped Permission (EnterpriseRBAC)
+
+```python
+# Check permission in specific entity
+@app.put("/entities/{entity_id}")
+async def update_entity(
+    entity_id: str,
+    ctx = Depends(deps.require_auth())
+):
+    # Check if user can update this entity
+    has_perm = await auth.permission_service.check_permission(
+        user_id=ctx.user_id,
+        permission="entity:update",
+        entity_id=entity_id,
+    )
+    if not has_perm[0]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Update entity...
+```
+
+---
+
+## Development Tips
+
+### Tip 1: Use API Documentation
+
+All examples include OpenAPI/Swagger documentation:
+- **SimpleRBAC**: http://localhost:8003/docs
+- **EnterpriseRBAC**: http://localhost:8004/docs
+
+### Tip 2: Check Logs
+
+Enable debug logging to see permission checks:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+### Tip 3: Test Permissions
+
+Use curl or httpie to test different user roles:
+
+```bash
+# Login as different users
+TOKEN_ADMIN=$(curl -s -X POST http://localhost:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"pass"}' \
+  | jq -r '.access_token')
+
+TOKEN_USER=$(curl -s -X POST http://localhost:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"pass"}' \
+  | jq -r '.access_token')
+
+# Test with different tokens
+curl -H "Authorization: Bearer $TOKEN_ADMIN" http://localhost:8000/admin/users
+curl -H "Authorization: Bearer $TOKEN_USER" http://localhost:8000/admin/users  # Should fail
+```
+
+### Tip 4: Use Docker Compose
+
+Create a `docker-compose.yml` for your example:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: blog_simple_rbac
+    ports:
+      - "5432:5432"
+
+  redis:   # optional — only if you enable caching
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/blog_simple_rbac
+      # Must be >=32 chars, or the app refuses to start:
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      - SECRET_KEY=${SECRET_KEY:?generate one, see above}
+    depends_on:
+      - postgres
+```
+
+---
+
+## Troubleshooting
+
+### Database Connection Failed
+
+The examples default to `postgresql+asyncpg://postgres:postgres@localhost:5432/<example_db>`
+(`blog_simple_rbac` or `realestate_enterprise_rbac`) — override with `DATABASE_URL`.
+
+```bash
+# Is Postgres up?
+docker ps | grep postgres
+
+# Start it and create the example's database
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name postgres postgres:16
+createdb -h localhost -U postgres blog_simple_rbac
+```
+
+### App Won't Start: secret_key
+
+`secret_key` must be at least 32 characters for HS256 — a short placeholder fails at
+construction, before the first request.
+
+```bash
+export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+```
+
+### Permission Denied Errors
+
+```bash
+# Check user's roles
+curl -X GET http://localhost:8000/me \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check role permissions
+curl -X GET http://localhost:8000/admin/roles \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Token Expired
+
+```bash
+# Tokens expire after 60 minutes by default
+# Login again to get a new token
+curl -X POST http://localhost:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"password"}'
+```
+
+---
+
+## Next Steps
+
+1. **Run the examples**: Start with SimpleRBAC
+2. **Read the documentation**: Check each example's README
+3. **Modify the examples**: Add your own endpoints
+4. **Build your app**: Use examples as starting point
+5. **Read the guides**: Check [docs/](../docs/)
+
+---
+
+## Contributing
+
+Found a bug in an example? Have a suggestion?
+
+- **Issues**: [GitHub Issues](https://github.com/outlabs/outlabs-auth/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/outlabs/outlabs-auth/discussions)
+- **Pull Requests**: Welcome!
+
+---
+
+## License
+
+MIT License - see [LICENSE](../LICENSE) file for details
+
+---
+
+**Built with ❤️ by Outlabs**

@@ -1,0 +1,2357 @@
+"""
+API Key Service
+
+Handles API key management and validation with Redis counter pattern for usage tracking.
+Uses SQLAlchemy for PostgreSQL backend.
+"""
+
+from dataclasses import dataclass
+import logging
+import math
+import time
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from uuid import UUID, uuid4
+
+from sqlalchemy import bindparam
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import func, or_, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
+from sqlalchemy.orm import selectinload
+
+from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.exceptions import (
+    AuthenticationInfrastructureError,
+    InvalidInputError,
+    RateLimitError,
+    UserNotFoundError,
+)
+from outlabs_auth.models.sql.api_key import APIKey, APIKeyIPWhitelist, APIKeyScope
+from outlabs_auth.models.sql.api_key_usage_sync_batch import APIKeyUsageSyncBatch
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.services.base import BaseService
+
+if TYPE_CHECKING:
+    from outlabs_auth.observability.service import ObservabilityService
+    from outlabs_auth.services.api_key_policy import APIKeyPolicyService
+    from outlabs_auth.services.cache import CacheService
+    from outlabs_auth.services.redis_client import RedisClient
+    from outlabs_auth.services.user_audit import UserAuditService
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class ResolvedAPIKeyOwner:
+    """Resolved concrete owner for an API key."""
+
+    owner_type: str
+    user: Optional[User] = None
+    integration_principal: Optional[IntegrationPrincipal] = None
+
+    @property
+    def owner_id(self) -> UUID:
+        if self.integration_principal is not None:
+            return self.integration_principal.id
+        if self.user is not None:
+            return self.user.id
+        raise RuntimeError("API key owner resolution is missing both user and integration principal")
+
+
+@dataclass(slots=True)
+class APIKeyUsageCounterBatch:
+    """Counter entries owned by one durable Redis-to-PostgreSQL sync batch."""
+
+    batch_id: UUID
+    counters: dict[str, int]
+
+
+class APIKeyService(BaseService[APIKey]):
+    """
+    API key management service with Redis counter pattern.
+
+    Features:
+    - API key CRUD operations
+    - Fast validation with Redis counters
+    - Rate limiting
+    - Usage tracking (99% fewer DB writes via Redis)
+    - Background sync to database
+    """
+
+    def __init__(
+        self,
+        config: AuthConfig,
+        redis_client: Optional["RedisClient"] = None,
+        policy_service: Optional["APIKeyPolicyService"] = None,
+        user_audit_service: Optional["UserAuditService"] = None,
+        observability: Optional["ObservabilityService"] = None,
+    ):
+        """
+        Initialize APIKeyService.
+
+        Args:
+            config: Authentication configuration
+            redis_client: Optional Redis client for counters
+        """
+        super().__init__(APIKey)
+        self.config = config
+        self.redis_client = redis_client
+        self.policy_service = policy_service
+        self.user_audit_service = user_audit_service
+        self.observability = observability
+        self.cache_service: Optional["CacheService"] = None
+        # Optional per-process API-key auth snapshot cache (PERF, opt-in via
+        # config.api_key_local_snapshot_cache_ttl). Maps key_hash -> (expiry_monotonic, snapshot).
+        self._local_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._local_snapshot_cache_max = 50000
+
+    def _local_snapshot_cache_enabled(self) -> bool:
+        return (getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0) > 0
+
+    def _local_snapshot_get(self, key_hash: str) -> Optional[dict[str, Any]]:
+        """Return a fresh in-process snapshot for ``key_hash`` (miss/disabled/expired -> None).
+
+        NOTE: the returned dict is shared, not copied — callers must treat snapshots as
+        read-only (the existing hot path builds new auth_result dicts from them and never
+        mutates them).
+        """
+        if not self._local_snapshot_cache_enabled():
+            return None
+        entry = self._local_snapshot_cache.get(key_hash)
+        if entry is None:
+            return None
+        expires_at, snapshot = entry
+        if time.monotonic() >= expires_at:
+            self._local_snapshot_cache.pop(key_hash, None)
+            return None
+        return snapshot
+
+    def _local_snapshot_put(self, key_hash: str, snapshot: dict[str, Any]) -> None:
+        ttl = getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0
+        if ttl <= 0:
+            return
+        cache = self._local_snapshot_cache
+        if len(cache) >= self._local_snapshot_cache_max:
+            # Coarse bound to avoid unbounded growth; entries are short-lived anyway.
+            cache.clear()
+        cache[key_hash] = (time.monotonic() + ttl, snapshot)
+
+    def _local_snapshot_evict(self, key_hash: str) -> None:
+        self._local_snapshot_cache.pop(key_hash, None)
+
+    async def resolve_api_key_owner(
+        self,
+        session: AsyncSession,
+        api_key: APIKey,
+    ) -> Optional[ResolvedAPIKeyOwner]:
+        """Resolve the concrete owner record for a stored API key."""
+        if api_key.integration_principal_id is not None:
+            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            if principal is None:
+                return None
+            return ResolvedAPIKeyOwner(owner_type="integration_principal", integration_principal=principal)
+
+        if api_key.owner_id is not None:
+            user = await session.get(User, api_key.owner_id)
+            if user is None:
+                return None
+            return ResolvedAPIKeyOwner(owner_type="user", user=user)
+
+        return None
+
+    async def resolve_requested_owner(
+        self,
+        session: AsyncSession,
+        *,
+        owner_id: Optional[UUID] = None,
+        integration_principal_id: Optional[UUID] = None,
+    ) -> ResolvedAPIKeyOwner:
+        """Resolve a requested API key owner for create/rotate flows."""
+        if (owner_id is None) == (integration_principal_id is None):
+            raise InvalidInputError(
+                message="Exactly one API key owner must be specified",
+                details={
+                    "owner_id": str(owner_id) if owner_id else None,
+                    "integration_principal_id": str(integration_principal_id) if integration_principal_id else None,
+                },
+            )
+
+        if integration_principal_id is not None:
+            principal = await session.get(IntegrationPrincipal, integration_principal_id)
+            if principal is None:
+                raise InvalidInputError(
+                    message="Integration principal not found",
+                    details={"integration_principal_id": str(integration_principal_id)},
+                )
+            return ResolvedAPIKeyOwner(owner_type="integration_principal", integration_principal=principal)
+
+        user = await session.get(User, owner_id)
+        if user is None:
+            raise UserNotFoundError(message="User not found", details={"user_id": str(owner_id)})
+        return ResolvedAPIKeyOwner(owner_type="user", user=user)
+
+    async def create_api_key(
+        self,
+        session: AsyncSession,
+        *,
+        owner_id: Optional[UUID] = None,
+        integration_principal_id: Optional[UUID] = None,
+        name: str,
+        scopes: Optional[List[str]] = None,
+        rate_limit_per_minute: int = 60,
+        rate_limit_per_hour: Optional[int] = None,
+        rate_limit_per_day: Optional[int] = None,
+        entity_id: Optional[UUID] = None,
+        inherit_from_tree: bool = False,
+        key_kind: APIKeyKind = APIKeyKind.PERSONAL,
+        ip_whitelist: Optional[List[str]] = None,
+        expires_in_days: Optional[int] = None,
+        description: Optional[str] = None,
+        prefix_type: str = "sk_live",
+        actor_user_id: Optional[UUID] = None,
+        event_source: str = "api_key_service.create_api_key",
+        record_audit: bool = True,
+        record_observability: bool = True,
+    ) -> tuple[str, APIKey]:
+        """
+        Create a new API key.
+
+        Args:
+            session: Database session
+            owner_id: Human user owner for personal keys
+            integration_principal_id: Non-human owner for system integration keys
+            name: Human-readable key name
+            scopes: Allowed permissions (None = all)
+            rate_limit_per_minute: Max requests per minute
+            rate_limit_per_hour: Max requests per hour
+            rate_limit_per_day: Max requests per day
+            entity_id: Scope to specific entity (EnterpriseRBAC)
+            inherit_from_tree: Allow access to descendant entities (EnterpriseRBAC)
+            ip_whitelist: Allowed IP addresses
+            expires_in_days: Days until expiration
+            description: Optional description
+            prefix_type: Key prefix (sk_live, sk_test)
+
+        Returns:
+            tuple[str, APIKey]: (full_api_key, api_key_model)
+                WARNING: full_api_key is only returned once!
+
+        Raises:
+            UserNotFoundError: If owner doesn't exist
+        """
+        resolved_owner = await self.resolve_requested_owner(
+            session,
+            owner_id=owner_id,
+            integration_principal_id=integration_principal_id,
+        )
+        owner = resolved_owner.user
+        integration_principal = resolved_owner.integration_principal
+        effective_actor_user_id = actor_user_id or (owner.id if owner is not None else None)
+
+        if resolved_owner.owner_type == "user" and key_kind != APIKeyKind.PERSONAL:
+            raise InvalidInputError(
+                message="Human users may only own personal API keys",
+                details={"key_kind": key_kind.value},
+            )
+        if resolved_owner.owner_type == "integration_principal" and key_kind != APIKeyKind.SYSTEM_INTEGRATION:
+            raise InvalidInputError(
+                message="Integration principals may only own system integration API keys",
+                details={"key_kind": key_kind.value},
+            )
+
+        if integration_principal is not None:
+            entity_id = integration_principal.anchor_entity_id
+            inherit_from_tree = integration_principal.inherit_from_tree
+
+        if self.policy_service is not None:
+            await self.policy_service.validate_create(
+                session,
+                actor_user_id=effective_actor_user_id,
+                owner=owner,
+                integration_principal=integration_principal,
+                key_kind=key_kind,
+                scopes=scopes,
+                entity_id=entity_id,
+                inherit_from_tree=inherit_from_tree,
+            )
+
+        # Generate API key
+        full_key, prefix = APIKey.generate_key(prefix_type)
+        key_hash = APIKey.hash_key(full_key)
+
+        # Calculate expiration
+        expires_at = None
+        if expires_in_days:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+
+        # Create API key model
+        api_key = APIKey(
+            name=name,
+            prefix=prefix,
+            key_hash=key_hash,
+            owner_id=owner.id if owner is not None else None,
+            integration_principal_id=(integration_principal.id if integration_principal is not None else None),
+            key_kind=key_kind,
+            status=APIKeyStatus.ACTIVE,
+            expires_at=expires_at,
+            rate_limit_per_minute=rate_limit_per_minute,
+            rate_limit_per_hour=rate_limit_per_hour,
+            rate_limit_per_day=rate_limit_per_day,
+            entity_id=entity_id,
+            inherit_from_tree=inherit_from_tree,
+            description=description,
+        )
+
+        session.add(api_key)
+        await session.flush()
+
+        # Add scopes via junction table
+        if scopes:
+            for scope in scopes:
+                scope_entry = APIKeyScope(
+                    api_key_id=api_key.id,
+                    scope=scope,
+                )
+                session.add(scope_entry)
+
+        # Add IP whitelist
+        if ip_whitelist:
+            for ip in ip_whitelist:
+                ip_entry = APIKeyIPWhitelist(
+                    api_key_id=api_key.id,
+                    ip_address=ip,
+                )
+                session.add(ip_entry)
+
+        await session.flush()
+        await session.refresh(api_key)
+
+        if record_audit and owner is not None:
+            await self._record_api_key_audit_event(
+                session,
+                owner=owner,
+                api_key=api_key,
+                event_type="user.api_key_created",
+                event_source=event_source,
+                actor_user_id=effective_actor_user_id,
+                after=self._build_api_key_audit_snapshot(
+                    api_key,
+                    scopes=scopes,
+                    ip_whitelist=ip_whitelist,
+                ),
+                metadata={"created_via": "service"},
+                occurred_at=api_key.created_at,
+            )
+
+        logger.info(
+            "Created API key '%s' for %s %s with prefix %s",
+            name,
+            resolved_owner.owner_type,
+            resolved_owner.owner_id,
+            prefix,
+        )
+        if record_observability:
+            self._log_api_key_lifecycle(
+                operation="created",
+                api_key=api_key,
+                actor_user_id=effective_actor_user_id,
+                event_source=event_source,
+            )
+
+        # Return full key (only time it's ever shown!)
+        return full_key, api_key
+
+    async def verify_api_key(
+        self,
+        session: AsyncSession,
+        api_key_string: str,
+        required_scope: Optional[str] = None,
+        entity_id: Optional[UUID] = None,
+        ip_address: Optional[str] = None,
+    ) -> tuple[Optional[APIKey], int]:
+        """
+        Verify API key and track usage with Redis counter.
+
+        This is the core method for API key authentication.
+        Uses Redis INCR for fast, low-latency usage tracking.
+
+        Args:
+            session: Database session
+            api_key_string: Full API key string
+            required_scope: Optional required permission
+            entity_id: Optional entity ID for access check
+            ip_address: Optional client IP for whitelist check
+
+        Returns:
+            tuple[Optional[APIKey], int]: (api_key, current_usage)
+                - api_key: Valid API key model or None if invalid
+                - current_usage: Current usage count (from Redis)
+        """
+        # Extract prefix from key string
+        if not api_key_string or len(api_key_string) < 16:
+            logger.warning("Invalid API key format")
+            self._log_api_key_validation(
+                prefix=api_key_string[:16] if api_key_string else "unknown",
+                status="invalid",
+                reason="invalid_format",
+            )
+            return None, 0
+
+        prefix = api_key_string[:16]
+        key_hash = APIKey.hash_key(api_key_string)
+
+        # Find API key by prefix and verify hash
+        api_key = await self.get_one(
+            session,
+            APIKey.prefix == prefix,
+            APIKey.key_hash == key_hash,
+        )
+
+        if not api_key:
+            logger.warning(f"Invalid API key: {api_key_string[:15]}...")
+            self._log_api_key_validation(prefix=prefix, status="invalid", reason="not_found")
+            return None, 0
+
+        # Check if key is active
+        if not api_key.is_active():
+            logger.warning(f"Inactive API key: {api_key.prefix} (status: {api_key.status})")
+            self._log_api_key_validation(
+                prefix=api_key.prefix,
+                status="invalid",
+                reason=f"status_{getattr(api_key.status, 'value', api_key.status)}",
+            )
+            return None, 0
+
+        if self.policy_service is not None:
+            runtime_allowed = await self.policy_service.validate_runtime_use(session, api_key=api_key)
+            if not runtime_allowed:
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="runtime_use_denied",
+                )
+                return None, 0
+
+        # Check scope if required
+        if required_scope:
+            if self.policy_service is not None:
+                owner_allowed = await self.policy_service.validate_runtime_permission(
+                    session,
+                    api_key=api_key,
+                    required_scope=required_scope,
+                    entity_id=entity_id or api_key.entity_id,
+                )
+                if not owner_allowed:
+                    logger.warning(
+                        "API key %s denied by owner permission intersection for scope %s",
+                        api_key.prefix,
+                        required_scope,
+                    )
+                    self._log_api_key_validation(
+                        prefix=api_key.prefix,
+                        status="invalid",
+                        reason="owner_permission_missing",
+                    )
+                    self._log_policy_decision(
+                        surface="runtime_permission",
+                        outcome="denied",
+                        reason="owner_permission_missing",
+                        api_key=api_key,
+                        required_scope=required_scope,
+                        entity_id=str(entity_id or api_key.entity_id) if (entity_id or api_key.entity_id) else None,
+                    )
+                    return None, 0
+            has_scope = await self._check_scope(session, api_key.id, required_scope)
+            if not has_scope:
+                logger.warning(f"API key {api_key.prefix} lacks required scope: {required_scope}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="scope_not_granted",
+                )
+                return None, 0
+
+        # Check entity access if required (supports tree permissions)
+        if entity_id:
+            has_access = await self.check_entity_access_with_tree(session, api_key, entity_id)
+            if not has_access:
+                logger.warning(f"API key {api_key.prefix} lacks access to entity: {entity_id}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="entity_access_denied",
+                )
+                return None, 0
+
+        # Check IP whitelist if required
+        if ip_address:
+            is_allowed = await self._check_ip(session, api_key.id, ip_address)
+            if not is_allowed:
+                logger.warning(f"API key {api_key.prefix} rejected IP: {ip_address}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="ip_not_allowed",
+                    ip_address=ip_address,
+                )
+                return None, 0
+
+        self._require_rate_limit_backend()
+
+        # Record usage + last_used + rate-limit counters in ONE Redis round trip
+        # (was INCR + SET + up to 3× INCR/EXPIRE as sequential awaits), mirroring
+        # the snapshot path; limits are enforced from the returned counts.
+        usage_count = 0
+        if self.redis_client and self.redis_client.is_available:
+            key_id = str(api_key.id)
+            usage_key = self._make_usage_counter_key(key_id)
+            windows = self._api_key_rate_windows(api_key)
+            counts = await self.redis_client.record_api_key_usage_pipeline(
+                usage_key=usage_key,
+                last_used_key=self._make_last_used_key(key_id),
+                last_used_value=datetime.now(timezone.utc).isoformat(),
+                last_used_ttl=self.config.cache_ttl_seconds,
+                rate_windows=[
+                    (self._make_rate_limit_key(key_id, window), ttl)
+                    for window, ttl, _limit in windows
+                ],
+            )
+            if counts is not None:
+                usage_count = int(counts.get(usage_key, 0))
+                self._enforce_rate_limit_counts(api_key, windows, counts, key_id)
+            else:
+                self._require_rate_limit_backend()
+        else:
+            # Fallback: Direct database write
+            api_key.usage_count += 1
+            api_key.last_used_at = datetime.now(timezone.utc)
+            await session.flush()
+            usage_count = api_key.usage_count
+
+        self._log_api_key_validation(prefix=api_key.prefix, status="valid")
+        return api_key, usage_count
+
+    def _require_rate_limit_backend(self) -> None:
+        """Reject when a configured distributed quota cannot be enforced."""
+        redis_available = bool(self.redis_client and self.redis_client.is_available)
+        if (
+            self.config.redis_enabled
+            and not redis_available
+            and self.config.api_key_rate_limit_failure_mode == "fail_closed"
+        ):
+            raise AuthenticationInfrastructureError(
+                "API-key authentication is temporarily unavailable because rate limiting is unavailable",
+                details={"control": "api_key_rate_limit", "retry_after_seconds": 5},
+            )
+
+    @staticmethod
+    def scopes_allow_permission(scopes: Optional[List[str]], required_scope: str) -> bool:
+        """Check whether API key scopes allow a permission.
+
+        This is an owner-NARROWING filter: an empty scope set means "no narrowing" — the
+        key may do whatever its owner can (still bounded by the owner's own permission check
+        elsewhere). For integration principals, which have no owner to bound them, use
+        ``principal_scopes_allow_permission`` instead, which fails CLOSED on empty (SEC-13).
+        """
+        normalized = {("*:*" if scope == "*" else scope) for scope in (scopes or []) if scope}
+        if not normalized:
+            return True
+
+        from outlabs_auth.services.permission import PermissionService
+
+        return PermissionService._permission_set_allows(required_scope, normalized)
+
+    @staticmethod
+    def principal_scopes_allow_permission(
+        allowed_scopes: Optional[List[str]], required_scope: str
+    ) -> bool:
+        """Like ``scopes_allow_permission`` but FAILS CLOSED on an empty allow-list (SEC-13).
+
+        Integration principals / service accounts have no owner to bound them, so an empty
+        ``allowed_scopes`` must grant nothing rather than everything.
+        """
+        normalized = {("*:*" if scope == "*" else scope) for scope in (allowed_scopes or []) if scope}
+        if not normalized:
+            return False
+
+        from outlabs_auth.services.permission import PermissionService
+
+        return PermissionService._permission_set_allows(required_scope, normalized)
+
+    async def _check_scope(self, session: AsyncSession, api_key_id: UUID, required_scope: str) -> bool:
+        """Check if API key has required scope."""
+        stmt = select(APIKeyScope).where(
+            cast(Any, APIKeyScope.api_key_id) == api_key_id,
+        )
+        result = await session.execute(stmt)
+        scopes = [row.scope for row in result.scalars().all()]
+
+        return self.scopes_allow_permission(scopes, required_scope)
+
+    async def _check_ip(self, session: AsyncSession, api_key_id: UUID, ip_address: str) -> bool:
+        whitelist_stmt = select(cast(Any, APIKeyIPWhitelist.ip_address)).where(
+            cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id,
+        )
+        result = await session.execute(whitelist_stmt)
+        allowed_ips = [row for (row,) in result.all()]
+
+        # No whitelist = allow all
+        if not allowed_ips:
+            return True
+
+        return ip_address in allowed_ips
+
+    async def _check_rate_limits(self, api_key: APIKey) -> None:
+        """
+        Check rate limits using Redis counters with TTL.
+
+        Args:
+            api_key: API key to check
+
+        Raises:
+            RateLimitError: If rate limit exceeded
+        """
+        if not self.redis_client or not self.redis_client.is_available:
+            return
+
+        key_id = str(api_key.id)
+
+        # Check per-minute limit
+        if api_key.rate_limit_per_minute:
+            minute_key = self._make_rate_limit_key(key_id, "minute")
+            count = await self.redis_client.increment_with_ttl(minute_key, amount=1, ttl=60) or 0
+
+            if count > api_key.rate_limit_per_minute:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_minute,
+                    window="minute",
+                )
+                raise RateLimitError(
+                    message=f"Rate limit exceeded: {api_key.rate_limit_per_minute} requests per minute",
+                    details={
+                        "limit": api_key.rate_limit_per_minute,
+                        "current": count,
+                        "window": "minute",
+                        "retry_after_seconds": 60,
+                    },
+                )
+
+        # Check per-hour limit
+        if api_key.rate_limit_per_hour:
+            hour_key = self._make_rate_limit_key(key_id, "hour")
+            count = await self.redis_client.increment_with_ttl(hour_key, amount=1, ttl=3600) or 0
+
+            if count > api_key.rate_limit_per_hour:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_hour,
+                    window="hour",
+                )
+                raise RateLimitError(
+                    message=f"Rate limit exceeded: {api_key.rate_limit_per_hour} requests per hour",
+                    details={
+                        "limit": api_key.rate_limit_per_hour,
+                        "current": count,
+                        "window": "hour",
+                        "retry_after_seconds": 3600,
+                    },
+                )
+
+        # Check per-day limit
+        if api_key.rate_limit_per_day:
+            day_key = self._make_rate_limit_key(key_id, "day")
+            count = await self.redis_client.increment_with_ttl(day_key, amount=1, ttl=86400) or 0
+
+            if count > api_key.rate_limit_per_day:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_day,
+                    window="day",
+                )
+                raise RateLimitError(
+                    message=f"Rate limit exceeded: {api_key.rate_limit_per_day} requests per day",
+                    details={
+                        "limit": api_key.rate_limit_per_day,
+                        "current": count,
+                        "window": "day",
+                        "retry_after_seconds": 86400,
+                    },
+                )
+
+    async def sync_usage_counters_to_db(self, session: AsyncSession) -> Dict[str, int]:
+        """
+        Durably sync API-key usage counters from Redis to PostgreSQL.
+
+        Live counters are first atomically moved to Redis processing keys. Each
+        batch receives a PostgreSQL receipt in the same transaction as the usage
+        update; only then are its staged Redis keys acknowledged. A crash before
+        commit leaves the staged counters retryable, while a crash after commit
+        cannot duplicate the update because the receipt already exists.
+
+        Returns:
+            Dict[str, int]: Stats about sync operation
+        """
+        if not self.redis_client or not self.redis_client.is_available:
+            logger.debug("Redis not available - skipping counter sync")
+            return {"synced_keys": 0, "total_usage": 0, "errors": 0}
+
+        stats = {
+            "synced_keys": 0,
+            "total_usage": 0,
+            "errors": 0,
+        }
+
+        try:
+            for batch in await self._collect_usage_counter_batches():
+                acknowledged = await self._persist_usage_counter_batch(session, batch, stats)
+                if acknowledged:
+                    deleted = await self._acknowledge_usage_counter_batch(list(batch.counters))
+                    if deleted != len(batch.counters):
+                        # The PostgreSQL receipt makes this safe: a later retry
+                        # will see the applied batch and only acknowledge it.
+                        logger.warning(
+                            "API-key usage batch %s committed but only acknowledged %s/%s Redis counters",
+                            batch.batch_id,
+                            deleted,
+                            len(batch.counters),
+                        )
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Error during durable counter sync: {e}", exc_info=True)
+            stats["errors"] += 1
+
+        return stats
+
+    async def _acknowledge_usage_counter_batch(self, counter_keys: list[str]) -> int:
+        """Remove staged keys after their PostgreSQL receipt committed.
+
+        The per-key fallback keeps lightweight test doubles compatible; the
+        production Redis client uses a single UNLINK/DEL operation.
+        """
+        assert self.redis_client is not None
+        delete_many = getattr(self.redis_client, "delete_many", None)
+        if delete_many is not None:
+            return int(await delete_many(counter_keys))
+        deleted = 0
+        for counter_key in counter_keys:
+            if await self.redis_client.delete(counter_key):
+                deleted += 1
+        return deleted
+
+    async def _collect_usage_counter_batches(self) -> list[APIKeyUsageCounterBatch]:
+        """Return retryable staged batches plus a newly claimed live batch."""
+        assert self.redis_client is not None
+        batches: dict[UUID, dict[str, int]] = {}
+
+        staged_counters = await self.redis_client.get_all_counters(
+            self._make_staged_usage_counter_pattern()
+        )
+        for counter_key, usage_count in staged_counters.items():
+            parsed = self._parse_staged_usage_counter_key(counter_key)
+            if parsed is None or usage_count <= 0:
+                continue
+            batch_id, _key_id = parsed
+            batches.setdefault(batch_id, {})[counter_key] = usage_count
+
+        batch_id = uuid4()
+        stage = getattr(self.redis_client, "stage_counters_atomically", None)
+        if stage is not None:
+            live_counters = await stage(self._make_usage_counter_key("*"), str(batch_id))
+        else:
+            # Compatibility path for minimal test doubles. Production RedisClient
+            # always provides durable staging.
+            live_counters = await self.redis_client.get_all_counters(self._make_usage_counter_key("*"))
+        if live_counters:
+            batches.setdefault(batch_id, {}).update(live_counters)
+
+        return [
+            APIKeyUsageCounterBatch(batch_id=known_batch_id, counters=counters)
+            for known_batch_id, counters in batches.items()
+        ]
+
+    async def _persist_usage_counter_batch(
+        self,
+        session: AsyncSession,
+        batch: APIKeyUsageCounterBatch,
+        stats: Dict[str, int],
+    ) -> bool:
+        """Apply one batch exactly once and return whether it may be acknowledged."""
+        batch_table = cast(Any, getattr(APIKeyUsageSyncBatch, "__table__"))
+        receipt = (
+            pg_insert(batch_table)
+            .values(
+                id=batch.batch_id,
+                applied_at=datetime.now(timezone.utc),
+                key_count=len(batch.counters),
+                total_usage=sum(batch.counters.values()),
+            )
+            .on_conflict_do_nothing(index_elements=[batch_table.c.id])
+            .returning(batch_table.c.id)
+        )
+        applied_now = (await session.execute(receipt)).scalar_one_or_none() is not None
+
+        if applied_now:
+            entries: list[tuple[UUID, str, int]] = []
+            for counter_key, usage_count in batch.counters.items():
+                key_id = self._parse_usage_counter_key(counter_key)
+                if key_id is None:
+                    logger.warning("Discarding malformed API-key usage counter %s", counter_key)
+                    stats["errors"] += 1
+                    continue
+                entries.append((key_id, counter_key, usage_count))
+
+            if entries:
+                last_used_keys = [self._make_last_used_key(str(key_id)) for key_id, _, _ in entries]
+                mget_raw = getattr(self.redis_client, "mget_raw", None)
+                raw_values = await mget_raw(last_used_keys) if mget_raw is not None else None
+                if raw_values is None or len(raw_values) != len(entries):
+                    redis_client = self.redis_client
+                    assert redis_client is not None
+                    raw_values = [await redis_client.get_raw(key) for key in last_used_keys]
+
+                existing_result = await session.execute(
+                    select(cast(Any, APIKey.id)).where(
+                        cast(Any, APIKey.id).in_([key_id for key_id, _, _ in entries])
+                    )
+                )
+                existing_ids = set(existing_result.scalars().all())
+                params: list[dict[str, Any]] = []
+                now = datetime.now(timezone.utc)
+                for (key_id, _counter_key, usage_count), raw in zip(entries, raw_values):
+                    if key_id not in existing_ids:
+                        logger.warning("API key not found for usage counter: %s", key_id)
+                        continue
+                    params.append(
+                        {
+                            "b_id": key_id,
+                            "b_delta": usage_count,
+                            "b_ts": self._parse_last_used_timestamp(raw, now),
+                        }
+                    )
+                    stats["synced_keys"] += 1
+                    stats["total_usage"] += usage_count
+
+                if params:
+                    api_keys_table = cast(Any, getattr(APIKey, "__table__"))
+                    stmt = (
+                        sa_update(api_keys_table)
+                        .where(api_keys_table.c.id == bindparam("b_id"))
+                        .values(
+                            usage_count=api_keys_table.c.usage_count + bindparam("b_delta"),
+                            last_used_at=bindparam("b_ts"),
+                        )
+                    )
+                    await session.execute(stmt, params)
+                    identity_map = session.sync_session.identity_map
+                    for param in params:
+                        instance = identity_map.get(identity_key(APIKey, param["b_id"]))
+                        if instance is not None:
+                            await session.refresh(instance, ["usage_count", "last_used_at"])
+
+        await session.commit()
+        return True
+
+    def _parse_usage_counter_key(self, counter_key: str) -> Optional[UUID]:
+        logical_key = counter_key
+        strip_prefix = getattr(self.redis_client, "strip_key_prefix", None)
+        if strip_prefix is not None:
+            logical_key = strip_prefix(counter_key)
+        parts = logical_key.split(":")
+        if len(parts) >= 5 and parts[0] == "usage-sync":
+            parts = parts[2:]
+        if len(parts) != 3 or parts[0] != "apikey" or parts[2] != "usage":
+            return None
+        try:
+            return UUID(parts[1])
+        except ValueError:
+            return None
+
+    def _parse_staged_usage_counter_key(self, counter_key: str) -> Optional[tuple[UUID, UUID]]:
+        logical_key = counter_key
+        strip_prefix = getattr(self.redis_client, "strip_key_prefix", None)
+        if strip_prefix is not None:
+            logical_key = strip_prefix(counter_key)
+        parts = logical_key.split(":")
+        if len(parts) != 5 or parts[0] != "usage-sync" or parts[2] != "apikey" or parts[4] != "usage":
+            return None
+        try:
+            return UUID(parts[1]), UUID(parts[3])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_last_used_timestamp(raw: Optional[str], fallback: datetime) -> datetime:
+        if raw:
+            try:
+                return datetime.fromisoformat(raw.strip('"'))
+            except ValueError:
+                pass
+        return fallback
+
+    # Helper methods for Redis keys
+
+    def _make_usage_counter_key(self, key_id: str) -> str:
+        """Make Redis key for usage counter."""
+        return f"apikey:{key_id}:usage"
+
+    def _make_staged_usage_counter_pattern(self) -> str:
+        """Pattern for unacknowledged, crash-recoverable usage-counter batches."""
+        return "usage-sync:*:apikey:*:usage"
+
+    def _make_last_used_key(self, key_id: str) -> str:
+        """Make Redis key for last_used timestamp."""
+        return f"apikey:{key_id}:last_used"
+
+    def _make_rate_limit_key(self, key_id: str, window: str) -> str:
+        """Make Redis key for rate limit window."""
+        return f"apikey:{key_id}:ratelimit:{window}"
+
+    def _make_auth_snapshot_key(self, key_hash: str) -> str:
+        """Make Redis key for a cached API-key authorization snapshot."""
+        if self.redis_client is not None:
+            return str(self.redis_client.make_key("auth", "api-key-snapshot", key_hash))
+        return f"auth:api-key-snapshot:{key_hash}"
+
+    def _make_entity_relation_key(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        *,
+        version: int = 0,
+    ) -> str:
+        if self.redis_client is not None:
+            return str(
+                self.redis_client.make_key(
+                    "auth",
+                    "entity-relation",
+                    str(version),
+                    ancestor_id,
+                    descendant_id,
+                )
+            )
+        return f"auth:entity-relation:{version}:{ancestor_id}:{descendant_id}"
+
+    def _auth_snapshot_ttl(self) -> int:
+        return max(
+            1,
+            min(
+                int(getattr(self.config, "api_key_auth_snapshot_ttl", 60)),
+                int(getattr(self.config, "cache_permission_ttl", 900)),
+            ),
+        )
+
+    def _make_auth_snapshot_version_key(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> str:
+        if self.redis_client is not None:
+            parts = ["auth", "api-key-snapshot-version", scope]
+            if subject_id is not None:
+                parts.append(subject_id)
+            return str(self.redis_client.make_key(*parts))
+        if subject_id is not None:
+            return f"auth:api-key-snapshot-version:{scope}:{subject_id}"
+        return f"auth:api-key-snapshot-version:{scope}"
+
+    async def _get_auth_snapshot_version(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> int:
+        if not self.redis_client or not self.redis_client.is_available:
+            return 0
+
+        key = self._make_auth_snapshot_version_key(scope, subject_id)
+        get_counter = getattr(self.redis_client, "get_counter", None)
+        if get_counter is not None:
+            return int(await get_counter(key))
+
+        value = await self.redis_client.get(key)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _current_auth_snapshot_versions(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        integration_principal_id: Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ) -> dict[str, int]:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            return await cache_service.get_api_key_auth_snapshot_versions(
+                user_id=user_id,
+                integration_principal_id=integration_principal_id,
+                entity_id=entity_id,
+            )
+
+        if not self.redis_client or not self.redis_client.is_available:
+            return {}
+
+        versions = {"global": await self._get_auth_snapshot_version("global")}
+        if user_id:
+            versions[f"user:{user_id}"] = await self._get_auth_snapshot_version("user", user_id)
+        if integration_principal_id:
+            versions[f"integration_principal:{integration_principal_id}"] = await self._get_auth_snapshot_version(
+                "integration_principal",
+                integration_principal_id,
+            )
+        if entity_id:
+            versions[f"entity:{entity_id}"] = await self._get_auth_snapshot_version("entity", entity_id)
+        return versions
+
+    async def _entity_relation_cache_version(self) -> int:
+        versions = await self._current_auth_snapshot_versions()
+        return int(versions.get("global", 0))
+
+    async def _auth_snapshot_versions_match(self, snapshot: dict[str, Any]) -> bool:
+        snapshot_versions = snapshot.get("versions")
+        if not isinstance(snapshot_versions, dict):
+            return False
+
+        current_versions = await self._current_auth_snapshot_versions(
+            user_id=str(snapshot["user_id"]) if snapshot.get("user_id") else None,
+            integration_principal_id=(
+                str(snapshot["integration_principal_id"])
+                if snapshot.get("integration_principal_id")
+                else None
+            ),
+            entity_id=str(snapshot["entity_id"]) if snapshot.get("entity_id") else None,
+        )
+        try:
+            normalized_snapshot_versions = {
+                str(key): int(value)
+                for key, value in snapshot_versions.items()
+            }
+        except (TypeError, ValueError):
+            return False
+        return normalized_snapshot_versions == current_versions
+
+    @staticmethod
+    def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.isoformat()
+
+    @staticmethod
+    def _deserialize_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+    async def get_api_key_auth_snapshot(self, api_key_string: str) -> Optional[dict[str, Any]]:
+        """Load a cached API-key auth snapshot without touching Postgres."""
+        if not getattr(self.config, "enable_caching", False):
+            return None
+        if not self.redis_client or not self.redis_client.is_available:
+            return None
+        if not api_key_string or len(api_key_string) < 16:
+            return None
+
+        key_hash = APIKey.hash_key(api_key_string)
+
+        # PERF (opt-in): serve hot keys from the per-process cache, skipping the Redis
+        # snapshot GET + version reads entirely. Bounded staleness — see config docs.
+        local = self._local_snapshot_get(key_hash)
+        if local is not None:
+            return local
+
+        cache_key = self._make_auth_snapshot_key(key_hash)
+        snapshot = await self.redis_client.get(cache_key)
+        if not isinstance(snapshot, dict):
+            return None
+
+        if snapshot.get("status") != APIKeyStatus.ACTIVE.value:
+            await self.redis_client.delete(cache_key)
+            return None
+
+        expires_at = self._deserialize_datetime(snapshot.get("expires_at"))
+        if expires_at is not None and datetime.now(timezone.utc) > expires_at:
+            await self.redis_client.delete(cache_key)
+            return None
+
+        if not await self._auth_snapshot_versions_match(snapshot):
+            await self.redis_client.delete(cache_key)
+            return None
+
+        self._local_snapshot_put(key_hash, snapshot)
+        return snapshot
+
+    async def set_api_key_auth_snapshot(
+        self,
+        api_key_string: str,
+        *,
+        auth_result: dict[str, Any],
+        effective_permissions: Optional[List[str]] = None,
+        ip_whitelist: Optional[List[str]] = None,
+    ) -> bool:
+        """Cache the compiled API-key auth context used by permission dependencies."""
+        if not getattr(self.config, "enable_caching", False):
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        if not api_key_string or len(api_key_string) < 16:
+            return False
+
+        api_key = auth_result.get("api_key")
+        if api_key is None:
+            return False
+
+        metadata = auth_result.get("metadata") or {}
+        key_hash = APIKey.hash_key(api_key_string)
+        owner_type = metadata.get("owner_type") or getattr(api_key, "owner_type", None)
+        resolved_owner_id = (
+            metadata.get("owner_id")
+            or getattr(api_key, "resolved_owner_id", None)
+            or auth_result.get("user_id")
+            or auth_result.get("integration_principal_id")
+        )
+        user_id = str(auth_result["user_id"]) if auth_result.get("user_id") else None
+        integration_principal_id = (
+            str(auth_result["integration_principal_id"])
+            if auth_result.get("integration_principal_id")
+            else None
+        )
+        entity_id = str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None
+        versions = await self._current_auth_snapshot_versions(
+            user_id=user_id,
+            integration_principal_id=integration_principal_id,
+            entity_id=entity_id,
+        )
+        snapshot: dict[str, Any] = {
+            "key_id": str(api_key.id),
+            "key_prefix": getattr(api_key, "prefix", api_key_string[:16]),
+            "status": self._normalize_enum(getattr(api_key, "status", APIKeyStatus.ACTIVE)),
+            "expires_at": self._serialize_datetime(getattr(api_key, "expires_at", None)),
+            "key_kind": self._normalize_enum(getattr(api_key, "key_kind", "")),
+            "owner_type": owner_type,
+            "owner_id": str(resolved_owner_id) if resolved_owner_id else None,
+            "user_id": user_id,
+            "integration_principal_id": integration_principal_id,
+            "scopes": sorted(str(scope) for scope in (metadata.get("scopes") or [])),
+            "effective_permissions": sorted(str(permission) for permission in (effective_permissions or [])),
+            "principal_allowed_scopes": sorted(
+                str(scope) for scope in (metadata.get("principal_allowed_scopes") or [])
+            ),
+            "entity_id": entity_id,
+            "inherit_from_tree": bool(getattr(api_key, "inherit_from_tree", False)),
+            "ip_whitelist": sorted(str(ip) for ip in (ip_whitelist or [])),
+            "rate_limit_per_minute": getattr(api_key, "rate_limit_per_minute", None),
+            "rate_limit_per_hour": getattr(api_key, "rate_limit_per_hour", None),
+            "rate_limit_per_day": getattr(api_key, "rate_limit_per_day", None),
+            "versions": versions,
+        }
+
+        written = bool(
+            await self.redis_client.set(
+                self._make_auth_snapshot_key(key_hash),
+                snapshot,
+                ttl=self._auth_snapshot_ttl(),
+            )
+        )
+        if written:
+            self._local_snapshot_put(key_hash, snapshot)
+        return written
+
+    async def invalidate_api_key_auth_snapshot(self, api_key: APIKey) -> bool:
+        """Invalidate the cached auth snapshot for a concrete API key row."""
+        # Evict the per-process copy first (best-effort; only affects this process —
+        # other processes age out via the local-cache TTL).
+        self._local_snapshot_evict(api_key.key_hash)
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        return bool(await self.redis_client.delete(self._make_auth_snapshot_key(api_key.key_hash)))
+
+    # Fixed-window TTLs (seconds) for the per-key rate-limit counters.
+    _RATE_LIMIT_WINDOW_TTLS: tuple[tuple[str, int], ...] = (
+        ("minute", 60),
+        ("hour", 3600),
+        ("day", 86400),
+    )
+
+    def _snapshot_rate_windows(self, snapshot: dict[str, Any]) -> list[tuple[str, int, int]]:
+        """Return ``[(window, ttl_seconds, limit), ...]`` for windows that have a configured limit."""
+        limits = {
+            "minute": snapshot.get("rate_limit_per_minute"),
+            "hour": snapshot.get("rate_limit_per_hour"),
+            "day": snapshot.get("rate_limit_per_day"),
+        }
+        windows: list[tuple[str, int, int]] = []
+        for window, ttl in self._RATE_LIMIT_WINDOW_TTLS:
+            limit = limits.get(window)
+            if limit:
+                windows.append((window, ttl, int(limit)))
+        return windows
+
+    def _api_key_rate_windows(self, api_key: APIKey) -> list[tuple[str, int, int]]:
+        """Like ``_snapshot_rate_windows`` but sourced from the APIKey row."""
+        limits = {
+            "minute": api_key.rate_limit_per_minute,
+            "hour": api_key.rate_limit_per_hour,
+            "day": api_key.rate_limit_per_day,
+        }
+        windows: list[tuple[str, int, int]] = []
+        for window, ttl in self._RATE_LIMIT_WINDOW_TTLS:
+            limit = limits.get(window)
+            if limit:
+                windows.append((window, ttl, int(limit)))
+        return windows
+
+    def _enforce_rate_limit_counts(
+        self,
+        api_key: APIKey,
+        windows: list[tuple[str, int, int]],
+        counts: dict[str, int],
+        key_id: str,
+    ) -> None:
+        """Raise RateLimitError if any window's pipelined count exceeds its limit."""
+        for window, ttl, limit in windows:
+            count = counts.get(self._make_rate_limit_key(key_id, window), 0)
+            if count <= limit:
+                continue
+            self._log_api_key_rate_limited(
+                api_key=api_key,
+                current_count=count,
+                limit=limit,
+                window=window,
+            )
+            raise RateLimitError(
+                message=f"Rate limit exceeded: {limit} requests per {window}",
+                details={"limit": limit, "current": count, "window": window, "retry_after_seconds": ttl},
+            )
+
+    async def record_api_key_auth_snapshot_usage(self, snapshot: dict[str, Any]) -> int:
+        """Record usage + rate-limit counters for a cache-hit authorization in ONE round trip.
+
+        Previously this issued the usage INCR, the last_used SET, and one INCR(+EXPIRE)
+        per rate-limit window as separate sequential awaits (3-4 Redis round trips on every
+        hot-path request). They are now pipelined into a single round trip; rate limits are
+        enforced afterward from the returned counts (raising RateLimitError if exceeded).
+        """
+        if not self.redis_client or not self.redis_client.is_available:
+            return 0
+
+        key_id = str(snapshot["key_id"])
+        usage_key = self._make_usage_counter_key(key_id)
+        windows = self._snapshot_rate_windows(snapshot)
+        rate_windows = [
+            (self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows
+        ]
+
+        counts = await self.redis_client.record_api_key_usage_pipeline(
+            usage_key=usage_key,
+            last_used_key=self._make_last_used_key(key_id),
+            last_used_value=datetime.now(timezone.utc).isoformat(),
+            last_used_ttl=self.config.cache_ttl_seconds,
+            rate_windows=rate_windows,
+        )
+        if counts is None:
+            return 0
+
+        self._enforce_snapshot_rate_limits(snapshot, windows, counts, key_id)
+        return int(counts.get(usage_key, 0))
+
+    def _enforce_snapshot_rate_limits(
+        self,
+        snapshot: dict[str, Any],
+        windows: list[tuple[str, int, int]],
+        counts: dict[str, int],
+        key_id: str,
+    ) -> None:
+        """Raise RateLimitError if any window's pipelined count exceeds its limit."""
+        prefix = str(snapshot.get("key_prefix") or "")
+        key_kind = str(snapshot.get("key_kind") or "")
+        for window, ttl, limit in windows:
+            count = counts.get(self._make_rate_limit_key(key_id, window), 0)
+            if count <= limit:
+                continue
+            if self.observability is not None:
+                self.observability.log_api_key_rate_limited(
+                    prefix=prefix,
+                    current_count=count,
+                    limit=limit,
+                    window=window,
+                    key_kind=key_kind,
+                )
+            raise RateLimitError(
+                message=f"Rate limit exceeded: {limit} requests per {window}",
+                details={"limit": limit, "current": count, "window": window, "retry_after_seconds": ttl},
+            )
+
+    def auth_result_from_snapshot(self, snapshot: dict[str, Any], *, usage_count: int = 0) -> dict[str, Any]:
+        """Build a host-safe auth result from a cached API-key snapshot."""
+        metadata: dict[str, Any] = {
+            "key_id": snapshot.get("key_id"),
+            "key_prefix": snapshot.get("key_prefix"),
+            "scopes": list(snapshot.get("scopes") or []),
+            "usage_count": usage_count,
+            "auth_snapshot": True,
+            "owner_type": snapshot.get("owner_type"),
+            "owner_id": snapshot.get("owner_id"),
+        }
+        if snapshot.get("key_kind"):
+            metadata["key_kind"] = snapshot["key_kind"]
+        if snapshot.get("entity_id"):
+            metadata["entity_id"] = snapshot["entity_id"]
+        if snapshot.get("principal_allowed_scopes") is not None:
+            metadata["principal_allowed_scopes"] = list(snapshot.get("principal_allowed_scopes") or [])
+
+        result: dict[str, Any] = {
+            "user": None,
+            "user_id": snapshot.get("user_id"),
+            "source": "api_key",
+            "api_key": None,
+            "metadata": metadata,
+        }
+        if snapshot.get("integration_principal_id"):
+            result["integration_principal"] = None
+            result["integration_principal_id"] = snapshot.get("integration_principal_id")
+        return result
+
+    async def get_cached_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+    ) -> Optional[bool]:
+        if not getattr(self.config, "enable_caching", False):
+            return None
+        if not self.redis_client or not self.redis_client.is_available:
+            return None
+
+        version = await self._entity_relation_cache_version()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None and hasattr(cache_service, "get_entity_relation"):
+            return await cache_service.get_entity_relation(
+                ancestor_id,
+                descendant_id,
+                version=version,
+            )
+
+        cached = await self.redis_client.get(
+            self._make_entity_relation_key(
+                ancestor_id,
+                descendant_id,
+                version=version,
+            )
+        )
+        return cached if isinstance(cached, bool) else None
+
+    async def set_cached_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        result: bool,
+    ) -> bool:
+        if not getattr(self.config, "enable_caching", False):
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+
+        version = await self._entity_relation_cache_version()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None and hasattr(cache_service, "set_entity_relation"):
+            return bool(
+                await cache_service.set_entity_relation(
+                    ancestor_id,
+                    descendant_id,
+                    result,
+                    version=version,
+                )
+            )
+
+        return bool(
+            await self.redis_client.set(
+                self._make_entity_relation_key(
+                    ancestor_id,
+                    descendant_id,
+                    version=version,
+                ),
+                result,
+                ttl=self.config.cache_entity_ttl,
+            )
+        )
+
+    async def auth_snapshot_entity_allowed(
+        self,
+        snapshot: dict[str, Any],
+        entity_id: UUID,
+    ) -> Optional[bool]:
+        anchor_id = snapshot.get("entity_id")
+        if not anchor_id:
+            return True
+        if str(entity_id) == str(anchor_id):
+            return True
+        if not snapshot.get("inherit_from_tree"):
+            return False
+        return await self.get_cached_entity_relation(str(anchor_id), str(entity_id))
+
+    async def auth_snapshot_owner_allows_permission(
+        self,
+        snapshot: dict[str, Any],
+        permission: str,
+        *,
+        entity_id: Optional[UUID] = None,
+    ) -> Optional[bool]:
+        if not self.scopes_allow_permission(snapshot.get("scopes") or [], permission):
+            return False
+
+        if entity_id is None:
+            return self.auth_snapshot_allows_permission(snapshot, permission)
+
+        if snapshot.get("integration_principal_id"):
+            return self.principal_scopes_allow_permission(
+                snapshot.get("principal_allowed_scopes") or [],
+                permission,
+            )
+
+        user_id = snapshot.get("user_id")
+        if not user_id:
+            return False
+
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return None
+        cached = await cache_service.get_permission_check(
+            str(user_id),
+            permission,
+            str(entity_id),
+        )
+        if isinstance(cached, tuple):
+            # Versioned contract: (result, current_versions).
+            cached = cached[0]
+        return cached if isinstance(cached, bool) else None
+
+    async def auth_snapshot_allows_authorization(
+        self,
+        snapshot: dict[str, Any],
+        permission: str,
+        *,
+        entity_id: Optional[UUID] = None,
+    ) -> Optional[bool]:
+        owner_allowed = await self.auth_snapshot_owner_allows_permission(
+            snapshot,
+            permission,
+            entity_id=entity_id,
+        )
+        if owner_allowed is not True:
+            return owner_allowed
+
+        if entity_id is None:
+            return True
+
+        return await self.auth_snapshot_entity_allowed(snapshot, entity_id)
+
+    def auth_snapshot_allows_permission(self, snapshot: dict[str, Any], permission: str) -> bool:
+        """Check whether a cached API-key auth snapshot grants a permission."""
+        if not self.scopes_allow_permission(snapshot.get("scopes") or [], permission):
+            return False
+
+        if snapshot.get("integration_principal_id"):
+            return self.principal_scopes_allow_permission(
+                snapshot.get("principal_allowed_scopes") or [],
+                permission,
+            )
+
+        from outlabs_auth.services.permission import PermissionService
+
+        normalized_permissions = {
+            "*:*" if granted_permission == "*" else str(granted_permission)
+            for granted_permission in (snapshot.get("effective_permissions") or [])
+            if granted_permission
+        }
+        return PermissionService._permission_set_allows(permission, normalized_permissions)
+
+    # API Key Management Methods
+
+    async def get_api_key(self, session: AsyncSession, key_id: UUID) -> Optional[APIKey]:
+        """Get API key by ID with owner loaded."""
+        return await self.get_by_id(
+            session,
+            key_id,
+            options=[
+                selectinload(cast(Any, APIKey.owner)),
+                selectinload(cast(Any, APIKey.integration_principal)),
+            ],
+        )
+
+    async def get_api_key_scopes_map(
+        self,
+        session: AsyncSession,
+        key_ids: List[UUID],
+    ) -> Dict[UUID, List[str]]:
+        """Get scopes for multiple API keys in a single query."""
+        if not key_ids:
+            return {}
+
+        unique_key_ids = list(dict.fromkeys(key_ids))
+        stmt = (
+            select(
+                cast(Any, APIKeyScope.api_key_id),
+                cast(Any, APIKeyScope.scope),
+            )
+            .where(cast(Any, APIKeyScope.api_key_id).in_(unique_key_ids))
+            .order_by(cast(Any, APIKeyScope.api_key_id), cast(Any, APIKeyScope.scope))
+        )
+        result = await session.execute(stmt)
+
+        scopes_by_key_id: Dict[UUID, List[str]] = {key_id: [] for key_id in unique_key_ids}
+        for key_id, scope in result.all():
+            scopes_by_key_id[cast(UUID, key_id)].append(cast(str, scope))
+        return scopes_by_key_id
+
+    async def get_api_key_scopes(self, session: AsyncSession, key_id: UUID) -> List[str]:
+        """Get scopes for an API key."""
+        return (await self.get_api_key_scopes_map(session, [key_id])).get(key_id, [])
+
+    async def get_api_key_ip_whitelist_map(
+        self,
+        session: AsyncSession,
+        key_ids: List[UUID],
+    ) -> Dict[UUID, List[str]]:
+        """Get IP whitelist entries for multiple API keys in a single query."""
+        if not key_ids:
+            return {}
+
+        unique_key_ids = list(dict.fromkeys(key_ids))
+        stmt = (
+            select(
+                cast(Any, APIKeyIPWhitelist.api_key_id),
+                cast(Any, APIKeyIPWhitelist.ip_address),
+            )
+            .where(cast(Any, APIKeyIPWhitelist.api_key_id).in_(unique_key_ids))
+            .order_by(cast(Any, APIKeyIPWhitelist.api_key_id), cast(Any, APIKeyIPWhitelist.ip_address))
+        )
+        result = await session.execute(stmt)
+
+        whitelist_by_key_id: Dict[UUID, List[str]] = {key_id: [] for key_id in unique_key_ids}
+        for key_id, ip_address in result.all():
+            whitelist_by_key_id[cast(UUID, key_id)].append(cast(str, ip_address))
+        return whitelist_by_key_id
+
+    async def get_api_key_ip_whitelist(self, session: AsyncSession, key_id: UUID) -> List[str]:
+        """Get IP whitelist entries for an API key."""
+        return (await self.get_api_key_ip_whitelist_map(session, [key_id])).get(key_id, [])
+
+    async def list_user_api_keys(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        status: Optional[APIKeyStatus] = None,
+    ) -> List[APIKey]:
+        """
+        List all API keys for a user.
+
+        Args:
+            session: Database session
+            user_id: User ID
+            status: Optional filter by status
+
+        Returns:
+            List[APIKey]: User's API keys
+        """
+        filters = [APIKey.owner_id == user_id]
+        if status:
+            filters.append(APIKey.status == status)
+
+        return await self.get_many(session, *filters, limit=1000)
+
+    async def list_entity_api_keys(
+        self,
+        session: AsyncSession,
+        *,
+        entity_id: UUID,
+        owner_id: Optional[UUID] = None,
+        status: Optional[APIKeyStatus] = None,
+        key_kind: Optional[APIKeyKind] = None,
+    ) -> List[APIKey]:
+        """List API keys anchored to a specific entity."""
+        api_keys, _ = await self.list_entity_api_keys_paginated(
+            session,
+            entity_id=entity_id,
+            owner_id=owner_id,
+            status=status,
+            key_kind=key_kind,
+            page=1,
+            limit=1000,
+        )
+        return api_keys
+
+    async def list_entity_api_keys_paginated(
+        self,
+        session: AsyncSession,
+        *,
+        entity_id: UUID,
+        owner_id: Optional[UUID] = None,
+        status: Optional[APIKeyStatus] = None,
+        key_kind: Optional[APIKeyKind] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[APIKey], int]:
+        """List API keys anchored to a specific entity with pagination and filtering."""
+        filters: list[Any] = [cast(Any, APIKey.entity_id) == entity_id]
+        if owner_id is not None:
+            filters.append(
+                or_(
+                    cast(Any, APIKey.owner_id) == owner_id,
+                    cast(Any, APIKey.integration_principal_id) == owner_id,
+                )
+            )
+        if status is not None:
+            filters.append(cast(Any, APIKey.status) == status)
+        if key_kind is not None:
+            filters.append(cast(Any, APIKey.key_kind) == key_kind)
+        if search:
+            pattern = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    cast(Any, APIKey.name).ilike(pattern),
+                    cast(Any, APIKey.description).ilike(pattern),
+                    cast(Any, APIKey.prefix).ilike(pattern),
+                )
+            )
+
+        total = await self.count(session, *filters)
+        api_keys = await self.get_many(
+            session,
+            *filters,
+            skip=(page - 1) * limit,
+            limit=limit,
+            order_by=cast(Any, APIKey.created_at).desc(),
+        )
+        return api_keys, total
+
+    async def list_integration_principal_api_keys(
+        self,
+        session: AsyncSession,
+        *,
+        integration_principal_id: UUID,
+        status: Optional[APIKeyStatus] = None,
+    ) -> List[APIKey]:
+        """List API keys owned by an integration principal."""
+        api_keys, _ = await self.list_integration_principal_api_keys_paginated(
+            session,
+            integration_principal_id=integration_principal_id,
+            status=status,
+            page=1,
+            limit=1000,
+        )
+        return api_keys
+
+    async def list_integration_principal_api_keys_paginated(
+        self,
+        session: AsyncSession,
+        *,
+        integration_principal_id: UUID,
+        status: Optional[APIKeyStatus] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[APIKey], int]:
+        """List API keys owned by an integration principal with pagination."""
+        filters: list[Any] = [cast(Any, APIKey.integration_principal_id) == integration_principal_id]
+        if status is not None:
+            filters.append(cast(Any, APIKey.status) == status)
+        if search:
+            pattern = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    cast(Any, APIKey.name).ilike(pattern),
+                    cast(Any, APIKey.description).ilike(pattern),
+                    cast(Any, APIKey.prefix).ilike(pattern),
+                )
+            )
+        total = await self.count(session, *filters)
+        api_keys = await self.get_many(
+            session,
+            *filters,
+            skip=(page - 1) * limit,
+            limit=limit,
+            order_by=cast(Any, APIKey.created_at).desc(),
+        )
+        return api_keys, total
+
+    async def revoke_api_key(
+        self,
+        session: AsyncSession,
+        key_id: UUID,
+        *,
+        actor_user_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "api_key_service.revoke_api_key",
+    ) -> bool:
+        """
+        Revoke an API key.
+
+        Args:
+            session: Database session
+            key_id: API key ID
+
+        Returns:
+            bool: True if revoked
+        """
+        api_key = await self.get_by_id(session, key_id)
+        if not api_key:
+            return False
+        resolved_owner = await self.resolve_api_key_owner(session, api_key)
+        if resolved_owner is None:
+            return False
+        effective_actor_user_id = actor_user_id or (resolved_owner.user.id if resolved_owner.user is not None else None)
+
+        await self._revoke_api_key_model(
+            session,
+            api_key=api_key,
+            actor_user_id=effective_actor_user_id,
+            reason=reason,
+            event_source=event_source,
+        )
+
+        logger.info(f"Revoked API key: {api_key.prefix}")
+        return True
+
+    async def revoke_user_api_keys(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "api_key_service.revoke_user_api_keys",
+    ) -> int:
+        """Revoke all non-revoked API keys owned by a user."""
+        stmt = select(APIKey).where(
+            cast(Any, APIKey.owner_id) == user_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
+        )
+        result = await session.execute(stmt)
+        api_keys = list(result.scalars().all())
+        if not api_keys:
+            return 0
+
+        for api_key in api_keys:
+            await self._revoke_api_key_model(
+                session,
+                api_key=api_key,
+                actor_user_id=revoked_by_id,
+                reason=reason,
+                event_source=event_source,
+            )
+
+        return len(api_keys)
+
+    async def revoke_integration_principal_api_keys(
+        self,
+        session: AsyncSession,
+        integration_principal_id: UUID,
+        *,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "api_key_service.revoke_integration_principal_api_keys",
+    ) -> int:
+        """Revoke all non-revoked API keys owned by an integration principal."""
+        stmt = select(APIKey).where(
+            cast(Any, APIKey.integration_principal_id) == integration_principal_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
+        )
+        result = await session.execute(stmt)
+        api_keys = list(result.scalars().all())
+        if not api_keys:
+            return 0
+
+        for api_key in api_keys:
+            await self._revoke_api_key_model(
+                session,
+                api_key=api_key,
+                actor_user_id=revoked_by_id,
+                reason=reason,
+                event_source=event_source,
+            )
+
+        return len(api_keys)
+
+    async def revoke_entity_api_keys(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        *,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "api_key_service.revoke_entity_api_keys",
+    ) -> int:
+        """Revoke all non-revoked API keys anchored to an entity."""
+        stmt = select(APIKey).where(
+            cast(Any, APIKey.entity_id) == entity_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
+        )
+        result = await session.execute(stmt)
+        api_keys = list(result.scalars().all())
+        if not api_keys:
+            return 0
+
+        for api_key in api_keys:
+            await self._revoke_api_key_model(
+                session,
+                api_key=api_key,
+                actor_user_id=revoked_by_id,
+                reason=reason,
+                event_source=event_source,
+            )
+
+        return len(api_keys)
+
+    async def update_api_key(
+        self,
+        session: AsyncSession,
+        key_id: UUID,
+        actor_user_id: Optional[UUID] = None,
+        event_source: str = "api_key_service.update_api_key",
+        **updates,
+    ) -> Optional[APIKey]:
+        """
+        Update API key fields.
+
+        Args:
+            session: Database session
+            key_id: API key ID
+            **updates: Fields to update
+
+        Returns:
+            Optional[APIKey]: Updated key or None
+        """
+        api_key = await self.get_by_id(session, key_id)
+        if not api_key:
+            return None
+
+        resolved_owner = await self.resolve_api_key_owner(session, api_key)
+        if resolved_owner is None:
+            raise InvalidInputError(
+                message="API key owner could not be resolved",
+                details={"key_id": str(key_id)},
+            )
+        owner = resolved_owner.user
+        integration_principal = resolved_owner.integration_principal
+        effective_actor_user_id = actor_user_id or (owner.id if owner is not None else None)
+
+        if integration_principal is not None and any(field in updates for field in {"entity_id", "inherit_from_tree"}):
+            raise InvalidInputError(
+                message="System integration API keys inherit entity scope from their integration principal",
+                details={"key_id": str(key_id)},
+            )
+
+        grant_fields_changed = any(field in updates for field in {"scopes", "entity_id", "inherit_from_tree"})
+        if self.policy_service is not None and grant_fields_changed:
+            effective_scopes = (
+                updates["scopes"] if "scopes" in updates else await self.get_api_key_scopes(session, key_id)
+            )
+            effective_entity_id = updates["entity_id"] if "entity_id" in updates else api_key.entity_id
+            effective_inherit_from_tree = (
+                updates["inherit_from_tree"] if "inherit_from_tree" in updates else api_key.inherit_from_tree
+            )
+            await self.policy_service.validate_update(
+                session,
+                actor_user_id=effective_actor_user_id,
+                owner=owner,
+                integration_principal=integration_principal,
+                api_key=api_key,
+                scopes=effective_scopes,
+                entity_id=effective_entity_id,
+                inherit_from_tree=effective_inherit_from_tree,
+            )
+
+        previous_snapshot = None
+        if self.user_audit_service is not None:
+            previous_snapshot = await self._build_api_key_audit_snapshot_from_db(session, api_key)
+
+        # Update allowed fields
+        allowed_fields = {
+            "name",
+            "description",
+            "rate_limit_per_minute",
+            "rate_limit_per_hour",
+            "rate_limit_per_day",
+            "status",
+            "expires_at",
+            "entity_id",
+            "inherit_from_tree",
+        }
+
+        for field, value in updates.items():
+            if field in allowed_fields and hasattr(api_key, field):
+                setattr(api_key, field, value)
+
+        # Handle scopes separately
+        if "scopes" in updates:
+            # Clear existing scopes
+            stmt = sql_delete(APIKeyScope).where(cast(Any, APIKeyScope.api_key_id) == key_id)
+            await session.execute(stmt)
+
+            # Add new scopes
+            for scope in updates["scopes"]:
+                scope_entry = APIKeyScope(api_key_id=key_id, scope=scope)
+                session.add(scope_entry)
+
+        # Handle IP whitelist separately
+        if "ip_whitelist" in updates:
+            # Clear existing IPs
+            stmt = sql_delete(APIKeyIPWhitelist).where(cast(Any, APIKeyIPWhitelist.api_key_id) == key_id)
+            await session.execute(stmt)
+
+            # Add new IPs
+            for ip in updates["ip_whitelist"]:
+                ip_entry = APIKeyIPWhitelist(api_key_id=key_id, ip_address=ip)
+                session.add(ip_entry)
+
+        await session.flush()
+        await session.refresh(api_key)
+
+        if self.user_audit_service is not None and owner is not None:
+            await self._record_api_key_audit_event(
+                session,
+                owner=owner,
+                api_key=api_key,
+                event_type="user.api_key_updated",
+                event_source=event_source,
+                actor_user_id=effective_actor_user_id,
+                before=previous_snapshot,
+                after=await self._build_api_key_audit_snapshot_from_db(session, api_key),
+                metadata={"updated_fields": sorted(updates.keys())},
+            )
+        self._log_api_key_lifecycle(
+            operation="updated",
+            api_key=api_key,
+            actor_user_id=effective_actor_user_id,
+            event_source=event_source,
+            updated_fields=sorted(updates.keys()),
+        )
+        await self.invalidate_api_key_auth_snapshot(api_key)
+        return api_key
+
+    async def rotate_api_key(
+        self,
+        session: AsyncSession,
+        key_id: UUID,
+        *,
+        actor_user_id: Optional[UUID] = None,
+        event_source: str = "api_key_service.rotate_api_key",
+    ) -> tuple[str, APIKey]:
+        """Rotate an API key and emit a single lifecycle audit event."""
+        api_key = await self.get_api_key(session, key_id)
+        if api_key is None:
+            raise InvalidInputError(message="API key not found", details={"key_id": str(key_id)})
+
+        resolved_owner = await self.resolve_api_key_owner(session, api_key)
+        if resolved_owner is None:
+            raise InvalidInputError(
+                message="API key owner could not be resolved",
+                details={"key_id": str(key_id)},
+            )
+        owner = resolved_owner.user
+        effective_actor_user_id = actor_user_id or (owner.id if owner is not None else None)
+
+        scopes = await self.get_api_key_scopes(session, api_key.id)
+        ip_whitelist = await self.get_api_key_ip_whitelist(session, api_key.id)
+        previous_snapshot = None
+        if owner is not None:
+            previous_snapshot = await self._build_api_key_audit_snapshot_from_db(session, api_key)
+
+        expires_in_days = None
+        if api_key.expires_at:
+            remaining_seconds = (api_key.expires_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining_seconds > 0:
+                expires_in_days = max(1, math.ceil(remaining_seconds / 86400))
+
+        prefix_type = "sk_live"
+        if api_key.prefix.startswith("sk_test_"):
+            prefix_type = "sk_test"
+        elif api_key.prefix.startswith("sk_live_"):
+            prefix_type = "sk_live"
+
+        full_key, new_key = await self.create_api_key(
+            session=session,
+            owner_id=api_key.owner_id,
+            integration_principal_id=api_key.integration_principal_id,
+            name=api_key.name,
+            scopes=scopes or None,
+            prefix_type=prefix_type,
+            ip_whitelist=ip_whitelist or None,
+            rate_limit_per_minute=api_key.rate_limit_per_minute,
+            rate_limit_per_hour=api_key.rate_limit_per_hour,
+            rate_limit_per_day=api_key.rate_limit_per_day,
+            expires_in_days=expires_in_days,
+            description=api_key.description,
+            key_kind=api_key.key_kind,
+            entity_id=api_key.entity_id,
+            inherit_from_tree=api_key.inherit_from_tree,
+            actor_user_id=effective_actor_user_id,
+            event_source=event_source,
+            record_audit=False,
+            record_observability=False,
+        )
+        await self._revoke_api_key_model(
+            session,
+            api_key=api_key,
+            actor_user_id=effective_actor_user_id,
+            reason="API key rotated",
+            event_source=event_source,
+            record_audit=False,
+            record_observability=False,
+        )
+
+        if owner is not None:
+            await self._record_api_key_audit_event(
+                session,
+                owner=owner,
+                api_key=new_key,
+                event_type="user.api_key_rotated",
+                event_source=event_source,
+                actor_user_id=effective_actor_user_id,
+                before=previous_snapshot,
+                after=await self._build_api_key_audit_snapshot_from_db(session, new_key),
+                reason="API key rotated",
+                metadata={
+                    "rotated_from_key_id": str(api_key.id),
+                    "rotated_from_prefix": api_key.prefix,
+                    "rotated_to_key_id": str(new_key.id),
+                    "rotated_to_prefix": new_key.prefix,
+                },
+            )
+        self._log_api_key_lifecycle(
+            operation="rotated",
+            api_key=new_key,
+            actor_user_id=effective_actor_user_id,
+            event_source=event_source,
+            rotated_from_key_id=str(api_key.id),
+            rotated_from_prefix=api_key.prefix,
+        )
+        return full_key, new_key
+
+    async def check_entity_access_with_tree(
+        self, session: AsyncSession, api_key: APIKey, target_entity_id: UUID
+    ) -> bool:
+        """
+        Check if API key has access to target entity, including tree permissions.
+
+        This method checks:
+        1. Direct access: If entity_id matches target_entity_id
+        2. Tree access: If inherit_from_tree=True and target is a descendant
+
+        Args:
+            session: Database session
+            api_key: API key to check
+            target_entity_id: Target entity ID to access
+
+        Returns:
+            bool: True if API key has access
+        """
+        # No entity_id = global access
+        if not api_key.entity_id:
+            return True
+
+        # Direct match
+        if api_key.entity_id == target_entity_id:
+            return True
+
+        # Check tree access if enabled
+        if api_key.inherit_from_tree:
+            cached_relation = await self.get_cached_entity_relation(
+                str(api_key.entity_id),
+                str(target_entity_id),
+            )
+            if cached_relation is not None:
+                return cached_relation
+
+            # Check if target is a descendant of api_key's entity
+            stmt = select(EntityClosure).where(
+                cast(Any, EntityClosure.ancestor_id) == api_key.entity_id,
+                cast(Any, EntityClosure.descendant_id) == target_entity_id,
+                cast(Any, EntityClosure.depth) > 0,  # Exclude self
+            )
+            result = await session.execute(stmt)
+            closure = result.scalar_one_or_none()
+            has_relation = closure is not None
+            await self.set_cached_entity_relation(
+                str(api_key.entity_id),
+                str(target_entity_id),
+                has_relation,
+            )
+
+            if has_relation:
+                return True
+
+        return False
+
+    async def delete_api_key(self, session: AsyncSession, key_id: UUID) -> bool:
+        """
+        Hard delete an API key (use revoke for soft delete).
+
+        Args:
+            session: Database session
+            key_id: API key ID
+
+        Returns:
+            bool: True if deleted
+        """
+        api_key = await self.get_by_id(session, key_id)
+        if not api_key:
+            return False
+
+        # Scopes and IP whitelist are deleted via cascade
+        await session.delete(api_key)
+        await session.flush()
+        await self.invalidate_api_key_auth_snapshot(api_key)
+
+        logger.info(f"Deleted API key: {api_key.prefix}")
+        self._log_api_key_lifecycle(
+            operation="deleted",
+            api_key=api_key,
+            event_source="api_key_service.delete_api_key",
+        )
+        return True
+
+    async def _revoke_api_key_model(
+        self,
+        session: AsyncSession,
+        *,
+        api_key: APIKey,
+        actor_user_id: Optional[UUID],
+        reason: Optional[str],
+        event_source: str,
+        record_audit: bool = True,
+        record_observability: bool = True,
+    ) -> None:
+        resolved_owner = await self.resolve_api_key_owner(session, api_key)
+        owner = resolved_owner.user if resolved_owner is not None else None
+        previous_snapshot = None
+        if self.user_audit_service is not None and record_audit:
+            previous_snapshot = await self._build_api_key_audit_snapshot_from_db(session, api_key)
+
+        api_key.status = APIKeyStatus.REVOKED
+        await session.flush()
+        await self.invalidate_api_key_auth_snapshot(api_key)
+
+        if self.user_audit_service is not None and owner is not None and record_audit:
+            await self._record_api_key_audit_event(
+                session,
+                owner=owner,
+                api_key=api_key,
+                event_type="user.api_key_revoked",
+                event_source=event_source,
+                actor_user_id=actor_user_id,
+                before=previous_snapshot,
+                after=await self._build_api_key_audit_snapshot_from_db(session, api_key),
+                reason=reason,
+            )
+        if record_observability:
+            self._log_api_key_lifecycle(
+                operation="revoked",
+                api_key=api_key,
+                actor_user_id=actor_user_id,
+                event_source=event_source,
+                reason=reason,
+            )
+
+    async def _build_api_key_audit_snapshot_from_db(
+        self,
+        session: AsyncSession,
+        api_key: APIKey,
+    ) -> Dict[str, object]:
+        return self._build_api_key_audit_snapshot(
+            api_key,
+            scopes=await self.get_api_key_scopes(session, api_key.id),
+            ip_whitelist=await self.get_api_key_ip_whitelist(session, api_key.id),
+        )
+
+    def _build_api_key_audit_snapshot(
+        self,
+        api_key: APIKey,
+        *,
+        scopes: Optional[List[str]] = None,
+        ip_whitelist: Optional[List[str]] = None,
+    ) -> Dict[str, object]:
+        return {
+            "key_id": api_key.id,
+            "name": api_key.name,
+            "description": api_key.description,
+            "prefix": api_key.prefix,
+            "key_kind": api_key.key_kind,
+            "owner_type": api_key.owner_type,
+            "owner_id": api_key.resolved_owner_id,
+            "status": api_key.status,
+            "scopes": sorted(scopes or []),
+            "ip_whitelist": sorted(ip_whitelist or []),
+            "entity_id": api_key.entity_id,
+            "inherit_from_tree": api_key.inherit_from_tree,
+            "rate_limit_per_minute": api_key.rate_limit_per_minute,
+            "rate_limit_per_hour": api_key.rate_limit_per_hour,
+            "rate_limit_per_day": api_key.rate_limit_per_day,
+            "expires_at": api_key.expires_at,
+        }
+
+    def _log_api_key_validation(
+        self,
+        *,
+        prefix: str,
+        status: str,
+        reason: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_validated(
+            prefix=prefix,
+            status=status,
+            reason=reason,
+            ip_address=ip_address,
+            **extra,
+        )
+
+    def _log_api_key_rate_limited(
+        self,
+        *,
+        api_key: APIKey,
+        current_count: int,
+        limit: int,
+        window: str,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_rate_limited(
+            prefix=api_key.prefix,
+            current_count=current_count,
+            limit=limit,
+            window=window,
+            key_kind=self._normalize_enum(api_key.key_kind),
+        )
+
+    def _log_policy_decision(
+        self,
+        *,
+        surface: str,
+        outcome: str,
+        reason: str,
+        api_key: APIKey,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_policy_decision(
+            surface=surface,
+            outcome=outcome,
+            reason=reason,
+            key_kind=self._normalize_enum(api_key.key_kind),
+            prefix=api_key.prefix,
+            owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
+            owner_type=api_key.owner_type,
+            **extra,
+        )
+
+    def _log_api_key_lifecycle(
+        self,
+        *,
+        operation: str,
+        api_key: APIKey,
+        actor_user_id: Optional[UUID] = None,
+        event_source: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_lifecycle(
+            operation=operation,
+            key_kind=self._normalize_enum(api_key.key_kind),
+            status=self._normalize_enum(api_key.status),
+            prefix=api_key.prefix,
+            owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
+            owner_type=api_key.owner_type,
+            actor_user_id=str(actor_user_id) if actor_user_id else None,
+            entity_id=str(api_key.entity_id) if api_key.entity_id else None,
+            entity_scoped=bool(api_key.entity_id),
+            event_source=event_source,
+            **extra,
+        )
+
+    @staticmethod
+    def _normalize_enum(value: Any) -> str:
+        return value.value if hasattr(value, "value") else str(value)
+
+    async def _record_api_key_audit_event(
+        self,
+        session: AsyncSession,
+        *,
+        owner: User,
+        api_key: APIKey,
+        event_type: str,
+        event_source: str,
+        actor_user_id: Optional[UUID],
+        before: Optional[Dict[str, object]] = None,
+        after: Optional[Dict[str, object]] = None,
+        metadata: Optional[Dict[str, object]] = None,
+        reason: Optional[str] = None,
+        occurred_at: Optional[datetime] = None,
+    ) -> None:
+        if self.user_audit_service is None:
+            return
+
+        root_entity_id = owner.root_entity_id
+        if api_key.entity_id is not None:
+            root_entity_id = await self._get_root_entity_id(session, api_key.entity_id)
+
+        await self.user_audit_service.record_event(
+            session,
+            event_category="credential",
+            event_type=event_type,
+            event_source=event_source,
+            actor_user_id=actor_user_id,
+            subject_user_id=owner.id,
+            subject_email_snapshot=owner.email,
+            root_entity_id=root_entity_id,
+            entity_id=api_key.entity_id,
+            reason=reason,
+            before=before,
+            after=after,
+            metadata={
+                "api_key_id": api_key.id,
+                "api_key_prefix": api_key.prefix,
+                **(metadata or {}),
+            },
+            occurred_at=occurred_at,
+        )
+
+    async def _get_root_entity_id(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> UUID:
+        stmt = (
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        row = result.first()
+        return row[0] if row else entity_id

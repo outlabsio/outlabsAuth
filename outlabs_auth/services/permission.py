@@ -1,0 +1,3047 @@
+"""
+Permission Service
+
+Handles permission checking and management with PostgreSQL/SQLAlchemy:
+- BasicPermissionService: Flat permission system (SimpleRBAC)
+- EnterprisePermissionService: Hierarchical permissions (EnterpriseRBAC) - Phase 3+
+"""
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, cast
+from uuid import UUID
+
+from sqlalchemy import inspect, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.exceptions import (
+    InvalidInputError,
+    PermissionDeniedError,
+    PermissionNotFoundError,
+    UserNotFoundError,
+)
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
+from outlabs_auth.models.sql.permission import (
+    Permission,
+    PermissionCondition,
+    PermissionTag,
+    PermissionTagLink,
+)
+from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
+from outlabs_auth.models.sql.role import Role, RoleCondition, RoleEntityTypePermission, RolePermission
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.services import request_cache
+from outlabs_auth.services.base import BaseService
+from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
+from outlabs_auth.schemas.abac import serialize_condition_value
+from outlabs_auth.utils.validation import validate_permission_name
+
+# Stateless ABAC evaluator shared across checks — building one per call was
+# pure object churn on the hot path.
+_POLICY_ENGINE = PolicyEvaluationEngine()
+
+
+class PermissionMatcher:
+    """
+    Precomputed index for matching required permissions against a granted set.
+
+    The matcher folds a granted permission set into five disjoint views once
+    (``*:*`` flag, exact names, ``resource:*`` wildcards, ``_all`` bases,
+    ``_tree`` bases). Subsequent ``allows()`` / ``allows_from_ancestor()``
+    calls become O(1) set lookups plus a single parse of the required name —
+    no string splits on the granted side.
+
+    Building the index is O(N) (one split per granted entry). It pays off
+    whenever the same granted set is matched against many required names —
+    e.g. the permission fan-out in ``get_user_permission_names``.
+    """
+
+    __slots__ = (
+        "_has_super",
+        "_exact",
+        "_resource_wildcards",
+        "_all_scoped",
+        "_tree_scoped",
+    )
+
+    def __init__(self, granted: Iterable[str]) -> None:
+        exact: Set[str] = {perm for perm in granted if perm}
+        self._has_super: bool = "*:*" in exact
+
+        resource_wildcards: Set[str] = set()
+        all_scoped: Set[str] = set()
+        tree_scoped: Set[str] = set()
+        for perm in exact:
+            if ":" not in perm:
+                continue
+            resource, action_part = perm.split(":", 1)
+            if action_part == "*":
+                resource_wildcards.add(resource)
+                continue
+            if "_" not in action_part:
+                continue
+            base_action, scope = action_part.rsplit("_", 1)
+            if scope == "all":
+                all_scoped.add(f"{resource}:{base_action}")
+            elif scope == "tree":
+                tree_scoped.add(f"{resource}:{base_action}")
+
+        self._exact: frozenset = frozenset(exact)
+        self._resource_wildcards: frozenset = frozenset(resource_wildcards)
+        self._all_scoped: frozenset = frozenset(all_scoped)
+        self._tree_scoped: frozenset = frozenset(tree_scoped)
+
+    def allows(self, required: str) -> bool:
+        """Mirror of ``PermissionService._permission_set_allows``."""
+        if self._has_super or required in self._exact:
+            return True
+        resource, action, scope = PermissionService._parse_permission_name(required)
+        if resource in self._resource_wildcards:
+            return True
+        base = f"{resource}:{action}"
+        if base in self._all_scoped:
+            return True
+        if scope is None and base in self._tree_scoped:
+            return True
+        return False
+
+    def allows_from_ancestor(self, required: str) -> bool:
+        """Mirror of ``PermissionService._permission_set_allows_from_ancestor``."""
+        if self._has_super:
+            return True
+        resource, action, scope = PermissionService._parse_permission_name(required)
+        base = f"{resource}:{action}"
+        if scope == "all":
+            return base in self._all_scoped
+        # ``_tree`` and non-scoped requireds both accept ``_tree`` or ``_all`` upstream.
+        return base in self._all_scoped or base in self._tree_scoped
+
+
+class PermissionService(BaseService[Permission]):
+    """
+    Permission management and checking service.
+
+    Handles:
+    - Permission CRUD operations
+    - User permission checking via roles
+    - Wildcard permission support
+    - Permission aggregation from roles
+    """
+
+    def __init__(
+        self,
+        config: AuthConfig,
+        observability: Optional[Any] = None,
+        permission_history_service: Optional[Any] = None,
+    ):
+        """
+        Initialize PermissionService.
+
+        Args:
+            config: Authentication configuration
+            observability: Optional observability service for logging/metrics
+        """
+        super().__init__(Permission)
+        self.config = config
+        self.observability = observability
+        self.permission_history_service = permission_history_service
+
+    @staticmethod
+    def _coerce_definition_status(value: DefinitionStatus | str) -> DefinitionStatus:
+        if isinstance(value, DefinitionStatus):
+            return value
+        return DefinitionStatus(str(value))
+
+    def _resolve_permission_status(
+        self,
+        *,
+        current_status: Optional[DefinitionStatus] = None,
+        status: Optional[DefinitionStatus | str] = None,
+        is_active: Optional[bool] = None,
+        allow_archived: bool = False,
+    ) -> DefinitionStatus:
+        resolved_status = current_status or DefinitionStatus.ACTIVE
+        requested_status: Optional[DefinitionStatus] = None
+
+        if status is not None:
+            requested_status = self._coerce_definition_status(status)
+
+        if is_active is not None:
+            status_from_is_active = DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE
+            if requested_status is not None and requested_status != status_from_is_active:
+                raise InvalidInputError(
+                    message="status and is_active cannot conflict",
+                    details={
+                        "status": requested_status.value,
+                        "is_active": is_active,
+                    },
+                )
+            requested_status = status_from_is_active
+
+        if requested_status is None:
+            return resolved_status
+
+        if requested_status == DefinitionStatus.ARCHIVED and not allow_archived:
+            raise InvalidInputError(
+                message="Use delete to archive permissions",
+                details={"status": requested_status.value},
+            )
+
+        return requested_status
+
+    @staticmethod
+    def _role_definition_is_live(role: Optional[Role]) -> bool:
+        return bool(role and getattr(role, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ACTIVE)
+
+    @staticmethod
+    def _permission_definition_is_live(permission: Optional[Permission]) -> bool:
+        return bool(permission and getattr(permission, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ACTIVE)
+
+    @staticmethod
+    def _require_policy_engine(
+        engine: Optional[PolicyEvaluationEngine],
+    ) -> PolicyEvaluationEngine:
+        if engine is None:
+            raise RuntimeError("ABAC engine is required when ABAC evaluation is enabled")
+        return engine
+
+    def _should_load_entity_type_permissions(self, entity_type: Optional[str]) -> bool:
+        return bool(self.config.enable_context_aware_roles and entity_type)
+
+    async def _load_ancestor_depths(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> Dict[UUID, int]:
+        """
+        Return a ``{ancestor_id: depth}`` mapping for ``entity_id`` from the
+        closure table. Cached per-request so multiple permission checks on the
+        same entity (direct + tree-based + context-aware-role) share the fetch.
+        """
+
+        async def _loader() -> Dict[UUID, int]:
+            ancestors_stmt = select(
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, EntityClosure.depth),
+            ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            result = await session.execute(ancestors_stmt)
+            return {cast(UUID, row[0]): int(row[1]) for row in result.all()}
+
+        return await request_cache.get_or_load(
+            ("ancestor_depths", entity_id), _loader
+        )
+
+    async def _resolve_context_entity_type(
+        self,
+        session: AsyncSession,
+        entity_id: Optional[UUID],
+    ) -> Optional[str]:
+        """
+        Return the ``entity_type`` of ``entity_id`` for context-aware-role resolution.
+
+        Deduplicates the fetch across ``check_permission`` and ``get_user_permissions``
+        on the same request: both paths need the entity's type but only differ in how
+        they use it, and the naive version re-issued ``session.get(Entity, ...)`` on
+        every call. The request cache stores the ``Entity`` under ``("entity", id)``
+        so any later caller in the same request — including ``MembershipService``,
+        which shares the same cache keys — sees the already-fetched row.
+        """
+        if entity_id is None or not self.config.enable_context_aware_roles:
+            return None
+
+        async def _loader() -> Optional[Entity]:
+            return await session.get(Entity, entity_id)
+
+        entity = await request_cache.get_or_load(("entity", entity_id), _loader)
+        return entity.entity_type if entity is not None else None
+
+    def _entity_membership_permission_options(
+        self,
+        *,
+        include_conditions: bool = False,
+        entity_type: Optional[str] = None,
+    ) -> list[Any]:
+        role_permissions_loader = selectinload(cast(Any, EntityMembership.roles)).selectinload(
+            cast(Any, Role.permissions)
+        )
+        if include_conditions:
+            role_permissions_loader = role_permissions_loader.selectinload(cast(Any, Permission.conditions))
+
+        options: list[Any] = [role_permissions_loader]
+
+        if include_conditions:
+            options.append(selectinload(cast(Any, EntityMembership.roles)).selectinload(cast(Any, Role.conditions)))
+
+        if self._should_load_entity_type_permissions(entity_type):
+            entity_type_loader = (
+                selectinload(cast(Any, EntityMembership.roles))
+                .selectinload(cast(Any, Role.entity_type_permissions))
+                .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            )
+            if include_conditions:
+                entity_type_loader = entity_type_loader.selectinload(cast(Any, Permission.conditions))
+            options.append(entity_type_loader)
+
+        return options
+
+    def _user_role_membership_permission_options(
+        self,
+        *,
+        include_conditions: bool = False,
+        entity_type: Optional[str] = None,
+    ) -> list[Any]:
+        role_permissions_loader = selectinload(cast(Any, UserRoleMembership.role)).selectinload(
+            cast(Any, Role.permissions)
+        )
+        if include_conditions:
+            role_permissions_loader = role_permissions_loader.selectinload(cast(Any, Permission.conditions))
+
+        options: list[Any] = [role_permissions_loader]
+
+        if include_conditions:
+            options.append(selectinload(cast(Any, UserRoleMembership.role)).selectinload(cast(Any, Role.conditions)))
+
+        if self._should_load_entity_type_permissions(entity_type):
+            entity_type_loader = (
+                selectinload(cast(Any, UserRoleMembership.role))
+                .selectinload(cast(Any, Role.entity_type_permissions))
+                .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            )
+            if include_conditions:
+                entity_type_loader = entity_type_loader.selectinload(cast(Any, Permission.conditions))
+            options.append(entity_type_loader)
+
+        return options
+
+    # =========================================================================
+    # Permission Checking
+    # =========================================================================
+
+    async def check_permission(
+        self,
+        session: AsyncSession,
+        user_id: Optional[UUID],
+        permission: str,
+        entity_id: Optional[UUID] = None,
+        resource_context: Optional[Dict[str, Any]] = None,
+        env_context: Optional[Dict[str, Any]] = None,
+        time_attrs: Optional[Dict[str, Any]] = None,
+        user: Optional[User] = None,
+        capture: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Check if user has a specific permission.
+
+        Args:
+            session: Database session
+            user_id: User UUID, or None for anonymous (always returns False)
+            permission: Permission name (e.g., "user:create")
+            entity_id: Optional entity context for EnterpriseRBAC
+
+        Returns:
+            True if user has permission, False otherwise
+
+        Raises:
+            UserNotFoundError: If user doesn't exist
+        """
+        # Anonymous / null user never has permissions — skip the DB hit.
+        if user_id is None:
+            return False
+
+        start_time = datetime.now(timezone.utc)
+
+        resolved_user = user
+        if resolved_user is None:
+            cached_user = request_cache.get(("user", user_id))
+            if cached_user is not None:
+                resolved_user = cached_user
+            else:
+                resolved_user = await session.get(User, user_id)
+                if resolved_user is not None:
+                    request_cache.set_value(("user", user_id), resolved_user)
+
+        if not resolved_user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
+
+        abac_enabled = bool(getattr(self.config, "enable_abac", False))
+        if abac_enabled and not await self._abac_conditions_exist(session):
+            # enable_abac is on but no condition rows exist anywhere, so ABAC
+            # evaluation is vacuously "allow when RBAC allows" — take the
+            # cheaper non-ABAC path and its caches. The flag is memoized per
+            # request and in Redis against the global version counter, which
+            # every condition mutation bumps.
+            abac_enabled = False
+        # Resolve a lazy env_context supplier (see AuthDeps._EnvContextSupplier)
+        # only now, after the anonymous and user-not-found early returns. When
+        # ABAC is off the dict is never used — drop it entirely in that case.
+        if callable(env_context):
+            env_context = env_context() if abac_enabled else None
+        cache_context_hash = self._permission_cache_context_hash(
+            abac_enabled=abac_enabled,
+            resource_context=resource_context,
+            env_context=env_context,
+            time_attrs=time_attrs,
+        )
+        use_permission_cache = self._can_use_permission_cache() and (
+            not abac_enabled or cache_context_hash is not None
+        )
+        perm_cache_versions: Optional[Dict[str, int]] = None
+        if use_permission_cache:
+            cached, perm_cache_versions = await self._get_cached_permission_result(
+                user_id=user_id,
+                permission=permission,
+                entity_id=entity_id,
+                context_hash=cache_context_hash,
+            )
+            if cached is not None:
+                self._log_permission_check(
+                    user_id,
+                    permission,
+                    "granted" if cached else "denied",
+                    start_time,
+                    "cache",
+                )
+                return cached
+
+        # Superusers have all permissions
+        if resolved_user.is_superuser:
+            self._log_permission_check(user_id, permission, "granted", start_time, "superuser")
+            return True
+
+        engine: Optional[PolicyEvaluationEngine] = _POLICY_ENGINE if abac_enabled else None
+        context: Optional[Dict[str, Any]] = None
+        if abac_enabled:
+            abac_engine = self._require_policy_engine(engine)
+            context = abac_engine.create_context(
+                user={
+                    "id": str(resolved_user.id),
+                    "email": resolved_user.email,
+                    "status": getattr(resolved_user.status, "value", resolved_user.status),
+                    "timezone": resolved_user.timezone,
+                    "locale": resolved_user.locale,
+                    "is_superuser": resolved_user.is_superuser,
+                },
+                resource=resource_context,
+                env=env_context,
+                time_attrs=time_attrs,
+            )
+            if entity_id is not None:
+                context.setdefault("resource", {})
+                if isinstance(context["resource"], dict):
+                    context["resource"].setdefault("entity_id", str(entity_id))
+
+        # DD-054: Permission Scope Enforcement
+        # When no entity_id is provided, only global/org-scoped roles should grant permissions.
+        # Entity-local roles (scope_entity_id set) are excluded from this check.
+        # When entity_id IS provided, we check entity context permissions below.
+        if not abac_enabled:
+            if entity_id is None:
+                # No entity context: keep existing behavior and evaluate the user's
+                # aggregate permissions for non-entity checks.
+                user_permissions = set(
+                    await self.get_user_permissions(
+                        session,
+                        user_id,
+                        include_entity_local=False,
+                        user=resolved_user,
+                    )
+                )
+                if capture is not None and entity_id is None:
+                    capture["effective_permissions"] = user_permissions
+            else:
+                # Entity context: do NOT pre-grant via entity-membership role
+                # aggregation, otherwise entity-local permissions can bypass
+                # ancestor/descendant checks in _check_permission_in_entity().
+                user_permissions = await self._get_user_role_permissions(
+                    session=session,
+                    user_id=user_id,
+                    include_entity_local=True,
+                    entity_type=target_entity_type,
+                )
+            if self._permission_set_allows(permission, user_permissions):
+                await self._cache_permission_result(
+                    use_cache=use_permission_cache,
+                    user_id=user_id,
+                    permission=permission,
+                    entity_id=entity_id,
+                    result=True,
+                    context_hash=cache_context_hash,
+                    versions=perm_cache_versions,
+                )
+                self._log_permission_check(user_id, permission, "granted", start_time, "global_match")
+                return True
+        else:
+            if await self._check_permission_via_user_roles_with_abac(
+                session=session,
+                user_id=user_id,
+                permission=permission,
+                context=context or {},
+                engine=abac_engine,
+                include_entity_local=(entity_id is not None),
+                entity_type=target_entity_type,
+            ):
+                self._log_permission_check(user_id, permission, "granted", start_time, "global_match_abac")
+                return True
+
+        # EnterpriseRBAC check in an entity context
+        # This checks permissions via entity memberships (EntityMembership)
+        if entity_id is not None:
+            if await self._check_permission_in_entity(
+                session=session,
+                user_id=user_id,
+                permission=permission,
+                entity_id=entity_id,
+                entity_type=target_entity_type,
+                context=context,
+                engine=engine,
+            ):
+                await self._cache_permission_result(
+                    use_cache=use_permission_cache,
+                    user_id=user_id,
+                    permission=permission,
+                    entity_id=entity_id,
+                    result=True,
+                    context_hash=cache_context_hash,
+                    versions=perm_cache_versions,
+                )
+                self._log_permission_check(user_id, permission, "granted", start_time, "entity_match")
+                return True
+
+        # Permission denied
+        await self._cache_permission_result(
+            use_cache=use_permission_cache,
+            user_id=user_id,
+            permission=permission,
+            entity_id=entity_id,
+            result=False,
+            context_hash=cache_context_hash,
+            versions=perm_cache_versions,
+        )
+        self._log_permission_check(user_id, permission, "denied", start_time, "no_permission")
+        return False
+
+    # =========================================================================
+    # EnterpriseRBAC: entity context + tree permissions
+    # =========================================================================
+
+    @staticmethod
+    def _parse_permission_name(name: str) -> Tuple[str, str, Optional[str]]:
+        """
+        Parse `resource:action[_scope]` into (resource, action, scope).
+
+        Scope is the last underscore segment when it's one of: tree, all, own.
+        """
+        if ":" not in name:
+            return name, "*", None
+
+        resource, action_part = name.split(":", 1)
+        if "_" not in action_part:
+            return resource, action_part, None
+
+        action_base, maybe_scope = action_part.rsplit("_", 1)
+        if maybe_scope in ("tree", "all", "own"):
+            return resource, action_base, maybe_scope
+        return resource, action_part, None
+
+    @classmethod
+    def _permission_set_allows(cls, required: str, granted: Set[str]) -> bool:
+        """
+        Check whether a set of permission *names* grants a required permission name.
+
+        Rules:
+        - `*:*` grants everything.
+        - Exact match grants.
+        - `resource:*` grants all actions/scopes for that resource.
+        - `_all` scope is treated as a superset of non-scoped and `_tree`.
+        - `_tree` is treated as a superset of non-scoped (within entity hierarchy rules).
+        """
+        if "*:*" in granted or required in granted:
+            return True
+
+        resource, action, scope = cls._parse_permission_name(required)
+        if f"{resource}:*" in granted:
+            return True
+
+        base = f"{resource}:{action}"
+        all_variant = f"{base}_all"
+
+        # `_all` is always a superset
+        if all_variant in granted:
+            return True
+
+        # `_tree` is a superset of the base (non-scoped) permission
+        if scope is None:
+            tree_variant = f"{base}_tree"
+            if tree_variant in granted:
+                return True
+
+        return False
+
+    @classmethod
+    def _permission_set_allows_from_ancestor(cls, required: str, granted: Set[str]) -> bool:
+        """
+        Like `_permission_set_allows`, but for permissions inherited from ancestors.
+
+        Only `_tree`/`_all` (or `*:*`) permissions propagate to descendants.
+        """
+        if "*:*" in granted:
+            return True
+
+        resource, action, scope = cls._parse_permission_name(required)
+        base = f"{resource}:{action}"
+
+        if scope == "all":
+            return f"{base}_all" in granted
+
+        if scope == "tree":
+            return f"{base}_tree" in granted or f"{base}_all" in granted
+
+        # Non-scoped permission required: need `_tree` or `_all` upstream.
+        return f"{base}_tree" in granted or f"{base}_all" in granted
+
+    @staticmethod
+    def _membership_window_predicates(model: Any) -> list[Any]:
+        """SQL pre-filter matching ``is_currently_valid()`` (which still runs).
+
+        Expired or not-yet-valid memberships previously triggered the full
+        role+permission eager-load chain only to be discarded in Python.
+        """
+        now = datetime.now(timezone.utc)
+        return [
+            or_(cast(Any, model.valid_from).is_(None), cast(Any, model.valid_from) <= now),
+            or_(cast(Any, model.valid_until).is_(None), cast(Any, model.valid_until) >= now),
+        ]
+
+    async def _load_user_role_memberships(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        entity_type: Optional[str],
+    ) -> list[UserRoleMembership]:
+        """Active URM rows with roles+permissions, memoized per request.
+
+        ``require_all/any`` loops and multi-permission dependencies re-enter
+        the permission service once per name; the membership graph is identical
+        for the whole request, so the multi-round-trip eager load runs once.
+
+        The session object is part of the key: ORM rows must never outlive
+        their session (detached-instance errors on attribute refresh). Within
+        a request the FastAPI dependency cache shares one session, so the memo
+        still spans every check in the request.
+        """
+        cache_key = ("urm_perm_memberships", session, str(user_id), entity_type or "")
+
+        async def _load() -> list[UserRoleMembership]:
+            stmt = (
+                select(UserRoleMembership)
+                .options(
+                    *self._user_role_membership_permission_options(entity_type=entity_type)
+                )
+                .where(
+                    cast(Any, UserRoleMembership.user_id) == user_id,
+                    cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
+                    *self._membership_window_predicates(UserRoleMembership),
+                )
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+        return cast("list[UserRoleMembership]", await request_cache.get_or_load(cache_key, _load))
+
+    def _role_context_names_cached(self, role: Role, entity_type: Optional[str]) -> Set[str]:
+        """Per-request memo of a role's context-adapted permission-name set.
+
+        Otherwise rebuilt per role per permission — O(perms) set construction
+        plus per-entry lowercasing on every check of a multi-permission route.
+        """
+        key = ("role_ctx_names", str(role.id), entity_type or "")
+        cached = request_cache.get(key)
+        if cached is None:
+            cached = self._get_role_permission_names_for_context(role, entity_type)
+            request_cache.set_value(key, cached)
+        return cast(Set[str], cached)
+
+    async def _abac_conditions_exist(self, session: AsyncSession) -> bool:
+        """Whether ANY ABAC condition rows exist (role- or permission-level).
+
+        Deployments often enable ``enable_abac`` before authoring conditions;
+        until any exist, every check can use the non-ABAC fast path. Memoized
+        per request and in Redis, validated against the global version counter
+        (every condition mutation bumps it via the condition-change
+        invalidation hooks).
+        """
+
+        async def _load() -> bool:
+            cache_service = getattr(self, "cache_service", None)
+            flag_get = getattr(cache_service, "get_abac_conditions_flag", None)
+            versions: Optional[Dict[str, int]] = None
+            if flag_get is not None:
+                cached, versions = await flag_get()
+                if cached is not None:
+                    return bool(cached)
+
+            has_permission_conditions = (
+                await session.execute(select(cast(Any, PermissionCondition.id)).limit(1))
+            ).first() is not None
+            has_role_conditions = (
+                await session.execute(select(cast(Any, RoleCondition.id)).limit(1))
+            ).first() is not None
+            exists = has_permission_conditions or has_role_conditions
+
+            flag_set = getattr(cache_service, "set_abac_conditions_flag", None)
+            if flag_set is not None:
+                await flag_set(exists, versions=versions)
+            return exists
+
+        return bool(await request_cache.get_or_load(("abac_conditions_exist",), _load))
+
+    async def _load_role_conditions_cached(
+        self,
+        session: AsyncSession,
+        role: Role,
+    ) -> list[RoleCondition]:
+        """Role-level ABAC conditions, request-memoized.
+
+        The same role often appears under several memberships (direct +
+        ancestor) and is re-evaluated per permission; without the memo each
+        occurrence re-SELECTed its conditions.
+        """
+        if self._relationship_is_loaded(role, "conditions"):
+            return list(role.conditions or [])
+
+        cache_key = ("role_abac_conditions", session, str(role.id))
+
+        async def _load() -> list[RoleCondition]:
+            stmt = select(RoleCondition).where(cast(Any, RoleCondition.role_id) == role.id)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+        return cast("list[RoleCondition]", await request_cache.get_or_load(cache_key, _load))
+
+    async def _load_condition_group_ops_cached(
+        self,
+        session: AsyncSession,
+        group_ids: Set[UUID],
+    ) -> Dict[Optional[str], str]:
+        """Operator map for condition groups, request-memoized per id-set."""
+        if not group_ids:
+            return {}
+        cache_key = (
+            "condition_group_ops",
+            session,
+            frozenset(str(group_id) for group_id in group_ids),
+        )
+
+        async def _load() -> Dict[Optional[str], str]:
+            stmt = select(SqlConditionGroup).where(
+                cast(Any, SqlConditionGroup.id).in_(list(group_ids))
+            )
+            result = await session.execute(stmt)
+            return {str(group.id): group.operator for group in result.scalars().all()}
+
+        return cast("Dict[Optional[str], str]", await request_cache.get_or_load(cache_key, _load))
+
+    async def _check_permission_in_entity(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        permission: str,
+        entity_id: UUID,
+        entity_type: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        engine: Optional[PolicyEvaluationEngine] = None,
+    ) -> bool:
+        """
+        EnterpriseRBAC permission evaluation:
+        - permissions granted by membership roles on the target entity
+        - inherited tree permissions via membership roles on ancestor entities (closure table)
+        - respects entity-local role scope (entity_only vs hierarchy)
+        """
+        # Resolve ancestors (including self) via closure table. Depth-keyed lookup
+        # is cached per-request so descendants explored during the same request
+        # (e.g. a nested tree-permission check) don't reissue the same query.
+        depth_by_ancestor = await self._load_ancestor_depths(session, entity_id)
+        if not depth_by_ancestor:
+            return False
+
+        ancestor_ids = list(depth_by_ancestor.keys())
+
+        # Load memberships in any ancestor entity with roles+permissions,
+        # memoized per request: multi-permission routes re-enter this method
+        # once per name against the same membership graph. ABAC conditions are
+        # lazy-loaded inside _abac_allows_role_and_permission for matching
+        # perms only — eager loading here would fetch empty condition
+        # collections for every permission in every role.
+        memo_key = ("em_perm_memberships", session, str(user_id), str(entity_id), entity_type or "")
+
+        async def _load_memberships() -> list[EntityMembership]:
+            memberships_stmt = (
+                select(EntityMembership)
+                .options(
+                    *self._entity_membership_permission_options(
+                        entity_type=entity_type,
+                    )
+                )
+                .where(
+                    cast(Any, EntityMembership.user_id) == user_id,
+                    cast(Any, EntityMembership.entity_id).in_(ancestor_ids),
+                    cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+                    *self._membership_window_predicates(EntityMembership),
+                )
+            )
+            memberships_result = await session.execute(memberships_stmt)
+            return list(memberships_result.scalars().all())
+
+        memberships: list[EntityMembership] = await request_cache.get_or_load(
+            memo_key, _load_memberships
+        )
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            membership_depth = depth_by_ancestor.get(membership.entity_id)
+            if membership_depth is None:
+                continue
+
+            # membership_depth == 0 means membership is at target entity (direct)
+            # membership_depth > 0 means membership is at an ancestor (inherited)
+            is_direct_membership = membership_depth == 0
+
+            for role in membership.roles:
+                if not self._role_definition_is_live(role):
+                    continue
+
+                # Check if entity-local role scope allows granting at this entity
+                if not self._role_can_grant_at_entity(role, membership.entity_id, entity_id, is_direct_membership):
+                    continue
+
+                granted = self._role_context_names_cached(role, entity_type)
+
+                is_match = (
+                    self._permission_set_allows(permission, granted)
+                    if is_direct_membership
+                    else self._permission_set_allows_from_ancestor(permission, granted)
+                )
+                if not is_match:
+                    continue
+
+                if engine and context is not None:
+                    if not await self._abac_allows_role_and_permission(
+                        session=session,
+                        role=role,
+                        required_permission=permission,
+                        entity_type=entity_type,
+                        context=context,
+                        engine=engine,
+                    ):
+                        continue
+
+                return True
+
+        return False
+
+    @staticmethod
+    def _role_can_grant_at_entity(
+        role: Role,
+        membership_entity_id: UUID,
+        target_entity_id: UUID,
+        is_direct_membership: bool,
+    ) -> bool:
+        """
+        Check if a role can grant permissions at the target entity.
+
+        For entity-local roles:
+        - scope=entity_only: Only grants at the scope_entity (membership must be at target)
+        - scope=hierarchy: Grants at scope_entity and all descendants
+
+        Non-entity-local roles (scope_entity_id=None) follow normal inheritance.
+
+        Args:
+            role: Role to check
+            membership_entity_id: Entity where the membership exists
+            target_entity_id: Entity where permission is being checked
+            is_direct_membership: True if membership is at target entity
+
+        Returns:
+            bool: True if role can grant permissions at target entity
+        """
+        # Non-entity-local roles follow normal inheritance rules
+        if role.scope_entity_id is None:
+            return True
+
+        # Entity-local role with scope=entity_only only grants at scope_entity
+        if role.scope == RoleScope.ENTITY_ONLY:
+            # The role only grants permissions at membership_entity_id
+            # This is valid only when checking permission at that same entity
+            return is_direct_membership and membership_entity_id == target_entity_id
+
+        # Entity-local role with scope=hierarchy grants at scope_entity and descendants
+        # Since the membership is in an ancestor of target, and the role's scope_entity
+        # is an ancestor (or same) as the membership entity, the permission cascades.
+        return True
+
+    async def _check_permission_via_user_roles_with_abac(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        permission: str,
+        context: Dict[str, Any],
+        engine: PolicyEvaluationEngine,
+        include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
+    ) -> bool:
+        """
+        Check permission via user roles with ABAC evaluation.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            permission: Permission name to check
+            context: ABAC evaluation context
+            engine: Policy evaluation engine
+            include_entity_local: If False, exclude entity-local roles (DD-054)
+
+        Returns:
+            True if permission granted, False otherwise
+        """
+        # ABAC conditions are lazy-loaded per matching permission inside
+        # _abac_allows_role_and_permission; eager loading them here would
+        # issue additional SELECTs for every permission the user can see,
+        # even when the target permission has no conditions attached.
+        memberships = await self._load_user_role_memberships(session, user_id, entity_type)
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            role = membership.role
+            if not self._role_definition_is_live(role):
+                continue
+
+            # DD-054: Filter out entity-local roles when include_entity_local=False
+            if not include_entity_local and role.scope_entity_id is not None:
+                continue
+
+            granted = self._role_context_names_cached(role, entity_type)
+            if not self._permission_set_allows(permission, granted):
+                continue
+
+            if not await self._abac_allows_role_and_permission(
+                session=session,
+                role=role,
+                required_permission=permission,
+                entity_type=entity_type,
+                context=context,
+                engine=engine,
+            ):
+                continue
+
+            return True
+
+        return False
+
+    async def _abac_allows_role_and_permission(
+        self,
+        *,
+        session: AsyncSession,
+        role: Role,
+        required_permission: str,
+        entity_type: Optional[str],
+        context: Dict[str, Any],
+        engine: PolicyEvaluationEngine,
+    ) -> bool:
+        perms = self._get_role_permissions_for_context(role, entity_type)
+
+        # Narrow to candidate permissions *before* touching conditions. Permissions
+        # that can't match the required name can never contribute, so loading
+        # their ABAC conditions is pure waste — and for a role with many unrelated
+        # permissions this dominates the outer query cost when ABAC is on.
+        matching_perms = [
+            p for p in perms if p and self._permission_set_allows(required_permission, {p.name})
+        ]
+        if not matching_perms:
+            return False
+
+        # Lazy-load conditions for matching permissions only, batched in one SELECT.
+        unloaded_permission_ids = [
+            permission.id
+            for permission in matching_perms
+            if not self._relationship_is_loaded(permission, "conditions")
+        ]
+        if unloaded_permission_ids:
+            perm_stmt = (
+                select(Permission)
+                .options(selectinload(cast(Any, Permission.conditions)))
+                .where(cast(Any, Permission.id).in_(unloaded_permission_ids))
+            )
+            perm_result = await session.execute(perm_stmt)
+            permission_map = {permission.id: permission for permission in perm_result.scalars().all()}
+            matching_perms = [permission_map.get(p.id, p) for p in matching_perms]
+
+        # Lazy-load role conditions when they weren't eagerly fetched (request-
+        # memoized). Silently treating an unloaded collection as empty (the
+        # previous default) would bypass any role-level ABAC guard the
+        # deployment has configured.
+        role_conditions = await self._load_role_conditions_cached(session, role)
+
+        group_ids: Set[UUID] = set()
+        for cond in role_conditions:
+            group_id = getattr(cond, "condition_group_id", None)
+            if group_id is not None:
+                group_ids.add(cast(UUID, group_id))
+        for p in matching_perms:
+            for permission_condition in p.conditions or []:
+                group_id = getattr(permission_condition, "condition_group_id", None)
+                if group_id is not None:
+                    group_ids.add(cast(UUID, group_id))
+
+        group_ops = await self._load_condition_group_ops_cached(session, group_ids)
+
+        if not engine.evaluate_sql_conditions(conditions=role_conditions, group_ops=group_ops, context=context):
+            return False
+
+        for p in matching_perms:
+            if engine.evaluate_sql_conditions(conditions=(p.conditions or []), group_ops=group_ops, context=context):
+                return True
+
+        return False
+
+    @staticmethod
+    def _relationship_is_loaded(instance: Any, attribute: str) -> bool:
+        return attribute not in inspect(instance).unloaded
+
+    async def _get_user_role_permissions(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
+    ) -> Set[str]:
+        """
+        Collect permission names from active UserRoleMembership links only.
+
+        This excludes EntityMembership role grants by design.
+        """
+        memberships = await self._load_user_role_memberships(session, user_id, entity_type)
+
+        permissions: Set[str] = set()
+        for membership in memberships:
+            if not membership.is_currently_valid():
+                continue
+            role = membership.role
+            if not self._role_definition_is_live(role):
+                continue
+            if not include_entity_local and role.scope_entity_id is not None:
+                continue
+            for perm in self._get_role_permissions_for_context(role, entity_type):
+                permissions.add(perm.name)
+        return permissions
+
+    def _log_permission_check(
+        self,
+        user_id: UUID,
+        permission: str,
+        result: str,
+        start_time: datetime,
+        reason: str,
+    ) -> None:
+        """Log permission check for observability."""
+        if self.observability:
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            self.observability.log_permission_check(
+                user_id=str(user_id),
+                permission=permission,
+                result=result,
+                duration_ms=duration_ms,
+                reason=reason,
+            )
+
+    async def get_user_permissions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
+        user: Optional[User] = None,
+    ) -> List[str]:
+        """
+        Get all permissions for a user.
+
+        Aggregates permissions from all assigned roles via:
+        - UserRoleMembership (SimpleRBAC)
+        - EntityMembership roles (EnterpriseRBAC)
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            include_entity_local: If False, exclude permissions from entity-local roles
+                (roles where scope_entity_id is set). Defaults to True for backwards
+                compatibility. Set to False when checking permissions without entity context.
+            user: Optional already-fetched User (saves one SELECT when callers
+                have the row in hand, e.g. `check_permission` after JWT auth).
+
+        Returns:
+            List of permission names
+
+        Raises:
+            UserNotFoundError: If user doesn't exist
+        """
+        resolved_user = user
+        if resolved_user is None:
+            resolved_user = await session.get(User, user_id)
+
+        if not resolved_user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        # Superusers have all permissions
+        if resolved_user.is_superuser:
+            return ["*:*"]
+
+        # PERF: serve the aggregated set from Redis. This is the per-request hot
+        # path for every JWT permission dependency (the deps-layer fast path calls
+        # straight into here), so a hit replaces the 3-6 membership/role/permission
+        # SELECTs below with one Redis MGET. Entries validate against the
+        # global/user authz version counters that every role, permission, and
+        # membership mutation already bumps — see CacheService.get_user_permission_names.
+        # entity_type-shaped aggregations vary per context and are not cached.
+        cache_service = getattr(self, "cache_service", None)
+        use_cache = (
+            entity_type is None and cache_service is not None and self._can_use_permission_cache()
+        )
+        cached_versions: Optional[Dict[str, int]] = None
+        if use_cache:
+            cached_names, cached_versions = await cache_service.get_user_permission_names(
+                str(user_id),
+                include_entity_local=include_entity_local,
+            )
+            if cached_names is not None:
+                return cached_names
+
+        all_permissions: Set[str] = set()
+
+        # Get active role memberships with roles eagerly loaded (request-memoized)
+        memberships = await self._load_user_role_memberships(session, user_id, entity_type)
+
+        for membership in memberships:
+            # Check time-based validity
+            if not membership.is_currently_valid():
+                continue
+
+            role = membership.role
+            if not self._role_definition_is_live(role):
+                continue
+
+            # DD-054: Filter out entity-local roles when include_entity_local=False
+            # Entity-local roles have scope_entity_id set and should only grant
+            # permissions when checked within an entity context.
+            if not include_entity_local and role.scope_entity_id is not None:
+                continue
+
+            for perm in self._get_role_permissions_for_context(role, entity_type):
+                all_permissions.add(perm.name)
+
+        # Get active entity memberships with roles eagerly loaded.
+        # EnterpriseRBAC stores role assignments via entity membership. Skip this
+        # entirely under SimpleRBAC (enable_entity_hierarchy=False): it would always
+        # return zero rows and just adds ~2 round trips to every permission load (PERF).
+        if getattr(self.config, "enable_entity_hierarchy", True):
+            em_memo_key = ("em_all_memberships", session, str(user_id), entity_type or "")
+
+            async def _load_entity_memberships() -> list[EntityMembership]:
+                entity_stmt = (
+                    select(EntityMembership)
+                    .options(
+                        *self._entity_membership_permission_options(
+                            entity_type=entity_type,
+                        )
+                    )
+                    .where(
+                        cast(Any, EntityMembership.user_id) == user_id,
+                        cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+                        *self._membership_window_predicates(EntityMembership),
+                    )
+                )
+                entity_result = await session.execute(entity_stmt)
+                return list(entity_result.scalars().all())
+
+            entity_memberships: list[EntityMembership] = await request_cache.get_or_load(
+                em_memo_key, _load_entity_memberships
+            )
+
+            for entity_membership in entity_memberships:
+                if not entity_membership.can_grant_permissions():
+                    continue
+
+                for role in entity_membership.roles:
+                    if not self._role_definition_is_live(role):
+                        continue
+
+                    # DD-054: Filter out entity-local roles when include_entity_local=False
+                    if not include_entity_local and role.scope_entity_id is not None:
+                        continue
+
+                    for perm in self._get_role_permissions_for_context(role, entity_type):
+                        all_permissions.add(perm.name)
+
+        if use_cache:
+            await cache_service.set_user_permission_names(
+                str(user_id),
+                include_entity_local=include_entity_local,
+                names=list(all_permissions),
+                versions=cached_versions,
+            )
+
+        return list(all_permissions)
+
+    async def get_effective_permission_names(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        entity_id: Optional[UUID] = None,
+        candidate_permission_names: Optional[Iterable[str]] = None,
+        user: Optional[User] = None,
+    ) -> Set[str]:
+        """
+        Project the effective permission-name set for a user in the current context.
+
+        This keeps the same non-ABAC semantics as ``check_permission`` while
+        avoiding a per-permission round-trip through the full permission check.
+        """
+        resolved_user = user
+        if resolved_user is None:
+            resolved_user = await session.get(User, user_id)
+
+        if not resolved_user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        candidate_names = set(candidate_permission_names or await self._list_active_permission_names(session))
+        if not candidate_names:
+            return set()
+
+        if resolved_user.is_superuser:
+            return candidate_names
+
+        if getattr(self.config, "enable_abac", False) and await self._abac_conditions_exist(session):
+            granted: Set[str] = set()
+            for permission_name in candidate_names:
+                if await self.check_permission(
+                    session,
+                    user_id=user_id,
+                    permission=permission_name,
+                    entity_id=entity_id,
+                    user=resolved_user,
+                ):
+                    granted.add(permission_name)
+            return granted
+
+        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
+
+        if entity_id is None:
+            granted_permissions = await self._get_user_role_permissions(
+                session=session,
+                user_id=user_id,
+                include_entity_local=False,
+                entity_type=target_entity_type,
+            )
+            granted_permissions.update(
+                await self._get_entity_membership_permission_names(
+                    session=session,
+                    user_id=user_id,
+                    include_entity_local=False,
+                    entity_type=target_entity_type,
+                )
+            )
+            matcher = PermissionMatcher(granted_permissions)
+            return {
+                permission_name
+                for permission_name in candidate_names
+                if matcher.allows(permission_name)
+            }
+
+        direct_permissions = await self._get_user_role_permissions(
+            session=session,
+            user_id=user_id,
+            include_entity_local=True,
+            entity_type=target_entity_type,
+        )
+        membership_direct_permissions, ancestor_permissions = (
+            await self._get_entity_context_membership_permission_names(
+                session=session,
+                user_id=user_id,
+                entity_id=entity_id,
+                entity_type=target_entity_type,
+            )
+        )
+        direct_permissions.update(membership_direct_permissions)
+
+        direct_matcher = PermissionMatcher(direct_permissions)
+        ancestor_matcher = PermissionMatcher(ancestor_permissions)
+        return {
+            permission_name
+            for permission_name in candidate_names
+            if direct_matcher.allows(permission_name)
+            or ancestor_matcher.allows_from_ancestor(permission_name)
+        }
+
+    async def _list_active_permission_names(
+        self,
+        session: AsyncSession,
+    ) -> List[str]:
+        stmt = (
+            select(cast(Any, Permission.name))
+            .where(cast(Any, Permission.status) == DefinitionStatus.ACTIVE)
+            .order_by(cast(Any, Permission.name).asc())
+        )
+        result = await session.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def _get_entity_membership_permission_names(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
+    ) -> Set[str]:
+        stmt = (
+            select(EntityMembership)
+            .options(
+                *self._entity_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
+            .where(
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+        )
+        result = await session.execute(stmt)
+        memberships: list[EntityMembership] = list(result.scalars().all())
+
+        permissions: Set[str] = set()
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            for role in membership.roles:
+                if not self._role_definition_is_live(role):
+                    continue
+                if not include_entity_local and role.scope_entity_id is not None:
+                    continue
+                permissions.update(self._get_role_permission_names_for_context(role, entity_type))
+
+        return permissions
+
+    async def _get_entity_context_membership_permission_names(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        entity_id: UUID,
+        entity_type: Optional[str] = None,
+    ) -> Tuple[Set[str], Set[str]]:
+        depth_by_ancestor = await self._load_ancestor_depths(session, entity_id)
+        if not depth_by_ancestor:
+            return set(), set()
+
+        ancestor_ids = list(depth_by_ancestor.keys())
+
+        memberships_stmt = (
+            select(EntityMembership)
+            .options(
+                *self._entity_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
+            .where(
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.entity_id).in_(ancestor_ids),
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+        )
+        memberships_result = await session.execute(memberships_stmt)
+        memberships: list[EntityMembership] = list(memberships_result.scalars().all())
+
+        direct_permissions: Set[str] = set()
+        ancestor_permissions: Set[str] = set()
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            membership_depth = depth_by_ancestor.get(membership.entity_id)
+            if membership_depth is None:
+                continue
+
+            is_direct_membership = membership_depth == 0
+            target_permissions = direct_permissions if is_direct_membership else ancestor_permissions
+
+            for role in membership.roles:
+                if not self._role_definition_is_live(role):
+                    continue
+                if not self._role_can_grant_at_entity(
+                    role,
+                    membership.entity_id,
+                    entity_id,
+                    is_direct_membership,
+                ):
+                    continue
+                target_permissions.update(self._get_role_permission_names_for_context(role, entity_type))
+
+        return direct_permissions, ancestor_permissions
+
+    async def _get_global_role_permissions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> Set[str]:
+        """
+        Get permissions from global and org-scoped roles only.
+
+        This excludes entity-local roles (where scope_entity_id is set).
+        Used when checking permissions without an entity context.
+
+        DD-054: Permission Scope Enforcement
+        - Global roles (is_global=true): Always included
+        - Org-scoped roles (root_entity_id set, scope_entity_id=NULL): Always included
+        - Entity-local roles (scope_entity_id set): EXCLUDED
+
+        Args:
+            session: Database session
+            user_id: User UUID
+
+        Returns:
+            Set of permission names from global/org-scoped roles
+        """
+        # Use the existing method with include_entity_local=False
+        permissions = await self.get_user_permissions(session, user_id, include_entity_local=False)
+        return set(permissions)
+
+    def _get_role_permissions_for_context(
+        self,
+        role: Role,
+        entity_type: Optional[str] = None,
+    ) -> List[Permission]:
+        if not self._role_definition_is_live(role):
+            return []
+
+        if not self.config.enable_context_aware_roles or not entity_type:
+            return [
+                permission for permission in (role.permissions or []) if self._permission_definition_is_live(permission)
+            ]
+
+        normalized_entity_type = entity_type.lower()
+        matching_overrides = [
+            entry.permission
+            for entry in (role.entity_type_permissions or [])
+            if entry.permission and entry.entity_type.lower() == normalized_entity_type
+        ]
+        overrides = [permission for permission in matching_overrides if self._permission_definition_is_live(permission)]
+        if matching_overrides:
+            return overrides
+        if overrides:
+            return overrides
+        return [
+            permission for permission in (role.permissions or []) if self._permission_definition_is_live(permission)
+        ]
+
+    def _get_role_permission_names_for_context(
+        self,
+        role: Role,
+        entity_type: Optional[str] = None,
+    ) -> Set[str]:
+        return {
+            permission.name
+            for permission in self._get_role_permissions_for_context(role, entity_type)
+            if permission and permission.name
+        }
+
+    def _can_use_permission_cache(self) -> bool:
+        return bool(
+            getattr(self.config, "enable_caching", False)
+            and getattr(self, "cache_service", None) is not None
+        )
+
+    @staticmethod
+    def _permission_cache_context_hash(
+        *,
+        abac_enabled: bool,
+        resource_context: Optional[Dict[str, Any]],
+        env_context: Optional[Dict[str, Any]],
+        time_attrs: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Compute a stable short hash of the ABAC context inputs.
+
+        Returns None for non-ABAC calls (context does not influence outcome)
+        and for ABAC calls whose context is not JSON-serialisable — in the
+        latter case callers should skip caching entirely to avoid stale hits.
+        """
+        if not abac_enabled:
+            return None
+        payload = {
+            "resource": resource_context or {},
+            "env": env_context or {},
+            "time": time_attrs or {},
+        }
+        try:
+            encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        except (TypeError, ValueError):
+            return None
+        return hashlib.sha256(encoded).hexdigest()[:16]
+
+    async def _get_cached_permission_result(
+        self,
+        *,
+        user_id: UUID,
+        permission: str,
+        entity_id: Optional[UUID],
+        context_hash: Optional[str] = None,
+    ) -> Tuple[Optional[bool], Optional[Dict[str, int]]]:
+        """Returns ``(result, versions_token)``; the token feeds ``_cache_permission_result``."""
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return None, None
+        cached = await cache_service.get_permission_check(
+            str(user_id),
+            permission,
+            str(entity_id) if entity_id is not None else None,
+            context_hash,
+        )
+        if isinstance(cached, tuple):
+            return cached
+        # Host-supplied cache service with the legacy bool-returning contract.
+        return cast(Optional[bool], cached), None
+
+    async def _cache_permission_result(
+        self,
+        *,
+        use_cache: bool,
+        user_id: UUID,
+        permission: str,
+        entity_id: Optional[UUID],
+        result: bool,
+        context_hash: Optional[str] = None,
+        versions: Optional[Dict[str, int]] = None,
+    ) -> None:
+        if not use_cache:
+            return
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        entity_id_str = str(entity_id) if entity_id is not None else None
+        try:
+            await cache_service.set_permission_check(
+                str(user_id),
+                permission,
+                result,
+                entity_id_str,
+                context_hash,
+                versions=versions,
+            )
+        except TypeError:
+            # Host-supplied cache service with the legacy signature.
+            await cache_service.set_permission_check(
+                str(user_id),
+                permission,
+                result,
+                entity_id_str,
+                context_hash,
+            )
+
+    async def require_permission(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        permission: str,
+    ) -> None:
+        """
+        Require user to have permission (raises exception if not).
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            permission: Permission name
+
+        Raises:
+            UserNotFoundError: If user doesn't exist
+            PermissionDeniedError: If user lacks permission
+        """
+        has_permission = await self.check_permission(session, user_id, permission)
+        if not has_permission:
+            raise PermissionDeniedError(
+                message=f"Permission denied: {permission}",
+                details={"required_permission": permission},
+            )
+
+    async def require_any_permission(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        permissions: List[str],
+    ) -> None:
+        """
+        Require user to have at least one of the permissions.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            permissions: List of permission names
+
+        Raises:
+            UserNotFoundError: If user doesn't exist
+            PermissionDeniedError: If user lacks all permissions
+        """
+        for permission in permissions:
+            if await self.check_permission(session, user_id, permission):
+                return
+
+        raise PermissionDeniedError(
+            message=f"Permission denied: requires one of {permissions}",
+            details={"required_permissions": permissions},
+        )
+
+    async def require_all_permissions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        permissions: List[str],
+    ) -> None:
+        """
+        Require user to have all of the permissions.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            permissions: List of permission names
+
+        Raises:
+            UserNotFoundError: If user doesn't exist
+            PermissionDeniedError: If user lacks any permission
+        """
+        missing_permissions = []
+        for permission in permissions:
+            if not await self.check_permission(session, user_id, permission):
+                missing_permissions.append(permission)
+
+        if missing_permissions:
+            raise PermissionDeniedError(
+                message=f"Permission denied: missing {len(missing_permissions)} required permission(s)",
+                details={"missing_permissions": missing_permissions},
+            )
+
+    # =========================================================================
+    # Permission CRUD Operations
+    # =========================================================================
+
+    async def create_permission(
+        self,
+        session: AsyncSession,
+        name: str,
+        display_name: str,
+        description: Optional[str] = None,
+        is_system: bool = False,
+        status: Optional[DefinitionStatus | str] = None,
+        is_active: Optional[bool] = None,
+        tags: Optional[List[str]] = None,
+        created_by_id: Optional[UUID] = None,
+    ) -> Permission:
+        """
+        Create a new permission.
+
+        Args:
+            session: Database session
+            name: Permission name (e.g., "invoice:approve")
+            display_name: Human-readable name
+            description: Permission description
+            is_system: Whether this is a system permission
+        Returns:
+            Created permission
+        """
+        # Validate permission name format
+        name = validate_permission_name(name)
+
+        # Check if permission already exists
+        existing = await self.get_one(session, Permission.name == name)
+        if existing:
+            raise InvalidInputError(
+                message=f"Permission with name '{name}' already exists",
+                details={"name": name},
+            )
+
+        resolved_status = self._resolve_permission_status(
+            status=status,
+            is_active=is_active,
+        )
+
+        # Create permission (auto-parses resource/action/scope in __init__)
+        permission = Permission(
+            name=name,
+            display_name=display_name,
+            description=description,
+            is_system=is_system,
+            status=resolved_status,
+            is_active=resolved_status == DefinitionStatus.ACTIVE,
+        )
+
+        await self.create(session, permission)
+
+        if tags:
+            await self.set_permission_tags(
+                session,
+                permission.id,
+                tags,
+                changed_by_id=created_by_id,
+                record_history=False,
+            )
+
+        # A brand-new permission isn't referenced by any role yet — nothing
+        # cached can change, so no invalidation (previously this globally
+        # invalidated every API-key snapshot and permission entry cluster-wide).
+        current_permission = (
+            await self.get_permission_by_id(
+                session,
+                permission.id,
+                load_tags=True,
+                include_archived=True,
+            )
+            or permission
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=current_permission,
+            event_type="created",
+            event_source="permission_service.create_permission",
+            actor_user_id=created_by_id,
+            after=await self._build_permission_definition_snapshot(
+                session,
+                current_permission,
+            ),
+        )
+        return current_permission
+
+    async def get_permission_by_id(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        load_tags: bool = False,
+        include_archived: bool = False,
+    ) -> Optional[Permission]:
+        """
+        Get permission by ID.
+
+        Args:
+            session: Database session
+            permission_id: Permission UUID
+            load_tags: Whether to eager load tags
+
+        Returns:
+            Permission if found, None otherwise
+        """
+        stmt = select(Permission).where(cast(Any, Permission.id) == permission_id)
+        if not include_archived:
+            stmt = stmt.where(cast(Any, Permission.status) != DefinitionStatus.ARCHIVED)
+
+        options: list[Any] = []
+        if load_tags:
+            options.append(selectinload(cast(Any, Permission.tags)))
+        if options:
+            stmt = stmt.options(*options)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_permission_by_name(
+        self,
+        session: AsyncSession,
+        name: str,
+        include_archived: bool = True,
+    ) -> Optional[Permission]:
+        """
+        Get permission by name.
+
+        Args:
+            session: Database session
+            name: Permission name
+
+        Returns:
+            Permission if found, None otherwise
+        """
+        name = validate_permission_name(name)
+        filters: list[Any] = [cast(Any, Permission.name) == name]
+        if not include_archived:
+            filters.append(cast(Any, Permission.status) != DefinitionStatus.ARCHIVED)
+        return await self.get_one(session, *filters)
+
+    async def permission_has_conditions(
+        self,
+        session: AsyncSession,
+        permission_name: str,
+    ) -> bool:
+        """Return whether a permission definition has ABAC conditions attached."""
+        permission_name = validate_permission_name(permission_name)
+        permission = await self.get_one(
+            session,
+            cast(Any, Permission.name) == permission_name,
+            options=[selectinload(cast(Any, Permission.conditions))],
+        )
+        return bool(permission and permission.conditions)
+
+    async def update_permission(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[DefinitionStatus | str] = None,
+        is_active: Optional[bool] = None,
+        tags: Optional[List[str]] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> Permission:
+        """
+        Update permission.
+
+        Args:
+            session: Database session
+            permission_id: Permission UUID
+            display_name: New display name
+            description: New description
+
+        Returns:
+            Updated permission
+
+        Raises:
+            PermissionNotFoundError: If permission doesn't exist
+            InvalidInputError: If trying to modify system permission
+        """
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+        )
+        if not permission:
+            raise PermissionNotFoundError(
+                message="Permission not found",
+                details={"permission_id": str(permission_id)},
+            )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot modify system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+
+        if display_name is not None:
+            permission.display_name = display_name
+
+        if description is not None:
+            permission.description = description
+
+        next_status = self._resolve_permission_status(
+            current_status=permission.status,
+            status=status,
+            is_active=is_active,
+        )
+        # Only a status flip changes who is granted what — display_name,
+        # description, and tags are cache-irrelevant metadata.
+        grants_changed = next_status != permission.status
+        permission.status = next_status
+        permission.is_active = next_status == DefinitionStatus.ACTIVE
+
+        await self.update(session, permission)
+
+        if tags is not None:
+            await self.set_permission_tags(
+                session,
+                permission_id,
+                tags,
+                changed_by_id=changed_by_id,
+                record_history=False,
+            )
+
+        await self._invalidate_permission_definition_cache(
+            session,
+            permission,
+            grants_changed=grants_changed,
+        )
+        current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        changed_fields = self._changed_permission_definition_fields(
+            previous_snapshot,
+            current_snapshot,
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=current_permission,
+                event_type="updated",
+                event_source="permission_service.update_permission",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={"changed_fields": changed_fields},
+            )
+        return current_permission
+
+    async def set_permission_tags(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        tags: List[str],
+        changed_by_id: Optional[UUID] = None,
+        record_history: bool = True,
+        event_source: str = "permission_service.set_permission_tags",
+    ) -> Permission:
+        """
+        Replace a permission's tag set, creating tags if needed.
+        """
+        permission = await self.get_permission_by_id(session, permission_id, load_tags=True)
+        if not permission:
+            raise PermissionNotFoundError(
+                message="Permission not found",
+                details={"permission_id": str(permission_id)},
+            )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot modify system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+
+        normalized = [t.strip() for t in tags if t and t.strip()]
+        # De-duplicate, preserve order
+        normalized = list(dict.fromkeys(normalized))
+
+        if not normalized:
+            permission.tags = []
+            await self.update(session, permission)
+            # Tags are organizational metadata — they never affect grants.
+            current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
+            current_snapshot = await self._build_permission_definition_snapshot(
+                session,
+                current_permission,
+            )
+            changed_fields = self._changed_permission_definition_fields(
+                previous_snapshot,
+                current_snapshot,
+            )
+            if record_history and changed_fields:
+                await self._record_permission_definition_history_event(
+                    session,
+                    permission=current_permission,
+                    event_type="updated",
+                    event_source=event_source,
+                    actor_user_id=changed_by_id,
+                    before=previous_snapshot,
+                    after=current_snapshot,
+                    metadata={"changed_fields": changed_fields},
+                )
+            return current_permission
+
+        # Load/create tag models
+        stmt = select(PermissionTag).where(cast(Any, PermissionTag.name).in_(normalized))
+        result = await session.execute(stmt)
+        existing_tags = {t.name: t for t in result.scalars().all()}
+
+        tag_models: List[PermissionTag] = []
+        for tag_name in normalized:
+            tag_model = existing_tags.get(tag_name)
+            if not tag_model:
+                tag_model = PermissionTag(name=tag_name)
+                session.add(tag_model)
+                await session.flush()
+            tag_models.append(tag_model)
+
+        permission.tags = tag_models
+        await self.update(session, permission)
+        # Tags are organizational metadata — they never affect grants.
+        current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        changed_fields = self._changed_permission_definition_fields(
+            previous_snapshot,
+            current_snapshot,
+        )
+        if record_history and changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=current_permission,
+                event_type="updated",
+                event_source=event_source,
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={"changed_fields": changed_fields},
+            )
+        return current_permission
+
+    async def delete_permission(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        deleted_by_id: Optional[UUID] = None,
+    ) -> bool:
+        """
+        Delete permission.
+
+        Args:
+            session: Database session
+            permission_id: Permission UUID
+
+        Returns:
+            True if deleted, False if not found
+
+        Raises:
+            InvalidInputError: If trying to delete system permission
+        """
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+            include_archived=True,
+        )
+        if not permission or permission.status == DefinitionStatus.ARCHIVED:
+            return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot delete system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+
+        permission.status = DefinitionStatus.ARCHIVED
+        permission.is_active = False
+        await self.update(session, permission)
+
+        current_permission = (
+            await self.get_permission_by_id(
+                session,
+                permission_id,
+                load_tags=True,
+                include_archived=True,
+            )
+            or permission
+        )
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=current_permission,
+            event_type="deleted",
+            event_source="permission_service.delete_permission",
+            actor_user_id=deleted_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={"archived": True},
+        )
+        await self._invalidate_permission_definition_cache(
+            session,
+            permission,
+            grants_changed=True,
+        )
+        return True
+
+    async def create_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        *,
+        operator: str = "AND",
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> SqlConditionGroup:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        group = SqlConditionGroup(
+            permission_id=permission_id,
+            operator=operator,
+            description=description,
+        )
+        session.add(group)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_group_created",
+            event_source="permission_service.create_condition_group",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "condition_group": self._build_condition_group_snapshot(group),
+            },
+        )
+        await self._invalidate_for_condition_change()
+        return group
+
+    async def update_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        group_id: UUID,
+        *,
+        fields_set: Set[str],
+        operator: Optional[str] = None,
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> Optional[SqlConditionGroup]:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        group = await session.get(SqlConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            return None
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        previous_group_snapshot = self._build_condition_group_snapshot(group)
+
+        if "operator" in fields_set and operator is not None:
+            group.operator = operator
+        if "description" in fields_set:
+            group.description = description
+
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        current_group_snapshot = self._build_condition_group_snapshot(group)
+        changed_fields = self._changed_snapshot_fields(
+            previous_group_snapshot,
+            current_group_snapshot,
+            ["operator", "description"],
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=permission,
+                event_type="condition_group_updated",
+                event_source="permission_service.update_condition_group",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={
+                    "changed_fields": changed_fields,
+                    "before_group": previous_group_snapshot,
+                    "after_group": current_group_snapshot,
+                },
+            )
+            await self._invalidate_for_condition_change()
+        return group
+
+    async def delete_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        group_id: UUID,
+        *,
+        changed_by_id: Optional[UUID] = None,
+    ) -> bool:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        group = await session.get(SqlConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        deleted_group_snapshot = self._build_condition_group_snapshot(group)
+
+        condition_stmt = select(PermissionCondition).where(
+            cast(Any, PermissionCondition.permission_id) == permission_id,
+            cast(Any, PermissionCondition.condition_group_id) == group_id,
+        )
+        condition_result = await session.execute(condition_stmt)
+        deleted_conditions = [
+            self._build_permission_condition_snapshot(condition) for condition in condition_result.scalars().all()
+        ]
+
+        await session.delete(group)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_group_deleted",
+            event_source="permission_service.delete_condition_group",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "deleted_group": deleted_group_snapshot,
+                "deleted_conditions": deleted_conditions,
+            },
+        )
+        await self._invalidate_for_condition_change()
+        return True
+
+    async def create_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        *,
+        attribute: str,
+        operator: str,
+        value: Optional[Any],
+        value_type: str,
+        description: Optional[str] = None,
+        condition_group_id: Optional[UUID] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> PermissionCondition:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        if condition_group_id is not None:
+            group = await session.get(SqlConditionGroup, condition_group_id)
+            if not group or group.permission_id != permission_id:
+                raise InvalidInputError(
+                    message="Invalid condition_group_id",
+                    details={
+                        "permission_id": str(permission_id),
+                        "condition_group_id": str(condition_group_id),
+                    },
+                )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        condition = PermissionCondition(
+            permission_id=permission_id,
+            condition_group_id=condition_group_id,
+            attribute=attribute,
+            operator=operator,
+            value=serialize_condition_value(value, value_type),
+            value_type=value_type,
+            description=description,
+        )
+        session.add(condition)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_created",
+            event_source="permission_service.create_condition",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "condition": self._build_permission_condition_snapshot(condition),
+            },
+        )
+        await self._invalidate_for_condition_change()
+        return condition
+
+    async def update_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        condition_id: UUID,
+        *,
+        fields_set: Set[str],
+        condition_group_id: Optional[UUID] = None,
+        attribute: Optional[str] = None,
+        operator: Optional[str] = None,
+        value: Optional[Any] = None,
+        value_type: Optional[str] = None,
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> Optional[PermissionCondition]:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        condition = await session.get(PermissionCondition, condition_id)
+        if not condition or condition.permission_id != permission_id:
+            return None
+
+        if "condition_group_id" in fields_set and condition_group_id is not None:
+            group = await session.get(SqlConditionGroup, condition_group_id)
+            if not group or group.permission_id != permission_id:
+                raise InvalidInputError(
+                    message="Invalid condition_group_id",
+                    details={
+                        "permission_id": str(permission_id),
+                        "condition_group_id": str(condition_group_id),
+                    },
+                )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        previous_condition_snapshot = self._build_permission_condition_snapshot(condition)
+
+        if "condition_group_id" in fields_set:
+            condition.condition_group_id = condition_group_id
+        if "attribute" in fields_set and attribute is not None:
+            condition.attribute = attribute
+        if "operator" in fields_set and operator is not None:
+            condition.operator = cast(Any, operator)
+        if "value_type" in fields_set and value_type is not None:
+            condition.value_type = value_type
+        if "value" in fields_set or "value_type" in fields_set:
+            condition.value = serialize_condition_value(
+                value,
+                value_type or condition.value_type,
+            )
+        if "description" in fields_set:
+            condition.description = description
+
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        current_condition_snapshot = self._build_permission_condition_snapshot(condition)
+        changed_fields = self._changed_snapshot_fields(
+            previous_condition_snapshot,
+            current_condition_snapshot,
+            [
+                "condition_group_id",
+                "attribute",
+                "operator",
+                "value",
+                "value_type",
+                "description",
+            ],
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=permission,
+                event_type="condition_updated",
+                event_source="permission_service.update_condition",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={
+                    "changed_fields": changed_fields,
+                    "before_condition": previous_condition_snapshot,
+                    "after_condition": current_condition_snapshot,
+                },
+            )
+            await self._invalidate_for_condition_change()
+        return condition
+
+    async def delete_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        condition_id: UUID,
+        *,
+        changed_by_id: Optional[UUID] = None,
+    ) -> bool:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        condition = await session.get(PermissionCondition, condition_id)
+        if not condition or condition.permission_id != permission_id:
+            return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        deleted_condition_snapshot = self._build_permission_condition_snapshot(condition)
+
+        await session.delete(condition)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_deleted",
+            event_source="permission_service.delete_condition",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "deleted_condition": deleted_condition_snapshot,
+            },
+        )
+        await self._invalidate_for_condition_change()
+        return True
+
+    async def list_permissions(
+        self,
+        session: AsyncSession,
+        page: int = 1,
+        limit: int = 50,
+        resource: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Tuple[List[Permission], int]:
+        """
+        List permissions with pagination.
+
+        Args:
+            session: Database session
+            page: Page number (1-indexed)
+            limit: Results per page
+            resource: Filter by resource (e.g., "user")
+            is_active: Filter by active status
+        Returns:
+            Tuple of (permissions, total_count)
+        """
+        filters = [Permission.status != DefinitionStatus.ARCHIVED]
+        if resource:
+            filters.append(Permission.resource == resource)
+        if is_active is not None:
+            filters.append(Permission.status == (DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE))
+
+        total_count = await self.count(session, *filters)
+
+        skip = (page - 1) * limit
+        permissions = await self.get_many(
+            session,
+            *filters,
+            skip=skip,
+            limit=limit,
+            order_by=cast(Any, Permission.name),
+            options=[selectinload(cast(Any, Permission.tags))],
+        )
+
+        return permissions, total_count
+
+    async def search_permissions(
+        self,
+        session: AsyncSession,
+        search_term: str,
+        limit: int = 20,
+    ) -> List[Permission]:
+        """
+        Search permissions by name or display name.
+
+        Args:
+            session: Database session
+            search_term: Search term
+            limit: Maximum results
+
+        Returns:
+            List of matching permissions
+        """
+        pattern = f"%{search_term}%"
+        permissions = await self.get_many(
+            session,
+            cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
+            or_(
+                cast(Any, Permission.name).ilike(pattern),
+                cast(Any, Permission.display_name).ilike(pattern),
+            ),
+            limit=limit,
+        )
+        return permissions
+
+    # =========================================================================
+    # Tag Management
+    # =========================================================================
+
+    async def add_tag_to_permission(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        tag_id: UUID,
+    ) -> None:
+        """
+        Add a tag to a permission.
+
+        Args:
+            session: Database session
+            permission_id: Permission UUID
+            tag_id: Tag UUID
+        """
+        # Check if link already exists
+        stmt = select(PermissionTagLink).where(
+            cast(Any, PermissionTagLink.permission_id) == permission_id,
+            cast(Any, PermissionTagLink.tag_id) == tag_id,
+        )
+        result = await session.execute(stmt)
+        if result.scalar_one_or_none():
+            return  # Already linked
+
+        link = PermissionTagLink(permission_id=permission_id, tag_id=tag_id)
+        session.add(link)
+        await session.flush()
+
+    async def remove_tag_from_permission(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        tag_id: UUID,
+    ) -> bool:
+        """
+        Remove a tag from a permission.
+
+        Args:
+            session: Database session
+            permission_id: Permission UUID
+            tag_id: Tag UUID
+
+        Returns:
+            True if removed, False if not found
+        """
+        stmt = select(PermissionTagLink).where(
+            cast(Any, PermissionTagLink.permission_id) == permission_id,
+            cast(Any, PermissionTagLink.tag_id) == tag_id,
+        )
+        result = await session.execute(stmt)
+        link = result.scalar_one_or_none()
+
+        if not link:
+            return False
+
+        await session.delete(link)
+        await session.flush()
+        return True
+
+    async def get_permissions_by_tag(
+        self,
+        session: AsyncSession,
+        tag_name: str,
+    ) -> List[Permission]:
+        """
+        Get all permissions with a specific tag.
+
+        Args:
+            session: Database session
+            tag_name: Tag name
+
+        Returns:
+            List of permissions
+        """
+        stmt = (
+            select(Permission)
+            .join(PermissionTagLink)
+            .join(PermissionTag)
+            .where(
+                cast(Any, PermissionTag.name) == tag_name,
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
+            )
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    # =========================================================================
+    # Utility Methods
+    # =========================================================================
+
+    async def get_permissions_for_role(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> List[Permission]:
+        """
+        Get all permissions assigned to a role.
+
+        Args:
+            session: Database session
+            role_id: Role UUID
+
+        Returns:
+            List of Permission objects
+        """
+        stmt = (
+            select(Permission)
+            .join(RolePermission)
+            .where(
+                cast(Any, RolePermission.role_id) == role_id,
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
+            )
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_permissions_for_roles(
+        self,
+        session: AsyncSession,
+        role_ids: List[UUID],
+    ) -> Dict[UUID, List[Permission]]:
+        """
+        Get permissions assigned to multiple roles in one query.
+
+        Args:
+            session: Database session
+            role_ids: Role UUIDs
+
+        Returns:
+            Mapping of role_id -> list of Permission objects
+        """
+        unique_role_ids = list(dict.fromkeys(role_ids))
+        if not unique_role_ids:
+            return {}
+
+        stmt = (
+            select(cast(Any, RolePermission.role_id), Permission)
+            .join(Permission, cast(Any, RolePermission.permission_id) == Permission.id)
+            .where(
+                cast(Any, RolePermission.role_id).in_(unique_role_ids),
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
+            )
+        )
+        result = await session.execute(stmt)
+
+        permissions_by_role_id: Dict[UUID, List[Permission]] = {role_id: [] for role_id in unique_role_ids}
+        for role_id, permission in result.all():
+            permissions_by_role_id.setdefault(cast(UUID, role_id), []).append(cast(Permission, permission))
+
+        return permissions_by_role_id
+
+    async def check_permission_exists(
+        self,
+        session: AsyncSession,
+        name: str,
+    ) -> bool:
+        """
+        Check if a permission with the given name exists.
+
+        Args:
+            session: Database session
+            name: Permission name
+
+        Returns:
+            True if exists
+        """
+        name = validate_permission_name(name)
+        return await self.exists(session, Permission.name == name)
+
+    async def bulk_create_permissions(
+        self,
+        session: AsyncSession,
+        permissions_data: List[Dict[str, Any]],
+    ) -> List[Permission]:
+        """
+        Create multiple permissions at once.
+
+        Args:
+            session: Database session
+            permissions_data: List of dicts with name, display_name, description
+        Returns:
+            List of created permissions
+        """
+        created = []
+        for data in permissions_data:
+            name = validate_permission_name(data["name"])
+
+            # Skip if already exists
+            existing = await self.get_one(session, Permission.name == name)
+            if existing:
+                created.append(existing)
+                continue
+
+            permission = Permission(
+                name=name,
+                display_name=data.get("display_name", name),
+                description=data.get("description"),
+                is_system=data.get("is_system", False),
+            )
+            session.add(permission)
+            created.append(permission)
+
+        await session.flush()
+
+        # Refresh all to get IDs
+        for perm in created:
+            await session.refresh(perm)
+
+        # Newly created permissions aren't referenced by any role yet — no invalidation.
+        return created
+
+    async def _invalidate_all_permissions_cache(self) -> None:
+        # Drop request-local memos too: a mutation followed by a check in the
+        # same request must observe its own change.
+        request_cache.reset()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.publish_all_permissions_invalidation()
+
+    async def _invalidate_for_condition_change(self) -> None:
+        """ABAC condition edits invalidate globally.
+
+        A condition change alters verdicts for everyone who evaluates the
+        permission — including integration-principal API keys, which hold no
+        roles and therefore can't be reached by per-user fan-out. (These
+        condition/group CRUD methods previously didn't invalidate at all,
+        leaving stale ABAC verdicts cached for up to the TTL.)
+        """
+        await self._invalidate_all_permissions_cache()
+
+    # PERF: a permission-definition edit changes effective permissions only for
+    # users holding a role that references the permission — mirror RoleService.
+    # _invalidate_role_permissions_cache (see its fan-out cap + fail-safe notes)
+    # instead of flushing every API-key snapshot and permission entry globally.
+    _PERMISSION_INVALIDATION_FANOUT_LIMIT = 200
+
+    async def _roles_referencing_permission(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+    ) -> Set[UUID]:
+        """Role ids granting the permission directly or via entity-type overrides."""
+        role_ids: Set[UUID] = set()
+
+        direct = await session.execute(
+            select(cast(Any, RolePermission.role_id))
+            .where(cast(Any, RolePermission.permission_id) == permission_id)
+            .distinct()
+        )
+        role_ids.update(direct.scalars().all())
+
+        overrides = await session.execute(
+            select(cast(Any, RoleEntityTypePermission.role_id))
+            .where(cast(Any, RoleEntityTypePermission.permission_id) == permission_id)
+            .distinct()
+        )
+        role_ids.update(overrides.scalars().all())
+
+        return role_ids
+
+    async def _users_with_roles(
+        self,
+        session: AsyncSession,
+        role_ids: Set[UUID],
+    ) -> Set[UUID]:
+        """Every user holding any of ``role_ids`` via either grant path (ACTIVE only)."""
+        user_ids: Set[UUID] = set()
+        if not role_ids:
+            return user_ids
+
+        direct = await session.execute(
+            select(cast(Any, UserRoleMembership.user_id))
+            .where(
+                cast(Any, UserRoleMembership.role_id).in_(role_ids),
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(direct.scalars().all())
+
+        entity = await session.execute(
+            select(cast(Any, EntityMembership.user_id))
+            .join(
+                EntityMembershipRole,
+                cast(Any, EntityMembershipRole.membership_id) == cast(Any, EntityMembership.id),
+            )
+            .where(
+                cast(Any, EntityMembershipRole.role_id).in_(role_ids),
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(entity.scalars().all())
+
+        return user_ids
+
+    async def _invalidate_permission_definition_cache(
+        self,
+        session: AsyncSession,
+        permission: Permission,
+        *,
+        grants_changed: bool,
+    ) -> None:
+        """Targeted invalidation for a permission-definition mutation.
+
+        ``grants_changed=False`` (display/description/tag edits) changes nothing
+        about who is granted what — skip entirely. When the permission carries
+        ABAC conditions, fall back to a global bump (see
+        ``_invalidate_for_condition_change``). Otherwise fan out per holder,
+        failing safe to global on resolution errors or oversized fan-outs —
+        never under-invalidate.
+        """
+        if not grants_changed:
+            return
+        # Drop request-local memos regardless of Redis wiring (same-request
+        # mutation visibility).
+        request_cache.reset()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+
+        try:
+            has_conditions = (
+                await session.execute(
+                    select(cast(Any, PermissionCondition.id))
+                    .where(cast(Any, PermissionCondition.permission_id) == permission.id)
+                    .limit(1)
+                )
+            ).first() is not None
+            if has_conditions:
+                await cache_service.publish_all_permissions_invalidation()
+                return
+
+            role_ids = await self._roles_referencing_permission(session, permission.id)
+            if not role_ids:
+                # Unreferenced permission — no grant anywhere can have changed.
+                return
+            user_ids = await self._users_with_roles(session, role_ids)
+        except Exception:
+            # Resolution failed — fail safe to a full invalidation.
+            await cache_service.publish_all_permissions_invalidation()
+            return
+
+        if len(user_ids) > self._PERMISSION_INVALIDATION_FANOUT_LIMIT:
+            await cache_service.publish_all_permissions_invalidation()
+            return
+        if not user_ids:
+            return
+
+        batch = getattr(cache_service, "publish_user_permissions_invalidation_batch", None)
+        if batch is not None:
+            await batch([str(user_id) for user_id in user_ids])
+            return
+        for user_id in user_ids:
+            await cache_service.publish_user_permissions_invalidation(str(user_id))
+
+    async def _record_permission_definition_history_event(
+        self,
+        session: AsyncSession,
+        *,
+        permission: Permission,
+        event_type: str,
+        event_source: str,
+        actor_user_id: Optional[UUID] = None,
+        before: Optional[Dict[str, Any]] = None,
+        after: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        occurred_at: Optional[datetime] = None,
+    ) -> None:
+        if self.permission_history_service is None:
+            return
+
+        # Callers that just computed the post-mutation snapshot pass it as
+        # ``after``; rebuilding it here re-ran the multi-query snapshot a third
+        # time on every permission-definition edit.
+        snapshot = (
+            after
+            if after is not None
+            else await self._build_permission_definition_snapshot(session, permission)
+        )
+        await self.permission_history_service.record_event(
+            session,
+            permission_id=permission.id,
+            event_type=event_type,
+            event_source=event_source,
+            actor_user_id=actor_user_id,
+            snapshot=snapshot,
+            before=before,
+            after=after,
+            metadata=metadata,
+            occurred_at=occurred_at,
+        )
+
+    async def _build_permission_definition_snapshot(
+        self,
+        session: AsyncSession,
+        permission: Permission,
+    ) -> Dict[str, Any]:
+        current_permission = await self.get_permission_by_id(session, permission.id, load_tags=True) or permission
+        tags = sorted(
+            list(getattr(current_permission, "tags", []) or []),
+            key=lambda tag: (tag.name, str(tag.id)),
+        )
+        group_stmt = select(SqlConditionGroup).where(
+            cast(Any, SqlConditionGroup.permission_id) == current_permission.id
+        )
+        group_result = await session.execute(group_stmt)
+        groups = sorted(
+            list(group_result.scalars().all()),
+            key=lambda group: (group.operator, group.description or "", str(group.id)),
+        )
+        condition_stmt = select(PermissionCondition).where(
+            cast(Any, PermissionCondition.permission_id) == current_permission.id
+        )
+        condition_result = await session.execute(condition_stmt)
+        conditions = sorted(
+            list(condition_result.scalars().all()),
+            key=lambda condition: (
+                condition.attribute,
+                str(condition.condition_group_id or ""),
+                str(condition.id),
+            ),
+        )
+        return {
+            "permission_name": current_permission.name,
+            "permission_display_name": current_permission.display_name,
+            "permission_description": current_permission.description,
+            "resource": current_permission.resource,
+            "action": current_permission.action,
+            "scope": current_permission.scope,
+            "is_system": current_permission.is_system,
+            "status": getattr(current_permission.status, "value", current_permission.status),
+            "is_active": current_permission.is_active,
+            "tag_names": [tag.name for tag in tags],
+            "condition_groups": [self._build_condition_group_snapshot(group) for group in groups],
+            "conditions": [self._build_permission_condition_snapshot(condition) for condition in conditions],
+        }
+
+    def _changed_permission_definition_fields(
+        self,
+        previous_snapshot: Dict[str, Any],
+        current_snapshot: Dict[str, Any],
+    ) -> List[str]:
+        field_names = [
+            "permission_name",
+            "permission_display_name",
+            "permission_description",
+            "resource",
+            "action",
+            "scope",
+            "is_system",
+            "status",
+            "is_active",
+            "tag_names",
+            "condition_groups",
+            "conditions",
+        ]
+        return [
+            field_name
+            for field_name in field_names
+            if previous_snapshot.get(field_name) != current_snapshot.get(field_name)
+        ]
+
+    async def _get_mutable_permission_for_definition_edit(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+    ) -> Permission:
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+        )
+        if not permission:
+            raise PermissionNotFoundError(
+                message="Permission not found",
+                details={"permission_id": str(permission_id)},
+            )
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot modify system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+        return permission
+
+    @staticmethod
+    def _build_condition_group_snapshot(group: SqlConditionGroup) -> Dict[str, Any]:
+        return {
+            "id": group.id,
+            "operator": group.operator,
+            "description": group.description,
+        }
+
+    @staticmethod
+    def _build_permission_condition_snapshot(
+        condition: PermissionCondition,
+    ) -> Dict[str, Any]:
+        return {
+            "id": condition.id,
+            "condition_group_id": condition.condition_group_id,
+            "attribute": condition.attribute,
+            "operator": condition.operator,
+            "value": condition.value,
+            "value_type": condition.value_type,
+            "description": condition.description,
+        }
+
+    @staticmethod
+    def _changed_snapshot_fields(
+        previous_snapshot: Dict[str, Any],
+        current_snapshot: Dict[str, Any],
+        field_names: List[str],
+    ) -> List[str]:
+        return [
+            field_name
+            for field_name in field_names
+            if previous_snapshot.get(field_name) != current_snapshot.get(field_name)
+        ]

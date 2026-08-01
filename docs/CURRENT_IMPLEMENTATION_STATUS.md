@@ -1,0 +1,400 @@
+# Current Implementation Status
+
+**Updated**: 2026-07-29
+**Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
+
+This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
+
+For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
+
+## Completed Slices
+
+### User Lifecycle and Access Revocation
+
+- User deletion is retained delete, not physical delete.
+- Deleted users are marked with `UserStatus.DELETED` and `deleted_at`.
+- Deleted-user emails remain permanently reserved for create and invite flows.
+- User delete runs as one service-centric workflow:
+  - revoke active entity memberships
+  - revoke exceptional direct user-role memberships
+  - revoke refresh tokens in place
+  - revoke user-owned API keys in place
+- Deleted users cannot authenticate.
+- Restore exists and is identity-only:
+  - restores user status and clears `deleted_at`
+  - does not restore memberships, direct roles, refresh tokens, or API keys
+
+### OAuth and Human-User Identity Rules
+
+- Human users require email.
+- OAuth-backed human users also require a usable email for new user completion.
+- If an OAuth provider does not provide a usable email, the system does not auto-complete a new active user.
+- Existing mapped social accounts remain usable even if the provider later omits email on a subsequent callback, because the identity is already linked to a retained local user.
+- Apple ID tokens are now parsed through verified JWKS-based validation in the shared OAuth helper path.
+- Invalid provider ID tokens are rejected instead of falling back to unverified parsing.
+- Locked users cannot obtain new local tokens through OAuth callback login or invite-accept auto-login.
+- OAuth SPA hosts can use success/error redirect URLs and local `cookie_secure=False` for non-HTTPS dev.
+- Invite-only OAuth is supported via `require_existing_user=True` on `get_oauth_router`.
+- OAuth self-register creates OAuth-only accounts (no `PASSWORD` auth method / no retained placeholder password hash).
+- Self-service social account list/unlink lives on `get_users_router` (`/me/social-accounts`); unlink is blocked when it would remove the last usable auth method.
+
+### Sessions and Cross-User Audit Search
+
+- Active refresh-token sessions are listable and revocable:
+  - self-service: `GET/DELETE /users/me/sessions` (+ revoke-all)
+  - admin: `GET/DELETE /users/{user_id}/sessions` (+ revoke-all)
+- Responses use `UserSessionResponse` (no token secrets).
+- Cross-user audit search is mounted via `get_audit_router` (enterprise example: `/v1/audit-events`).
+- `user_audit_service` is always created on `initialize()`; `enable_audit_log` does not gate these HTTP routes.
+- Scoped Enterprise actors only see audit events whose `root_entity_id` is in their access scope.
+- Admin session revokes record user-audit events when the audit service is present.
+
+### Passwordless, Phone Verify, and Multi-Channel Access Codes
+
+- Magic links and email access codes remain available behind feature flags on `get_auth_router`.
+- Access-code request/verify accept exactly one of `email` or verified `phone` (E.164), with optional `channel` (`email` | `whatsapp` | `sms`).
+- Phone WhatsApp/SMS paths store `whatsapp_otp` / `sms_otp` challenge types; email remains `access_code`.
+- Phone verify OTP is self-service on `get_users_router` (`/me/phone/request-code`, `/me/phone/verify-code`) using `phone_verify`.
+- Delivery remains host-owned (intents/hooks + transactional mail). Enterprise example wires console/Twilio WhatsApp Content + SMS Messages recipes.
+- Bundled transactional mail providers now include Postmark and Resend in addition to SMTP/SendGrid/Mailgun.
+- Permission caching supports `cache_backend='memory'` for single-instance hosts without Redis (DD-057). Multi-instance hosts should keep `cache_backend='redis'` (default when `redis_url` is set).
+
+### User Audit and Membership History
+
+- User status changes, delete, restore, direct-role assignment, and direct-role revocation are recorded in typed `user_audit_events`.
+- Profile updates, email changes, password changes, invite lifecycle events, login events, and password-reset lifecycle events are also recorded in the same user-centric audit timeline.
+- Entity membership lifecycle events are mirrored into the same user-centric audit timeline.
+- Entity membership history remains append-only and independently queryable.
+
+### Role and Permission Definition History
+
+- Role definition history exists and records CRUD, permission-set changes, and ABAC condition-group/condition changes.
+- Permission definition history exists and records CRUD, tag changes, and ABAC condition-group/condition changes.
+- Both history models now store dedicated lifecycle snapshot columns (`status_snapshot`) rather than relying only on `before`/`after` JSON.
+
+### Role and Permission Lifecycle Enforcement
+
+- Roles and permissions are retained with lifecycle status instead of being physically deleted.
+- Delete operations archive definitions.
+- Archived or otherwise non-active roles and permissions no longer grant permissions.
+- Archived or otherwise non-active roles cannot be assigned through memberships or direct user-role assignment.
+- Normal reads hide archived role and permission definitions.
+
+### API Key Ownership, Policy, and Host Integration Surface
+
+- `key_kind` is now a real policy dimension in the API key model and service
+  layer.
+- Two API key kinds are now implemented in the backend:
+  - `personal`
+  - `system_integration`
+- API keys are no longer assumed to be human-owned only.
+- `APIKey` ownership now resolves to either:
+  - a human `User`
+  - an `IntegrationPrincipal` non-human owner
+- `IntegrationPrincipal` now exists as a first-class auth-owned model with:
+  - `entity` scope for EnterpriseRBAC durable integrations
+  - `platform_global` scope for superuser-managed global integrations
+- SimpleRBAC remains self-service `personal` only.
+- EnterpriseRBAC now supports both:
+  - self-service `personal` keys
+  - admin-managed `system_integration` keys owned by integration principals
+- Enterprise self-service `personal` keys may still be entity-anchored by the
+  owner through the packaged self-service router.
+- Grant-time policy and derived runtime effectiveness now live in an auth-owned
+  API key policy layer rather than only in ad hoc route checks.
+- The supported Enterprise router split is now:
+  - self-service `/api-keys` for `personal` keys
+  - entity/system `integration-principals` routes for create, update, rotate,
+    revoke, and lifecycle of `system_integration` keys
+  - entity inventory `/api-keys` admin routes for list, inspect, and incident
+    response revoke across anchored keys
+- API key responses now include ownership metadata:
+  - `owner_id`
+  - `owner_type`
+  - `is_currently_effective`
+  - `ineffective_reasons`
+- Host applications now have a supported runtime helper:
+  - `auth.authorize_api_key(...)`
+- Runtime API key auth no longer assumes every key yields a human `user_id`.
+  Principal-backed keys now authenticate with:
+  - `integration_principal`
+  - `integration_principal_id`
+  - `user = None`
+  - `user_id = None`
+- Archived anchor entities now revoke anchored integration principals and their
+  keys, and runtime API key authorization denies inactive owners or
+  inactive/missing anchor entities.
+- Reducing an integration principal's `allowed_scopes` immediately narrows the
+  effective power of its existing keys.
+- Principal-backed keys are RBAC-only in this slice. If ABAC is enabled and a
+  required permission has conditions, principal-backed API keys are denied.
+- Auth-owned API key observability now emits bounded signals for validation,
+  policy denials, rate-limit hits, and lifecycle operations.
+- The common non-ABAC EnterpriseRBAC path now projects effective permission
+  names once per owner/context instead of re-running `check_permission(...)`
+  once per candidate scope in API key policy calculations.
+- Runtime effectiveness evaluation for API keys now supports a batched path so
+  list/inventory surfaces do not repeatedly reload owners, principals, anchor
+  entities, and stored scopes one key at a time.
+- The packaged API key routers now batch:
+  - scope loading
+  - IP whitelist loading
+  - derived effectiveness calculation
+  across list responses instead of doing those lookups per key.
+- Checked-in query-budget coverage now explicitly covers:
+  - personal API key authorization and self-service surfaces
+  - system integration API key authorization
+  - entity and system integration-principal inventory routes
+
+### Access Scope Resolution
+
+- Access-scope resolution now supports callers that only need entity/root scope
+  without forcing `member_user_ids` expansion.
+- `AccessScopeService.resolve_for_auth_result(...)`,
+  `resolve_for_user(...)`, and `resolve_for_api_key(...)` now accept an
+  `include_member_user_ids` switch.
+- The packaged role router now resolves actor scope with
+  `include_member_user_ids=False`, because role visibility checks only need:
+  - `entity_ids`
+  - `root_entity_ids`
+  - `is_global`
+- Descendant expansion is now reused inside access-scope resolution instead of
+  being recalculated again during member-user projection.
+- Checked-in query-budget coverage now includes a non-superuser `/v1/roles/`
+  scope path alongside the existing superuser/admin route budgets.
+
+### Two-Phase Authenticated-Context Authorization
+
+- `AuthDeps.authorize_authenticated(...)` is the supported operation for
+  authorizing a result already produced by Outlabs Auth. It does not run a
+  credential backend or record API-key usage.
+- `AuthDeps.authenticated_authorization_requires_session(...)` lets
+  infrastructure consumers acquire a database session only for policy paths
+  that need one, without interpreting auth metadata themselves.
+- `require_permission(...)` now prefers the request-bound authentication result
+  before the warm snapshot path. A route that composes `require_auth()` with
+  one or many permission checks therefore records API-key usage once for the
+  request.
+- Permission-only routes retain the warm snapshot fast path and its one usage
+  event.
+- The implementation is locally green but remains unreleased until the paired
+  TaskQ adapter and installed-artifact conformance matrix pass. See
+  [`TASKQ_AUTHENTICATED_CONTEXT_PLAN.md`](./TASKQ_AUTHENTICATED_CONTEXT_PLAN.md).
+
+## Accepted Implementation Nuances
+
+These are intentional implementation details that are slightly more specific than the original strategy notes.
+
+### OAuth Existing-Link Behavior
+
+- The strict email requirement is enforced for new OAuth-backed user completion.
+- A previously linked social account can still authenticate without a fresh provider email on a later callback.
+- Reason: the identity is already bound to a retained local user with a reserved email, so denying that flow would create an avoidable lockout without improving identity integrity.
+
+### Permission `status` and `is_active`
+
+- Permission lifecycle truth now lives in `status`.
+- `is_active` is retained as a compatibility shim and mirrors the active/inactive part of lifecycle state.
+- Reason: existing API and client contracts already used `is_active`, so compatibility was preserved while moving lifecycle enforcement to the more explicit `status` model.
+
+### Delete Endpoint Naming vs Runtime Semantics
+
+- Some API surfaces still use `DELETE` verbs or “delete” names for actions that now archive or revoke.
+- This currently applies to user delete, role delete, permission delete, and API key delete/revoke behavior.
+- Reason: the runtime semantics were changed first to preserve client compatibility. Renaming those contracts would be a separate API-compatibility decision.
+
+### Config Empty-Root Validation
+
+- `PUT /entity-types` defensively checks that `allowed_root_types` is not empty.
+- In normal HTTP use, the request schema rejects an empty list before the route-level guard runs.
+- Reason: the route still protects the merged-config invariant even if data reaches it outside normal request validation.
+
+### OAuth Provider Factory Exports
+
+- The documented `outlabs_auth.oauth.providers` import path now exposes both the concrete provider classes and the `httpx-oauth` factory helpers.
+- The factory implementation lives in `outlabs_auth.oauth.provider_factories`.
+- Reason: the earlier sibling module name `oauth/providers.py` was shadowed by the `oauth/providers/` package, which made the documented factory-helper import path effectively unreachable.
+
+### Admin UI Repository Boundary
+
+- The admin console is the sister repository [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React), not an in-tree frontend.
+- Local clone is typically `../OutlabsAuthUI`. Contract and wiring: `docs/AUTH_UI.md`.
+- Reason: backend and frontend lifecycle move independently; this package stays library-first.
+
+### API Key Host Boundary
+
+- `APIKeyService.verify_api_key(...)` still exists as a primitive service helper,
+  but it is no longer the intended host-application integration boundary.
+- The supported host boundary is now:
+  - mounted routers for self-service, Enterprise integration-principal
+    management, and entity inventory
+  - `auth.authorize_api_key(...)` for custom host runtime checks
+- Reason: this keeps host-defined routes aligned with mounted-route policy,
+  derived effectiveness, owner-type semantics, and auth-owned observability
+  without requiring direct DB reads or host-side policy duplication.
+
+## Known Remaining Gaps
+
+### Runtime / Product Gaps
+
+- The bundled provider set no longer has an Apple-style fail-open ID-token path; Google, GitHub, and Facebook currently use provider userinfo/email APIs instead of local ID-token parsing.
+- A broader provider-by-provider hardening review still remains for semantics and operational guidance, especially where provider metadata does not perfectly map to local identity policy.
+- The next concrete OAuth follow-up is provider-semantic hardening: define and codify exactly when bundled-provider email/verification metadata is trusted for auto-link and auto-create flows.
+- Some legacy API naming still suggests hard delete even where the implementation is now retained lifecycle.
+- Stored-but-ineffective API keys are currently exposed through derived runtime
+  state rather than a dedicated persisted status.
+- The backend host/admin API key surface is implemented, but the external admin
+  UI in `../OutlabsAuthUI` has not adopted it yet.
+- Session inventory, social unlink, and audit-search HTTP surfaces are implemented
+  and covered by focused integration tests; OutlabsAuth UI adoption of those
+  screens may still lag the backend.
+- The new integration-principal and system-key backend surface is implemented,
+  but host-product UX and operational guidance for when to prefer
+  `system_integration` keys versus JWT service tokens still needs more product
+  documentation.
+
+### Test Coverage Gaps
+
+- The API key backend surface now has direct focused coverage in:
+  - `tests/integration/test_api_key_admin_endpoints.py`
+  - `tests/integration/test_api_key_lifecycle.py`
+  - `tests/integration/test_api_keys_router_callback_paths.py`
+  - `tests/integration/test_enterprise_api_key_query_counts.py`
+  - `tests/integration/test_enterprise_api_key_admin_query_counts.py`
+  - `tests/integration/test_enterprise_api_key_policy_matrix.py`
+  - `tests/unit/services/test_api_key_service.py`
+  - `tests/unit/services/test_permission_scope.py`
+  - `tests/unit/test_auth_core_lifecycle.py`
+  - `tests/unit/test_auth_deps_permission_sources.py`
+  - `tests/unit/authentication/test_strategy.py`
+  - `tests/unit/observability/test_observability_integration.py`
+- That backend coverage is strong enough to proceed to UI adoption, but the
+  remaining API key test work is still worth calling out explicitly:
+  - add more route-flow observability assertions for the new
+    integration-principal and runtime API key paths rather than only unit-level
+    observability assertions
+  - add a few more edge-case tests around pagination/search/filter extremes
+  - add backend tests for IP-whitelist and rate-limit edge cases on both
+    personal and system-integration keys
+  - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
+    consuming the new admin and host integration surfaces
+
+- Focused coverage for the 2026-07 auth surface slice:
+  - `tests/integration/test_user_sessions_api.py`
+  - `tests/integration/test_social_accounts_api.py`
+  - `tests/integration/test_audit_search_api.py`
+  - `tests/integration/test_access_code_auth.py` (email + verified-phone channels)
+  - OAuth SPA/callback and associate unit/integration suites under `tests/unit/test_oauth_*` and `tests/integration/test_oauth_router_callback_paths.py`
+
+- The current full-suite regression baseline on 2026-04-12 passes with `712`
+  tests green and no warning output.
+- The recent lifecycle and auth-hardening slices are in comparatively good shape:
+  - `services/user.py`
+  - `routers/users.py`
+  - `routers/oauth.py`
+  - `services/user_audit.py`
+  - `services/cache.py`
+  - `services/policy_engine.py`
+  - `services/notification.py`
+- A focused management-coverage pass also now exists for role, permission, membership, and API-key management flows:
+  - router callback/error-path coverage for `routers/api_keys.py`, `routers/permissions.py`, and `routers/roles.py`
+  - service-management coverage for `services/api_key.py`, `services/permission.py`, `services/role.py`, and `services/membership.py`
+- In the current post-pass full-suite coverage run on 2026-03-19, these management modules now sit at:
+  - `routers/api_keys.py`: `90%`
+  - `routers/permissions.py`: `95%`
+  - `routers/roles.py`: `95%`
+  - `services/api_key.py`: `89%`
+  - `services/role.py`: `94%`
+  - `services/membership.py`: `86%`
+  - `services/permission.py`: `95%`
+- The auth/OAuth follow-up slice now has direct shared-layer and provider-internal coverage, with the current full-suite coverage run placing:
+  - `services/auth.py`: `100%`
+  - `authentication/strategy.py`: `100%`
+  - `authentication/transport.py`: `100%`
+  - `oauth/provider.py`: `97%`
+  - `oauth/provider_factories.py`: `81%`
+  - `routers/oauth.py`: `86%`
+  - `routers/oauth_associate.py`: `100%`
+  - `routers/oauth_utils.py`: `100%`
+  - `oauth/providers/google.py`: `100%`
+  - `oauth/providers/github.py`: `100%`
+  - `oauth/providers/facebook.py`: `100%`
+  - `oauth/providers/apple.py`: `100%`
+- The shared auth/JWT/config handler slice now has direct utility and handler coverage, with the current full-suite coverage run placing:
+  - `utils/jwt.py`: `100%`
+  - `fastapi.py`: `100%`
+  - `services/config.py`: `100%`
+  - `routers/config.py`: `100%`
+- The auth core/dependency wiring follow-up slice now has direct lifecycle and guard coverage, with the current full-suite coverage run placing:
+  - `core/auth.py`: `100%`
+  - `dependencies/__init__.py`: `99%`
+- The observability integration follow-up slice now has direct request-context, middleware, and metrics-router coverage, with the current full-suite coverage run placing:
+  - `observability/dependencies.py`: `100%`
+  - `observability/middleware.py`: `100%`
+  - `observability/router.py`: `100%`
+- The database plumbing slice now has direct configuration, factory, session-generator, and registry coverage, with the current full-suite coverage run placing:
+  - `database/engine.py`: `100%`
+  - `database/registry.py`: `100%`
+- The entity follow-up slice now has direct service-management/cache coverage and router callback-path coverage, with the current full-suite coverage run placing:
+  - `services/entity.py`: `95%`
+  - `routers/entities.py`: `99%`
+- The remaining meaningful coverage gaps are now mostly broader infrastructure and operational surfaces rather than missing auth or lifecycle product slices:
+  - medium-priority observability and platform internals such as `observability/service.py`, `services/activity_tracker.py`, `middleware/resource_context.py`, and some remaining router/service breadth like `routers/memberships.py`
+  - lower-priority low-coverage areas still exist in CLI, workers, optional notification channel adapters, Redis client plumbing, and migration bootstrap glue
+
+### Documentation Gaps
+
+- Several major docs have now been reconciled (`CURRENT_IMPLEMENTATION_STATUS.md`, `USER_AUDIT_LOG_STRATEGY.md`, `SECURITY.md`, `LIBRARY_ARCHITECTURE.md`, `COMPARISON_MATRIX.md`, `API_DESIGN.md`, `DESIGN_DECISIONS.md`, `DEPENDENCY_PATTERNS.md`, `ENTITY_DELETION_AND_MEMBERSHIP_HISTORY.md`).
+- The in-repo `auth-ui/` subtree has been removed and the repo now documents the external admin UI boundary through `README.md`, `AUTH_UI.md`, `AUTH_UI_PARITY_GAPS.md`, and related release/maintainer docs.
+- Remaining stale content is mostly in broader roadmap/design collections rather than the operational and lifecycle docs.
+- The docs index now includes this status file, but the broader planning docs are not yet fully reconciled with current retained-lifecycle behavior.
+
+## Newly Added Coverage In This Slice
+
+- OAuth router callback-path coverage for authorize, callback success, invalid state, associate-state binding, and association-collision branches.
+- Config router API coverage for public reads, superuser-only updates, merge/persist behavior, and empty-root rejection at the request layer.
+- Direct policy-engine unit coverage for the operator matrix, grouped SQL-condition semantics, and context helper methods.
+- Direct cache-service unit coverage for key generation, get/set helpers, targeted invalidation, publish helpers, listener dispatch, and Redis-unavailable no-op behavior.
+- Entity and membership read-route integration coverage for `/children`, `/path`, entity-member pagination, `/memberships/entity/{id}/details`, and `/memberships/user/{id}` include-inactive behavior.
+- History pagination and filter-combination coverage for user audit events, user membership history, and role/permission definition history list surfaces.
+- Notification-service unit coverage for channel filtering, fire-and-forget dispatch, delivery failure isolation, and pre-dispatch exception handling.
+- User-audit integration coverage for profile/email changes, admin password changes, login failures, successful login, password reset request/completion, invite create/resend/accept, and invite-accept auto-login audit metadata.
+- Apple provider unit coverage for verified ID-token parsing and provider-error wrapping, plus shared OAuth-helper coverage that rejects invalid verified ID tokens.
+- OAuth callback coverage that rejects locked existing users before issuing local tokens.
+- Bundled OAuth provider coverage for Google, GitHub, and Facebook user-info mapping, plus shared-helper coverage that prefers access-token userinfo when available.
+- Shared auth strategy coverage for JWT blacklist/staleness handling, API-key owner lookup, service-token validation, superuser fallback, and anonymous access.
+- OAuth security-helper coverage for state, nonce, PKCE generation/verification, URL building, and constant-time comparison.
+- OAuth provider-base coverage for authorization URL generation, HTTP-client lifecycle, default refresh behavior, and unsupported revoke behavior.
+- Bundled-provider flow coverage for Google/GitHub/Facebook/Apple exchange, refresh, revoke, and provider-specific authorization behavior.
+- Public OAuth factory-helper coverage, plus the package-export fix that makes `from outlabs_auth.oauth.providers import get_google_client` resolve to the documented helper path again.
+- Direct `OutlabsAuth` lifecycle coverage for configuration validation, initialize/startup orchestration, backend/dependency wiring, session and unit-of-work helpers, shutdown cleanup, and FastAPI instrumentation warning behavior.
+- Direct `AuthDeps` guard coverage for inactive/unverified auth fallback, optional auth, activity tracking dispatch, missing/invalid auth-result identities, ABAC context merge, missing service/session failures, source and superuser enforcement, and dynamic dependency signatures.
+- Permission, role, and API-key router callback-path coverage for validation, ownership/visibility, scoped-create rules, generic 500 logging, and ABAC error translation.
+- API-key service coverage for scope/IP helpers, rate-limit enforcement, tree access checks, hard delete, and usage-counter sync behavior.
+- Direct `AuthService` lifecycle coverage for login failure/lockout, login success notifications and hash upgrade, stateless/stateful logout blacklisting, refresh-token invalid/stale/revoked handling, current-user stale-token enforcement, reset/invite credential flows, and helper methods, taking `services/auth.py` to `100%` in the full-suite run.
+- Permission service coverage for list/search/tag/bulk-create management helpers.
+- Role service coverage for scoped list visibility, entity-available role resolution, auto-assigned role discovery, and entity availability checks.
+- Membership service coverage for user/entity query helpers, orphan discovery, and retroactive auto-assigned role application.
+- Entity service coverage for create/update lookup paths, hierarchy validation, cache reads/writes/invalidation helpers, suggested-type discovery, ancestor traversal, and retained-archive delete orchestration.
+- Entities router callback-path coverage for list filters, CRUD responses, move permission checks, descendants, path, children, and paginated member response shaping.
+- Permission service lifecycle coverage for status/cache helpers, require-any/all enforcement, tag replacement/clearing, archived lookup behavior, and system-permission guards.
+- Role service lifecycle coverage for scoped/global creation guards, update/delete constraints, entity-type permission overrides, direct-role reactivation semantics, and archived-entity direct-role revocation.
+- Membership service lifecycle coverage for add-member validation, in-place membership updates, remove/suspend/reactivate paths, user-wide revocation, entity-archive revocation, and membership-history reads.
+- A runtime bugfix landed with this slice: `permission_service.delete_permission()` now reloads the archived permission with tags before building the post-delete history snapshot, avoiding an async lazy-load failure on tagged permission archive.
+- Direct permission and role service ABAC-definition coverage now exists for mutable-definition guards, condition-group and condition CRUD, user-permission helper paths, cache invalidation, and audit snapshot helpers.
+- Expanded permission and role router callback-path coverage now includes list/read/update/delete success paths, ABAC condition-group and condition list responses, scoped-create rejection, runtime-error logging, and invalid-input translation branches.
+- Provider edge-case coverage for Apple, GitHub, and Google now covers private-key/JWKS setup, client-secret generation, PKCE exchange branches, network/provider error wrapping, fallback email handling, and revoke/refresh error paths.
+- OAuth associate router helper/callback coverage now includes state-token decoding failures, invalid authenticated-user IDs, missing-user handling, route-name callback URL generation, existing-link refresh paths, and same-provider collision handling.
+- OAuth utility coverage now includes `get_id_email` fallback, missing-email rejection, unsupported-provider rejection, and provider-token encryption failure/success paths.
+- Facebook provider coverage now includes successful code exchange plus network/non-200 failure handling for code exchange, user-info reads, long-lived token exchange, and unsupported refresh semantics.
+- Role and permission helper coverage now includes permission-name parsing, wildcard/scope grant helpers, entity-local grant rules, context-aware permission selection, cache-eligibility helpers, assignable-type normalization, and snapshot/delta helper behavior.
+- The deprecated `HTTP_422_UNPROCESSABLE_ENTITY` usage in the API-key router was updated to `HTTP_422_UNPROCESSABLE_CONTENT`, and the full suite no longer emits that warning.
+- Shared auth strategy coverage now includes missing-user-service fallback, expired/invalid token handling, API-key empty/error branches, service-token invalid-type and validator-failure handling, and superuser fallback/error branches, taking `authentication/strategy.py` to `100%`.
+- Transport coverage now includes real request extraction for bearer, API-key, header-prefix mismatch, cookie, and query-param delivery paths, taking `authentication/transport.py` to `100%`.
+- JWT utility coverage now includes no-audience verification, token-type mismatch, expired/invalid decode paths, expiration helpers, and access-vs-refresh token-pair claim behavior, taking `utils/jwt.py` to `100%`.
+- Config service and router coverage now includes direct CRUD/default/seed behavior, direct route-handler merge and route-level guard paths, audit-actor propagation, and observability logging, taking `services/config.py` and `routers/config.py` to `100%`.
+- FastAPI exception-handler coverage now includes nested HTTP detail extraction, invalid-mode validation, validation/integrity/value/http error responses, and unexpected-exception logging/fallback behavior, taking `fastapi.py` to `100%`.
+- Database engine coverage now includes URL normalization, preset defaults, pooled vs serverless engine creation, session-factory defaults, and commit/rollback behavior in the shared session dependency, taking `database/engine.py` to `100%`.
+- Database registry coverage now includes preset-specific model/table sets and explicit metadata registration, and a runtime fix landed with this slice: `ModelRegistry.get_models()` now includes `SocialAccount`, `OAuthState`, and `ActivityMetric` so the registry contract matches its documented core model list and table expectations.
+- Core auth wiring coverage now includes direct migration handoff, Redis/cache/entity/activity service initialization, activity-tracking guardrails, token-cleanup and activity-sync scheduler loops, and the unexpected middleware-runtime branch in `instrument_fastapi()`, taking `core/auth.py` to `100%`.
+- Observability dependency coverage now includes request-context capture, structured log forwarding, auth-wrapped context helpers, dependency-factory guardrails, correlation-ID middleware passthrough/generation/cleanup, and the metrics router enablement and response path, taking `observability/dependencies.py`, `observability/middleware.py`, and `observability/router.py` to `100%` and `dependencies/__init__.py` to `99%`.

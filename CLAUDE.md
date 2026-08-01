@@ -1,0 +1,635 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**OutlabsAuth** is a **FastAPI library** for authentication and authorization that can be installed via pip (`pip install outlabs-auth`) and integrated directly into applications.
+
+**Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
+
+**Inspired by FastAPI-Users**: We've adopted many excellent patterns from [FastAPI-Users](https://github.com/fastapi-users/fastapi-users) including lifecycle hooks, router factories, and transport/strategy patterns.
+
+## Public Repository Boundary
+
+This is a public open-source repository. Everything tracked here — docs, design decisions, examples, tests, changelogs, commit messages — is world-readable. **Never reference private consumer projects**: no consumer or company names, production/staging domains, private-repo paths or file:line citations, deployment topologies, org structures, or requirement attributions tied to a specific adopter. When a design decision is motivated by a real deployment, describe it generically ("a multi-product deployment", "a host serving two frontends"); the named version of the rationale belongs in that consumer's own private repo. Use fictional names (ACME Realty pattern) for examples and test fixtures.
+
+### Core Features
+- ✅ Entity hierarchy (STRUCTURAL + ACCESS_GROUP)
+- ✅ Tree permissions (hierarchical access control)
+- ✅ Context-aware roles
+- ✅ Flexible entity types
+- ✅ Hybrid authorization (RBAC + ReBAC + ABAC)
+- ✅ PostgreSQL with SQLAlchemy async
+- ✅ Closure table for O(1) tree queries
+- ✅ Observability (Prometheus metrics + structured logging)
+
+### Patterns from FastAPI-Users
+- ✅ Lifecycle hooks (on_after_register, on_after_login, etc.)
+- ✅ Router factory pattern
+- ✅ Transport/Strategy pattern
+- ✅ Dynamic dependency injection with makefun
+- ✅ Service-based architecture
+
+## Current Project Status
+
+**Branch**: `main`
+**Status**: PostgreSQL migration complete, all examples working
+**Version**: 2.0 (PostgreSQL + SQLAlchemy)
+
+**Progress**:
+- ✅ Core services migrated to SQLAlchemy
+- ✅ All examples using PostgreSQL
+- ✅ Entity hierarchy with closure table
+- ✅ SimpleRBAC and EnterpriseRBAC presets working
+- ✅ Observability instrumentation complete (all services)
+
+**For what is delivered vs outstanding, see [CURRENT_IMPLEMENTATION_STATUS.md](docs/CURRENT_IMPLEMENTATION_STATUS.md)** and [NEXT_PASS_BACKLOG.md](docs/NEXT_PASS_BACKLOG.md).
+
+### Documentation Structure
+
+**IMPORTANT**: There are TWO documentation folders with different purposes:
+
+#### `docs/` - System Specifications (For Maintainers)
+
+Design specs and architectural decisions describing the current system: PostgreSQL
++ SQLModel throughout.
+
+To learn how the library works, in order:
+1. **`examples/`** — working apps, kept honest by tests
+2. **`README.md`** — quickstart, executed by `tests/unit/test_readme_quickstart.py`
+3. **the source** — `core/auth.py`, `routers/`, `dependencies/__init__.py`
+
+| File | What it's for |
+|---|---|
+| **CURRENT_IMPLEMENTATION_STATUS.md** | What's delivered, accepted nuances, known gaps |
+| **DESIGN_DECISIONS.md** | Why the architecture is the way it is (DD-001..DD-05x) |
+| **COMPARISON_MATRIX.md** | SimpleRBAC vs EnterpriseRBAC |
+| **LIBRARY_ARCHITECTURE.md** | Technical architecture |
+| **API_DESIGN.md** | Public API surface and developer experience |
+| **DEPENDENCY_PATTERNS.md** | FastAPI dependency injection patterns |
+| **AUTH_EXTENSIONS.md** | OAuth, passwordless, messaging — and what is *not* built |
+| **ERROR_HANDLING.md** | Exception hierarchy |
+| **HOST_INTEGRATION_QUERIES.md** | Auth-owned query boundary for host apps |
+| **SECURITY.md** | Security hardening |
+| **DEPLOYMENT_GUIDE.md** | Production deployment, schema ownership, migrations |
+| **TESTING_GUIDE.md** | Testing strategy |
+| **ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md** | Latest audit |
+| **SECURITY_AUDIT_2026-06-10.md**, **PERFORMANCE_AUDIT_*.md** | Point-in-time audits |
+
+#### `docs-library/` - User Handbook (Implementers)
+
+Human-readable guides for people integrating OutlabsAuth — distinct from
+maintainer `docs/`. Index and reading paths: **`docs-library/README.md`**.
+
+Spine: Introduction → Getting Started → Choosing a Preset → Routers /
+Configuration → OAuth / Sessions / Passwordless, plus topic and reference
+guides (JWT, invites, API keys, observability catalogs, …).
+
+This tree is the content source for a future public docs site; keep product
+language here and design-decision jargon in `docs/`.
+
+When a handbook page and the running code disagree, trust the code.
+
+## Architecture Overview
+
+### Unified Core with Thin Wrappers
+
+The library has a **single `OutlabsAuth` core implementation** with thin convenience wrappers:
+
+```python
+# Core class with all functionality
+from outlabs_auth import OutlabsAuth
+
+auth = OutlabsAuth(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key="your-secret-key",
+    enable_entity_hierarchy=True,      # Feature flags
+    enable_context_aware_roles=True,
+    enable_abac=True,
+    redis_enabled=True,                # Enable Redis features
+    redis_url="redis://localhost:6379"
+)
+```
+
+**Two Presets**:
+
+1. **SimpleRBAC** - Thin wrapper (5-10 LOC) for flat RBAC
+   ```python
+   from outlabs_auth import SimpleRBAC
+   auth = SimpleRBAC(
+       database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+       secret_key="your-secret-key"
+   )
+   # Flat structure: users → roles → permissions
+   ```
+
+2. **EnterpriseRBAC** - Thin wrapper with entity hierarchy always enabled
+   ```python
+   from outlabs_auth import EnterpriseRBAC
+   auth = EnterpriseRBAC(
+       database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+       secret_key="your-secret-key",
+       enable_context_aware_roles=True,  # Optional features
+       enable_abac=True
+   )
+   # Hierarchy: entities → memberships → roles → permissions
+   ```
+
+### Decision: Do You Have Departments/Teams?
+- **NO** → Use `SimpleRBAC`
+- **YES** → Use `EnterpriseRBAC`
+
+## Local Development Infrastructure
+
+**IMPORTANT**: All local development uses PostgreSQL and Redis containers:
+
+```bash
+# Check running containers
+docker ps
+
+# You should see:
+# - postgres (postgres:16) - Host port 5432 → Container port 5432
+# - outlabs-redis (redis:latest) - Host port 6380 → Container port 6379
+
+# If PostgreSQL is not running, start it:
+docker run -d --name postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
+
+# If Redis is not running, start it:
+docker run -d --name outlabs-redis -p 6380:6379 redis:latest
+```
+
+### Port Reference
+
+**SimpleRBAC Example** (`examples/simple_rbac/`):
+- Backend API: `http://localhost:8003`
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac`
+- Redis: `redis://localhost:6380`
+- Admin UI: `http://localhost:3000` (when running the external `OutlabsAuthUI` repo)
+
+**EnterpriseRBAC Example** (`examples/enterprise_rbac/`):
+- Backend API: `http://localhost:8004`
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac`
+- Redis: `redis://localhost:6380`
+
+**Notifications Example** (`examples/notifications/`):
+- Backend API: `http://localhost:8005`
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications`
+
+**Connection Strings**:
+```bash
+# SimpleRBAC example startup
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac" \
+SECRET_KEY="simple-rbac-secret-key-change-in-production" \
+REDIS_URL="redis://localhost:6380" \
+uv run uvicorn main:app --port 8003 --reload
+```
+
+These containers are shared across all examples and development work.
+
+## Essential Commands
+
+### Quick Start (Interactive Service Launcher)
+
+The easiest way to start development services:
+
+```bash
+uv run start.py
+```
+
+This opens an interactive menu where you can select multiple services to start:
+- **simple** - SimpleRBAC API (port 8000)
+- **enterprise** - EnterpriseRBAC API (port 8000)
+- **obs** - Start observability stack (Grafana, Prometheus, Loki)
+- **obs-stop** - Stop observability stack
+
+Use arrow keys to navigate, space to toggle, enter to confirm. Multiple services run concurrently with Ctrl+C to stop all.
+
+### Setup
+```bash
+# Install dependencies
+uv sync
+
+# Install with optional dependencies
+uv sync --extra dev     # Development tools
+uv sync --extra test    # Testing tools
+uv sync --extra all     # Everything
+```
+
+### Development
+```bash
+# Run the full test suite (896+ tests). Redis-backed cache/budget tests need
+# a reachable Redis — without TEST_REDIS_URL they skip silently.
+TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest
+
+# Code quality (NOTE: the repo is only partially black-formatted — don't
+# blanket-run black; format only files you touched. ruff is the lint gate.)
+uv run ruff check .
+
+# Build package
+uv build
+
+# Install locally for testing
+pip install -e .
+```
+
+### Release Validation (API integration suite + benchmarks)
+
+The release-grade validation lives at the repo root and in the EnterpriseRBAC
+example. Full documentation: `docs/PRIVATE_RELEASE.md` → "API Integration
+Validation" and "Database Upgrade Rehearsal".
+
+```bash
+# ONE command: seed -> boot the EnterpriseRBAC example -> admin/ABAC smoke ->
+# 45-check HTTP assertion suite -> teardown. Non-zero exit on any failure.
+uv run python scripts/run_enterprise_example_smoke.py
+
+# The assertion suite alone, against an already-running instance (or staging):
+uv run python examples/enterprise_rbac/api_integration_check.py --base-url http://localhost:8004
+
+# Redis round-trip benchmarks (re-verify the perf-audit numbers on any box):
+REDIS_URL=redis://localhost:56379/15 uv run python benchmarks/redis_roundtrips_bench.py
+```
+
+CI runs the full suite and the API integration suite on every PR and on
+`main`/tags (`.github/workflows/release-readiness.yml`: `full-suite` and
+`api-integration` jobs). Query-count budgets that pin the hot paths live in
+`tests/integration/test_cached_hotpath_budgets.py`,
+`test_request_memo_query_counts.py`, and `test_bulk_write_query_counts.py`.
+
+## Development Testing Utilities
+
+### Quick Test Environment Reset (SimpleRBAC Example)
+
+When testing auth features, you'll often need a clean database with known test users. The **reset script** provides instant reset to a known-good state:
+
+```bash
+cd examples/simple_rbac
+python reset_test_env.py
+```
+
+**What it does:**
+- ✅ Clears all test data (users, roles, permissions, memberships)
+- ✅ Creates 24 permissions (user:*, role:*, permission:*, api_key:*, post:*, comment:*)
+- ✅ Creates 5 default roles (reader, writer, editor, service_reader, admin) with appropriate permissions
+- ✅ Creates 3 test users with different permission levels
+- ✅ Takes ~2 seconds to complete
+
+**Test Users Created:**
+
+| Email | Password | Role | Permissions |
+|-------|----------|------|-------------|
+| `admin@test.com` | `Test123!!` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
+| `editor@test.com` | `Test123!!` | Editor | Content management (post:*, comment:*) |
+| `writer@test.com` | `Test123!!` | Writer | Content creation (post:read/create/update, comment:create) |
+
+**When to use this:**
+- 🔄 After breaking auth/permissions during development
+- 🧪 Before running integration tests against the external admin UI repo
+- 🚀 Setting up a demo environment
+- 🐛 Debugging auth issues with known-good credentials
+- 🎨 Testing the admin UI with a fresh slate
+
+**Configuration:**
+Uses environment variables (can override):
+- `DATABASE_URL` (default: `postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac`)
+
+**Important:** This script is designed for development/testing only. Never run in production!
+
+## Directory Structure
+
+```
+outlabsAuth/
+├── docs/                           # 📋 SYSTEM SPECS (for maintainers)
+│   ├── README.md                   # Explains design docs vs user docs
+│   ├── LIBRARY_ARCHITECTURE.md     # Technical architecture
+│   ├── DESIGN_DECISIONS.md         # DD-001 to DD-037+ decisions
+│   ├── API_DESIGN.md               # API design patterns
+│   ├── COMPARISON_MATRIX.md        # SimpleRBAC vs EnterpriseRBAC
+│   ├── AUTH_UI.md                  # External admin UI repo location and boundary
+│   └── ... (14 design spec files)
+│
+├── docs-library/                   # 📚 USER DOCS (implementer handbook)
+│   ├── README.md                   # Index
+│   ├── 01-Getting-Started.md
+│   ├── 02-Routers-and-Prefixes.md
+│   ├── 03-Configuration.md
+│   └── … topic guides (JWT, invites, observability, …)
+│
+├── ../OutlabsAuthUI                # 🎨 SISTER ADMIN UI (Vite/React)
+│   # https://github.com/outlabsio/OutlabsAuthUI — see docs/AUTH_UI.md
+│
+│
+├── outlabs_auth/                   # 📦 THE LIBRARY PACKAGE
+│   ├── __init__.py
+│   ├── core/                       # Base OutlabsAuth class
+│   ├── models/                     # SQLModel/SQLAlchemy models
+│   │   └── sql/                    # PostgreSQL models (User, Role, Entity, etc.)
+│   ├── services/                   # Business logic services (SQLAlchemy async)
+│   ├── presets/                    # SimpleRBAC, EnterpriseRBAC
+│   ├── dependencies/               # FastAPI dependency injection
+│   ├── middleware/                 # Auth middleware
+│   ├── observability/              # Prometheus metrics + structured logging
+│   ├── utils/                      # JWT, password hashing, etc.
+│   ├── routers/                    # FastAPI router factories
+│   └── schemas/                    # Pydantic request/response schemas
+│
+├── examples/                       # 📁 Example applications
+│   ├── simple_rbac/                # SimpleRBAC demo (blog application)
+│   │   ├── main.py                 # FastAPI app with SimpleRBAC preset
+│   │   ├── reset_test_env.py       # Quick test environment reset script
+│   │   ├── README.md               # Example documentation
+│   │   └── ...
+│   ├── enterprise_rbac/            # EnterpriseRBAC demo (real estate)
+│   └── notifications/              # Notification system demo
+│
+├── tests/                          # 📁 Library tests
+│   ├── unit/
+│   └── integration/
+│
+├── start.py                        # 🚀 Interactive service launcher
+├── pyproject.toml                  # Package configuration
+├── README.md                       # Library README
+└── CLAUDE.md                       # This file - Claude Code guidance
+```
+
+## Key Features (Core v1.0)
+
+### Authentication System
+- **JWT Authentication**: Access tokens (15 min) + refresh tokens (30 days), optional rotation
+- **API Keys**: SHA-256 hashing (fast for high-entropy secrets), 12-char prefixes, temporary locks
+- **JWT Service Tokens**: ~0.5ms authentication for internal services
+- **Multi-Source Auth**: JWT, API keys, service tokens, superuser, anonymous
+
+### Permission System
+- **SimpleRBAC**: Flat role-based access control
+- **EnterpriseRBAC**: Hierarchical permissions with entity context
+  - Entity hierarchy with closure table (O(1) ancestor/descendant queries)
+  - Tree permissions (`resource:action_tree`) for hierarchical access
+  - Context-aware roles (permissions adapt by entity type)
+  - Optional ABAC conditions
+
+### Performance Features (v1.4)
+- **Closure Table** (DD-036): O(1) tree queries, 20x improvement
+- **Redis Counters** (DD-033): 99%+ reduction in DB writes for API keys
+- **Redis Pub/Sub** (DD-037): <100ms cache invalidation across instances
+- **Unified AuthDeps** (DD-035): Single dependency injection class
+
+### Observability System
+- **Prometheus Metrics**: 30+ metrics for auth, permissions, entities, memberships, activity
+- **Structured Logging**: JSON logs via structlog with correlation IDs
+- **Instrumented Services**: AuthService, PermissionService, EntityService, MembershipService, ActivityTracker, NotificationService
+- **Configuration**: `ObservabilityConfig` with presets for dev/staging/production
+- **Integration**: Grafana dashboards, Prometheus scraping, Loki log aggregation
+
+```python
+from outlabs_auth.observability import ObservabilityConfig, ObservabilityPresets
+
+# Use a preset
+obs_config = ObservabilityPresets.development()  # or .staging() or .production()
+
+# Or customize
+obs_config = ObservabilityConfig(
+    enable_metrics=True,
+    logs_format="json",
+    logs_level="INFO",
+    log_permission_checks="failures_only",
+)
+
+auth = OutlabsAuth(
+    database_url="...",
+    secret_key="...",
+    observability_config=obs_config,
+)
+
+# Instrument FastAPI app (adds /metrics endpoint, correlation ID middleware)
+auth.instrument_fastapi(app)
+```
+
+**Documentation**: See `docs-library/97-Observability.md`, `98-Metrics-Reference.md`, `99-Log-Events-Reference.md`
+
+### Portable Observability Stack
+
+The `observability/` folder contains a **portable, per-project observability stack** that can be copied to any project:
+
+```
+observability/
+├── docker-compose.yml          # Parameterized compose file
+├── .env.example                # Configuration template
+├── setup.sh                    # Setup script (generates configs)
+├── test.sh                     # Test script
+├── README.md                   # Deployment guide
+├── EXTENDING.md                # Guide for adding custom metrics
+├── prometheus/
+│   └── prometheus.yml.template # Template with ${VAR} placeholders
+├── grafana/
+│   ├── provisioning/           # Auto-provisioning configs
+│   └── dashboards/             # Pre-built dashboards
+├── promtail/
+│   └── promtail.yml.template   # Log collection template
+└── tempo/
+    └── tempo.yml               # Tracing config
+```
+
+**Quick Start** (for development):
+```bash
+cd observability
+cp .env.example .env        # Create config (customize if needed)
+./setup.sh                  # Generate configs from templates
+docker compose up -d        # Start stack
+# Grafana: http://localhost:3011 (admin/admin)
+```
+
+**For New Projects**: Copy the entire `observability/` folder to your project and customize `.env` with your project name and ports.
+
+**Key Environment Variables**:
+- `PROJECT_NAME` - Prefix for container names (default: outlabs)
+- `API_PORT` - Your FastAPI app port (default: 8000)
+- `GRAFANA_PORT` - Grafana UI port (default: 3011)
+
+See `observability/EXTENDING.md` for adding custom metrics and dashboards.
+
+## Reference Code (`_reference/`)
+
+The `_reference/` directory contains well-designed code from the old centralized API:
+
+### Models (`_reference/models/`)
+- `entity_model.py` - Unified entity system (STRUCTURAL + ACCESS_GROUP)
+- `user_model.py` - User authentication and profile
+- `role_model.py` - Context-aware roles
+- `permission_model.py` - ABAC conditions
+- **Use**: Starting point for library models (will need modifications)
+
+### Services (`_reference/services/`)
+- `permission_service.py` - Complex permission resolution (977 lines)
+  - Tree permission checking
+  - ABAC policy evaluation
+  - Redis caching
+  - Hierarchical permission inheritance
+- `entity_service.py` - Entity hierarchy management
+- `user_service.py` - User management
+- `auth_service.py` - JWT authentication
+- **Use**: Reference implementation for business logic
+
+**Important**: These are **reference only** - they're designed for the centralized API approach. The library will need simplified versions adapted to the new architecture.
+
+## Implementation Phases
+
+Current status: **CURRENT_IMPLEMENTATION_STATUS.md**
+
+### Core Library (6-7 weeks)
+- **Phase 1** (Week 1): Core foundation + SimpleRBAC
+- **Phase 2** (Week 2): Complete SimpleRBAC + API keys
+- **Phase 3** (Week 3): EnterpriseRBAC entity system + closure table
+- **Phase 4** (Week 4): Optional features (context-aware roles, ABAC)
+- **Phase 5** (Week 5): Complete testing + Redis patterns
+- **Phase 6** (Week 6-7): CLI tools, documentation, examples
+
+### Optional Extensions (9 weeks, post-v1.0)
+- **v1.1** (Week 8-9): Notification system
+- **v1.2** (Week 10-12): OAuth/social login
+- **v1.3** (Week 13-14): Passwordless auth
+- **v1.4** (Week 15-16): MFA/TOTP
+
+## FastAPI Integration Example
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends
+from sqlmodel import SQLModel
+from outlabs_auth import SimpleRBAC
+
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
+
+# Global auth instance
+auth: SimpleRBAC = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global auth
+    # Initialize auth
+    auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+    await auth.initialize()
+
+    # Create tables
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    yield
+
+    # Shutdown
+    await auth.shutdown()
+
+app = FastAPI(lifespan=lifespan)
+
+# Use in routes
+@app.get("/users/me")
+async def get_me(user = Depends(lambda: auth.deps.authenticated())):
+    return {"id": str(user.id), "email": user.email}
+
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    _ = Depends(lambda: auth.deps.require_permission("user:delete"))
+):
+    return await auth.user_service.delete_user(user_id)
+```
+
+## Testing
+
+### Test Structure
+```
+tests/
+├── unit/                          # Unit tests for services
+│   ├── services/
+│   ├── models/
+│   └── utils/
+└── integration/                   # Integration tests for presets
+    ├── test_simple_rbac.py
+    ├── test_enterprise_rbac.py
+    ├── test_tree_permissions.py
+    └── test_api_keys.py
+```
+
+### Testing Goals
+- 90%+ code coverage
+- Test both SimpleRBAC and EnterpriseRBAC
+- Test entity hierarchy and tree permissions
+- Test API key authentication
+- Test multi-source authentication
+
+## Key Design Decisions
+
+All 37 design decisions documented in **DESIGN_DECISIONS.md**:
+
+### Latest (v1.4+)
+- **DD-032**: Unified architecture (single core + thin wrappers)
+- **DD-033**: Redis counters for API keys (99%+ write reduction)
+- **DD-034**: JWT service tokens (~0.5ms auth)
+- **DD-035**: Single AuthDeps class
+- **DD-036**: Closure table for tree permissions (O(1) queries)
+- **DD-037**: Redis Pub/Sub cache invalidation (<100ms)
+- **DD-038 to DD-046**: FastAPI-Users patterns integration (hooks, router factories, transport/strategy)
+- **DD-047**: UserRoleMembership with MembershipStatus enum
+- **DD-048**: Redis configuration simplification (single `redis_enabled` flag)
+
+### Corrections (2025-01-26)
+- **DD-028 CORRECTED**: API keys use SHA-256 (not argon2id) - fast hashing appropriate for high-entropy secrets
+- **DD-028 UPDATED**: Refresh token rotation is OPTIONAL (not automatic) - simpler default, high-security apps can enable
+- **DD-031**: Superseded by corrected DD-028
+
+### Core Decisions
+- **DD-001**: Library, not a centralized service
+- **DD-002**: Entity-isolated deployment model
+- **DD-004**: PostgreSQL as the database, via SQLAlchemy async
+- **DD-011**: SQLModel as the ORM
+- **DD-012**: FastAPI-first (not framework-agnostic)
+- **DD-015**: Two presets, Simple and Enterprise (superseding DD-003's three)
+- **DD-005**: No `platform_id` — isolation is entity-based
+- **DD-008**: Context-aware roles preserved
+- **DD-036**: Closure table for tree permissions
+
+## Admin UI
+
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
+admin console (not part of this Python package).
+
+- Repository: `../OutlabsAuthUI` (local) or https://github.com/outlabsio/OutlabsAuthUI
+- Runs separately; configure `apiBaseUrl` + `authApiPrefix` via `app-config.json`
+
+See **`docs/AUTH_UI.md`** for the plug-in contract and Simple vs Enterprise invite rules.
+
+---
+
+## Common Pitfalls to Avoid
+
+1. **Don't reference old centralized API docs** - Use `docs/` only
+2. **Reference code is for inspiration** - Don't copy-paste without adapting
+3. **Admin UI is separate** - It's NOT in the Python package and now lives in `../OutlabsAuthUI`
+4. **Each app is independent** - No multi-platform/multi-tenant by default
+5. **Start simple** - SimpleRBAC first, then EnterpriseRBAC features
+6. **Getting auth errors during testing?** - Use `python reset_test_env.py` to quickly reset to known-good state with test users
+7. **Backend is source of truth** - Frontend schemas must exactly match backend Pydantic models; remove any extra fields
+
+## Development Workflow
+
+1. **Run an example**: `examples/simple_rbac/` or `examples/enterprise_rbac/`
+2. **Check status**: `docs/CURRENT_IMPLEMENTATION_STATUS.md`
+3. **Reference models**: Look at `_reference/models/` for structure
+4. **Reference services**: Look at `_reference/services/` for logic patterns
+5. **Follow API design**: Use patterns from `API_DESIGN.md`
+6. **Test everything**: Follow `TESTING_GUIDE.md`
+7. **Security first**: Implement per `SECURITY.md`
+
+## Questions?
+
+- **Architecture**: `docs/LIBRARY_ARCHITECTURE.md`
+- **API Examples**: `docs/API_DESIGN.md`
+- **Decisions**: `docs/DESIGN_DECISIONS.md`
+
+---
+
+**Last Updated**: 2025-01-14
+**Status**: PostgreSQL migration complete - All examples working
+**Branch**: library-redesign

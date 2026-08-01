@@ -1,0 +1,197 @@
+[project]
+name = "outlabs-auth"
+dynamic = ["version"]
+description = "Open-source FastAPI authentication and authorization library with RBAC, ABAC, and Postgres-backed permissions."
+authors = [
+    {name = "OUTLABS LLC", email = "contact@outlabs.io"}
+]
+maintainers = [
+    {name = "OUTLABS LLC", email = "contact@outlabs.io"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.12"
+keywords = ["fastapi", "authentication", "authorization", "rbac", "abac", "jwt", "permissions", "postgresql", "sqlmodel"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Security",
+]
+urls = {Homepage = "https://outlabs.io", Documentation = "https://github.com/outlabsio/outlabsAuth/tree/main/docs-library", Repository = "https://github.com/outlabsio/outlabsAuth", Issues = "https://github.com/outlabsio/outlabsAuth/issues"}
+dependencies = [
+    # Core FastAPI dependencies
+    "fastapi>=0.139.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # Database (PostgreSQL via SQLModel/SQLAlchemy)
+    "sqlmodel>=0.0.22",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    # CLI
+    "click>=8.4.2",
+    # Authentication & Security
+    "pwdlib[argon2,bcrypt]>=0.2.0",
+    "pyjwt[crypto]>=2.13.0", # [crypto] required for ES256 (Apple Sign In) and RS256
+    "cryptography>=48.0.1",
+    "python-multipart>=0.0.31",
+    "email-validator>=2.0.0",
+    # Dynamic dependency injection (DD-039)
+    "makefun>=1.15.0",
+    # Date/time utilities (for policy engine ABAC conditions)
+    "python-dateutil>=2.8.0",
+    # OAuth/Social Login (v1.2)
+    "httpx>=0.25.0", # For OAuth provider API requests
+    # Observability (v1.5)
+    "structlog>=23.0.0", # Structured logging
+    "prometheus-client>=0.19.0", # Prometheus metrics
+    "redis>=6.2.0",
+]
+
+[project.optional-dependencies]
+# Redis caching support (optional performance enhancement)
+redis = [
+    "redis>=5.0.0",
+]
+
+# OAuth/Social login support (optional, v1.2)
+oauth = [
+    "httpx-oauth>=0.13.0",          # OAuth2 client library (Google, Facebook, Apple, GitHub, etc.)
+]
+
+# Notification system support (optional)
+notifications = [
+    "aio-pika>=9.0.0",              # RabbitMQ support
+    "aiosmtplib>=5.1.2",            # SMTP/Email support
+    "sendgrid>=6.10.0",             # SendGrid email support
+    "httpx>=0.25.0",                # Webhook support (already in test deps)
+    "twilio>=8.0.0",                # SMS + WhatsApp support via Twilio
+    "python-telegram-bot>=20.0",   # Telegram support
+]
+
+# Development tools
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.9.0",
+    "mypy>=1.5.0",
+    "uvicorn[standard]>=0.24.0",
+    "questionary>=2.0.0",  # Interactive CLI for start.py
+]
+
+# Testing dependencies
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=5.0.0",
+    "httpx>=0.25.0",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+]
+
+# Performance testing and benchmarking
+stress = [
+    "locust>=2.17.0",
+    "httpx>=0.25.0",
+    "aiohttp>=3.14.1",
+    "requests>=2.34.2",
+    "asyncio-throttle>=1.0.2",
+    "uvloop>=0.19.0",
+    "psutil>=5.9.0",
+    "memory-profiler>=0.61.0",
+    "py-spy>=0.3.14",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+    "matplotlib>=3.8.0",
+    "pandas>=2.1.0",
+    "prometheus-client>=0.19.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+    "docker>=7.0.0",
+]
+
+# All optional dependencies
+all = [
+    "redis>=5.0.0",
+    "httpx-oauth>=0.13.0",
+    "aio-pika>=9.0.0",
+    "aiosmtplib>=5.1.2",
+    "sendgrid>=6.10.0",
+    "httpx>=0.25.0",
+    "twilio>=8.0.0",
+    "python-telegram-bot>=20.0",
+    "black>=23.0.0",
+    "ruff>=0.9.0",
+    "mypy>=1.5.0",
+    "uvicorn[standard]>=0.24.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=5.0.0",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+    "structlog>=23.0.0",
+    "prometheus-client>=0.19.0",
+]
+
+[project.scripts]
+outlabs-auth = "outlabs_auth.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "outlabs_auth/_version.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["outlabs_auth"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"outlabs_auth/alembic.ini" = "outlabs_auth/alembic.ini"
+
+[tool.hatch.build.targets.wheel]
+packages = ["outlabs_auth"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"outlabs_auth/alembic.ini" = "outlabs_auth/alembic.ini"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# Black code formatting
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+include = '\.pyi?$'
+
+# Ruff linting baseline (high-signal correctness checks)
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+# Pytest configuration
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+# MyPy type checking
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+explicit_package_bases = true
+exclude = "(^tests/|^examples/|^scripts/)"

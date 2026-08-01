@@ -1,0 +1,2096 @@
+"""
+Authentication Service
+
+Handles user authentication operations with PostgreSQL/SQLAlchemy:
+- Login (email/password)
+- Logout (revoke refresh tokens)
+- Token refresh
+- Current user retrieval
+- Password reset
+"""
+
+import hashlib
+import hmac
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, List, Mapping, Optional, Tuple, cast
+from uuid import UUID
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.exceptions import (
+    AccountInactiveError,
+    AccountLockedError,
+    InvalidCredentialsError,
+    InvalidInputError,
+    RefreshTokenInvalidError,
+    TokenExpiredError,
+    TokenInvalidError,
+    UserNotFoundError,
+)
+from outlabs_auth.frontend.flows import enforce_sign_in_gate, stash_verified_challenge
+from outlabs_auth.models.sql.auth_challenge import AuthChallenge
+from outlabs_auth.models.sql.enums import AuthChallengeType, UserStatus
+from outlabs_auth.models.sql.token import RefreshToken
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.utils.jwt import create_token_pair, verify_token
+from outlabs_auth.utils.password import (
+    generate_password_hash_async,
+    verify_and_upgrade_password_async,
+    verify_password_async,
+    verify_password_dummy_async,
+)
+from outlabs_auth.utils.validation import validate_email, validate_phone
+
+
+class TokenPair:
+    """Container for access and refresh tokens."""
+
+    def __init__(
+        self,
+        access_token: str,
+        refresh_token: str,
+        token_type: str = "bearer",
+        expires_in: int = 900,
+    ):
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.token_type = token_type
+        self.expires_in = expires_in
+
+    def to_dict(self):
+        """Convert to dictionary for API responses."""
+        return {
+            "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
+            "token_type": self.token_type,
+            "expires_in": self.expires_in,
+        }
+
+
+class AuthService:
+    """
+    Authentication service for user login, logout, and token management.
+
+    Handles:
+    - Email/password authentication
+    - JWT token creation and verification
+    - Refresh token management
+    - Account lockout after failed login attempts
+    - Multi-device session support
+    """
+
+    def __init__(
+        self,
+        config: AuthConfig,
+        notification_service: Optional[Any] = None,
+        activity_tracker: Optional[Any] = None,
+        observability: Optional[Any] = None,
+        user_audit_service: Optional[Any] = None,
+    ):
+        """
+        Initialize AuthService.
+
+        Args:
+            config: Authentication configuration
+            notification_service: Optional notification service for events
+            activity_tracker: Optional activity tracker for DAU/MAU tracking
+            observability: Optional observability service for logging/metrics
+            user_audit_service: Optional user audit service for durable events
+        """
+        self.config = config
+        self.notifications = notification_service
+        self.activity_tracker = activity_tracker
+        self.observability = observability
+        self.user_audit_service = user_audit_service
+
+    async def login(
+        self,
+        session: AsyncSession,
+        email: str,
+        password: str,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        app: Optional[str] = None,
+    ) -> Tuple[User, TokenPair]:
+        """
+        Authenticate user with email and password.
+
+        Args:
+            session: Database session
+            email: User email address
+            password: Plain text password
+            device_name: Optional device identifier
+            ip_address: Optional IP address for tracking
+            user_agent: Optional user agent string
+
+        Returns:
+            Tuple of (authenticated user, token pair)
+
+        Raises:
+            InvalidCredentialsError: If email or password is incorrect
+            AccountLockedError: If account is locked
+            AccountInactiveError: If account is not active
+        """
+        start_time = datetime.now(timezone.utc)
+        phases: dict[str, float] = {}
+
+        # Validate and normalize email
+        email = validate_email(email)
+
+        # Find user by email
+        _t = time.perf_counter()
+        stmt = select(User).where(cast(Any, User.email) == email)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+        phases["db_select_user_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        if not user:
+            # SEC-7: equalize timing with the wrong-password path (a CPU-heavy Argon2
+            # verify) so accounts can't be enumerated by measuring response latency.
+            await verify_password_dummy_async()
+            self._log_login_failed(email, "user_not_found", 0, ip_address, start_time)
+            raise InvalidCredentialsError(
+                message="Invalid email or password",
+                details={"email": email},
+            )
+
+        # Check if account is locked
+        if user.is_locked:
+            self._log_login_failed(email, "account_locked", user.failed_login_attempts, ip_address, start_time)
+            raise AccountLockedError(
+                message=f"Account is locked until {user.locked_until.isoformat() if user.locked_until else 'unknown'}",
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+
+        # Check if account is active
+        self._check_user_status(user)
+
+        # Verify password (and opportunistically upgrade legacy hashes).
+        is_valid_password = False
+        upgraded_hash: Optional[str] = None
+        if user.hashed_password:
+            _t = time.perf_counter()
+            is_valid_password, upgraded_hash = await verify_and_upgrade_password_async(password, user.hashed_password)
+            phases["password_verify_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        if not is_valid_password:
+            previous_failed_attempts = user.failed_login_attempts or 0
+            previous_locked_until = user.locked_until
+            failure_recorded_at = datetime.now(timezone.utc)
+
+            # Increment failed login attempts
+            user.failed_login_attempts = previous_failed_attempts + 1
+
+            # Check if account should be locked
+            was_locked = False
+            if user.failed_login_attempts >= self.config.max_login_attempts:
+                user.locked_until = failure_recorded_at + timedelta(minutes=self.config.lockout_duration_minutes)
+                was_locked = True
+
+            if self.user_audit_service is not None:
+                await self.user_audit_service.record_event(
+                    session,
+                    event_category="authentication",
+                    event_type="user.login_failed",
+                    event_source="auth_service.login",
+                    subject_user_id=user.id,
+                    subject_email_snapshot=user.email,
+                    root_entity_id=user.root_entity_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    before={
+                        "failed_login_attempts": previous_failed_attempts,
+                        "locked_until": previous_locked_until,
+                    },
+                    after={
+                        "failed_login_attempts": user.failed_login_attempts,
+                        "locked_until": user.locked_until,
+                    },
+                    metadata={
+                        "failure_reason": "invalid_password",
+                        "max_attempts": self.config.max_login_attempts,
+                        "was_locked": was_locked,
+                    },
+                    occurred_at=failure_recorded_at,
+                )
+
+            await session.flush()
+            await session.commit()
+
+            self._log_login_failed(email, "invalid_password", user.failed_login_attempts, ip_address, start_time)
+
+            if was_locked:
+                self._log_account_locked(str(user.id), email, ip_address)
+
+            # Emit notification for failed login
+            if self.notifications:
+                await self.notifications.emit(
+                    "user.login_failed",
+                    data={
+                        "user_id": str(user.id),
+                        "email": user.email,
+                        "failed_attempts": user.failed_login_attempts,
+                        "max_attempts": self.config.max_login_attempts,
+                    },
+                    metadata={"ip": ip_address, "user_agent": user_agent},
+                )
+
+            raise InvalidCredentialsError(
+                message="Invalid email or password",
+                details={
+                    "failed_attempts": user.failed_login_attempts,
+                    "max_attempts": self.config.max_login_attempts,
+                },
+            )
+
+        if upgraded_hash and upgraded_hash != user.hashed_password:
+            user.hashed_password = upgraded_hash
+
+        # Successful login - reset failed attempts
+        previous_last_login = user.last_login
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        login_recorded_at = datetime.now(timezone.utc)
+        user.last_login = login_recorded_at
+        # Intentionally no flush here — the user update, refresh token insert,
+        # and audit event all share the caller's transaction and are flushed
+        # together at commit time. Saves two round trips.
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.login",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "timestamp": user.last_login.isoformat(),
+                },
+                metadata={
+                    "ip": ip_address,
+                    "device": device_name,
+                    "user_agent": user_agent,
+                },
+            )
+
+        # Track activity
+        if self.activity_tracker:
+            self.activity_tracker.track_activity_detached(str(user.id))
+
+        # Create JWT token pair
+        _t = time.perf_counter()
+        # DD-059 sign-in gate: may this user authenticate through this app?
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=app
+        )
+
+        access_token, refresh_token_value = create_token_pair(
+            user_id=str(user.id),
+            secret_key=self.config.secret_key,
+            algorithm=self.config.algorithm,
+            access_token_expire_minutes=self.config.access_token_expire_minutes,
+            refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
+            azp=app,
+        )
+        phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        # Store refresh token in database (if enabled)
+        if self.config.store_refresh_tokens:
+            _t = time.perf_counter()
+            refresh_token_hash = self._hash_token(refresh_token_value)
+            refresh_token_model = RefreshToken(
+                user_id=user.id,
+                token_hash=refresh_token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                device_name=device_name,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                azp=app,
+            )
+            session.add(refresh_token_model)
+            # No flush — batched with user update and audit event at commit time.
+            phases["db_refresh_token_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        if self.user_audit_service is not None:
+            _t = time.perf_counter()
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.login",
+                event_source="auth_service.login",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "last_login": previous_last_login,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "last_login": user.last_login,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                },
+                metadata={
+                    "auth_method": "password",
+                    "device_name": device_name,
+                    "refresh_token_stored": self.config.store_refresh_tokens,
+                },
+                occurred_at=login_recorded_at,
+                flush=False,
+            )
+            phases["db_audit_event_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        # Log successful login with per-phase breakdown
+        self._log_login_success(str(user.id), email, ip_address, start_time, phases=phases)
+
+        # Return user and tokens
+        token_pair = TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token_value,
+            expires_in=self.config.access_token_expire_minutes * 60,
+        )
+
+        return user, token_pair
+
+    async def create_tokens_for_user(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        auth_method: Optional[str] = None,
+        app: Optional[str] = None,
+    ) -> TokenPair:
+        """
+        Create a token pair for an already-authenticated user.
+
+        This is intended for non-password authentication flows
+        (for example, OAuth callbacks). ``app`` binds the session to a
+        registered frontend profile: the sign-in gate runs here (DD-059)
+        and the minted tokens carry it as the ``azp`` claim.
+        """
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+        self._check_user_status(user)
+
+        # DD-059 sign-in gate: may this user authenticate through this app?
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=app
+        )
+
+        previous_last_login = user.last_login
+        login_recorded_at = datetime.now(timezone.utc)
+        user.last_login = login_recorded_at
+
+        access_token, refresh_token_value = create_token_pair(
+            user_id=str(user.id),
+            secret_key=self.config.secret_key,
+            algorithm=self.config.algorithm,
+            access_token_expire_minutes=self.config.access_token_expire_minutes,
+            refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
+            azp=app,
+        )
+
+        if self.config.store_refresh_tokens:
+            refresh_token_hash = self._hash_token(refresh_token_value)
+            refresh_token_model = RefreshToken(
+                user_id=user.id,
+                token_hash=refresh_token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                device_name=device_name,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                azp=app,
+            )
+            session.add(refresh_token_model)
+            await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.login",
+                event_source="auth_service.create_tokens_for_user",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={"last_login": previous_last_login},
+                after={"last_login": user.last_login},
+                metadata={
+                    "auth_method": auth_method or device_name or "token_exchange",
+                    "device_name": device_name,
+                    "refresh_token_stored": self.config.store_refresh_tokens,
+                },
+                occurred_at=login_recorded_at,
+            )
+
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token_value,
+            expires_in=self.config.access_token_expire_minutes * 60,
+        )
+
+    async def logout(
+        self,
+        session: AsyncSession,
+        refresh_token: str,
+        blacklist_access_token: bool = False,
+        access_token_jti: Optional[str] = None,
+        redis_client: Optional[Any] = None,
+    ) -> bool:
+        """
+        Logout user by revoking refresh token.
+
+        Args:
+            session: Database session
+            refresh_token: Refresh token to revoke
+            blacklist_access_token: If True, blacklist access token (requires Redis)
+            access_token_jti: JWT ID of access token to blacklist
+            redis_client: Optional Redis client for blacklisting
+
+        Returns:
+            True if refresh token was revoked, False if not found
+        """
+        # Check if refresh token storage is enabled
+        if not self.config.store_refresh_tokens:
+            # Stateless JWT mode - only blacklist access token if requested
+            blacklisted = False
+            if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
+                if redis_client and hasattr(redis_client, "is_available") and redis_client.is_available:
+                    remaining_ttl = self.config.access_token_expire_minutes * 60
+                    blacklisted = await redis_client.set(
+                        f"blacklist:jwt:{access_token_jti}",
+                        "revoked",
+                        ttl=remaining_ttl,
+                    )
+            return blacklisted
+
+        # Find refresh token in database
+        token_hash = self._hash_token(refresh_token)
+        stmt = select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash)
+        result = await session.execute(stmt)
+        token_model = result.scalar_one_or_none()
+
+        if not token_model:
+            return False
+
+        if token_model.is_revoked:
+            return False
+
+        # Mark as revoked
+        token_model.revoke("User logout")
+
+        # Calculate session duration for observability
+        session_duration_seconds = (datetime.now(timezone.utc) - token_model.created_at).total_seconds()
+
+        await session.flush()
+
+        # Optional: Blacklist access token in Redis
+        blacklisted = False
+        if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
+            if redis_client and hasattr(redis_client, "is_available") and redis_client.is_available:
+                remaining_ttl = self.config.access_token_expire_minutes * 60
+                blacklisted = await redis_client.set(
+                    f"blacklist:jwt:{access_token_jti}",
+                    "revoked",
+                    ttl=remaining_ttl,
+                )
+
+        # Log logout
+        if self.observability:
+            self.observability.log_logout(
+                user_id=str(token_model.user_id),
+                session_duration_seconds=session_duration_seconds,
+                revoke_all_tokens=blacklist_access_token,
+            )
+
+        return True
+
+    async def refresh_access_token(
+        self,
+        session: AsyncSession,
+        refresh_token: str,
+    ) -> TokenPair:
+        """
+        Get new access token using refresh token.
+
+        Args:
+            session: Database session
+            refresh_token: Valid refresh token
+
+        Returns:
+            New access and single-use refresh token pair
+
+        Raises:
+            RefreshTokenInvalidError: If refresh token is invalid or revoked
+            TokenExpiredError: If refresh token has expired
+            UserNotFoundError: If user no longer exists
+        """
+        # Verify JWT structure
+        try:
+            payload = verify_token(
+                refresh_token,
+                self.config.secret_key,
+                self.config.algorithm,
+                expected_type="refresh",
+                audience=self.config.jwt_audience,
+            )
+        except TokenExpiredError:
+            if self.observability:
+                self.observability.log_token_refreshed(
+                    user_id="unknown",
+                    status="failed",
+                    reason="token_expired",
+                )
+            raise
+        except TokenInvalidError:
+            if self.observability:
+                self.observability.log_token_refreshed(
+                    user_id="unknown",
+                    status="failed",
+                    reason="invalid_token",
+                )
+            raise RefreshTokenInvalidError(
+                message="Invalid refresh token",
+                details={"reason": "Token verification failed"},
+            )
+
+        # Extract user ID
+        user_id = payload.get("sub")
+        if not user_id:
+            raise RefreshTokenInvalidError(
+                message="Invalid refresh token: missing user ID",
+                details={"reason": "No user ID in token"},
+            )
+
+        token_model = None
+
+        # If refresh token storage is enabled, check database
+        if self.config.store_refresh_tokens:
+            token_hash = self._hash_token(refresh_token)
+            refresh_token_stmt = (
+                select(RefreshToken)
+                .where(cast(Any, RefreshToken.token_hash) == token_hash)
+                .with_for_update()
+            )
+            result = await session.execute(refresh_token_stmt)
+            token_model = result.scalar_one_or_none()
+
+            if not token_model:
+                raise RefreshTokenInvalidError(
+                    message="Refresh token not found",
+                    details={"reason": "Token not in database"},
+                )
+
+            if not token_model.is_valid():
+                if token_model.is_revoked:
+                    if token_model.revoked_reason == "rotated":
+                        # A rotated token is single-use. Reuse means the prior
+                        # credential was copied or raced, so revoke every active
+                        # session rather than guessing which child is trusted.
+                        revoked_count = await self.revoke_all_user_tokens(
+                            session,
+                            token_model.user_id,
+                            reason="Refresh token reuse detected",
+                        )
+                        raise RefreshTokenInvalidError(
+                            message="Refresh token reuse detected; all sessions were revoked",
+                            details={
+                                "reason": "reuse_detected",
+                                "family_id": str(token_model.family_id),
+                                "revoked_session_count": revoked_count,
+                            },
+                        )
+                    raise RefreshTokenInvalidError(
+                        message="Refresh token has been revoked",
+                        details={
+                            "reason": "revoked",
+                            "revoked_at": token_model.revoked_at.isoformat() if token_model.revoked_at else None,
+                            "revoked_reason": token_model.revoked_reason,
+                        },
+                    )
+                raise RefreshTokenInvalidError(
+                    message="Refresh token has expired",
+                    details={
+                        "reason": "expired",
+                        "expires_at": token_model.expires_at.isoformat() if token_model.expires_at else None,
+                    },
+                )
+
+        # Get user from database
+        user_stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
+        user_result = await session.execute(user_stmt)
+        user = cast(Optional[User], user_result.scalar_one_or_none())
+
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": user_id},
+            )
+
+        # Check user status
+        self._check_user_status(user)
+
+        if self._token_is_stale(payload, user.last_password_change):
+            if token_model is not None:
+                token_model.revoke("Password changed")
+                await session.flush()
+            raise RefreshTokenInvalidError(
+                message="Refresh token is no longer valid",
+                details={"reason": "password_changed"},
+            )
+
+        # DD-059: sessions keep their authorized-party binding across rotation,
+        # and the sign-in gate re-runs so audience changes take effect here.
+        azp_raw = token_model.azp if token_model is not None else payload.get("azp")
+        azp = azp_raw if isinstance(azp_raw, str) and azp_raw else None
+        await enforce_sign_in_gate(
+            getattr(self, "frontend_resolver", None), session, user, app=azp
+        )
+
+        # Rotate the stored refresh token atomically with its replacement. The
+        # SELECT ... FOR UPDATE above serializes concurrent refresh attempts for
+        # the same credential; the loser sees ``rotated`` and triggers replay
+        # containment instead of minting a second child token.
+        access_token, replacement_refresh_token = create_token_pair(
+            user_id=str(user.id),
+            secret_key=self.config.secret_key,
+            algorithm=self.config.algorithm,
+            access_token_expire_minutes=self.config.access_token_expire_minutes,
+            refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
+            azp=azp,
+        )
+
+        # Store the replacement before revoking the old token so the lineage is
+        # auditable and the database never contains a dangling replacement link.
+        if self.config.store_refresh_tokens and token_model:
+            replacement = RefreshToken(
+                user_id=user.id,
+                token_hash=self._hash_token(replacement_refresh_token),
+                family_id=token_model.family_id,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                device_name=token_model.device_name,
+                device_fingerprint=token_model.device_fingerprint,
+                ip_address=token_model.ip_address,
+                user_agent=token_model.user_agent,
+                azp=azp,
+            )
+            session.add(replacement)
+            await session.flush()
+            token_model.record_usage()
+            token_model.revoke("rotated")
+            token_model.replaced_by_token_id = replacement.id
+            await session.flush()
+
+        # Log successful refresh
+        if self.observability:
+            self.observability.log_token_refreshed(
+                user_id=str(user.id),
+                status="success",
+            )
+
+        # Track activity
+        if self.activity_tracker:
+            self.activity_tracker.track_activity_detached(str(user.id))
+
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=replacement_refresh_token,
+            expires_in=self.config.access_token_expire_minutes * 60,
+        )
+
+    async def get_current_user(
+        self,
+        session: AsyncSession,
+        access_token: str,
+    ) -> User:
+        """
+        Get current user from access token.
+
+        Args:
+            session: Database session
+            access_token: JWT access token
+
+        Returns:
+            Authenticated user
+
+        Raises:
+            TokenInvalidError: If token is invalid
+            TokenExpiredError: If token has expired
+            UserNotFoundError: If user doesn't exist
+            AccountInactiveError: If account is not active
+        """
+        # Verify and decode token
+        payload = verify_token(
+            access_token,
+            self.config.secret_key,
+            self.config.algorithm,
+            expected_type="access",
+            audience=self.config.jwt_audience,
+        )
+
+        # Get user ID
+        user_id = payload.get("sub")
+        if not user_id:
+            raise TokenInvalidError(
+                message="Invalid token: missing user ID",
+                details={"payload": payload},
+            )
+
+        # Get user from database
+        stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": user_id},
+            )
+
+        # Check user status
+        self._check_user_status(user)
+
+        if self._token_is_stale(payload, user.last_password_change):
+            raise TokenInvalidError(
+                message="Token is no longer valid",
+                details={"reason": "password_changed"},
+            )
+
+        return user
+
+    async def revoke_all_user_tokens(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        reason: str = "Revoke all sessions",
+    ) -> int:
+        """
+        Revoke all refresh tokens for a user.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            reason: Revocation reason
+
+        Returns:
+            Number of tokens revoked
+        """
+        if not self.config.store_refresh_tokens:
+            return 0
+
+        # Find all active tokens for user
+        stmt = select(RefreshToken).where(
+            cast(Any, RefreshToken.user_id) == user_id,
+            cast(Any, RefreshToken.is_revoked).is_(False),
+        )
+        result = await session.execute(stmt)
+        tokens = result.scalars().all()
+
+        # Revoke all
+        revoked_count = 0
+        now = datetime.now(timezone.utc)
+        for token in tokens:
+            token.is_revoked = True
+            token.revoked_at = now
+            token.revoked_reason = reason
+            revoked_count += 1
+
+        await session.flush()
+        return revoked_count
+
+    async def list_user_sessions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> List[RefreshToken]:
+        """
+        List active refresh-token sessions for a user.
+
+        Active means not revoked and not expired. Returns newest activity first.
+        """
+        if not self.config.store_refresh_tokens:
+            return []
+
+        now = datetime.now(timezone.utc)
+        activity = func.coalesce(
+            cast(Any, RefreshToken.last_used_at),
+            cast(Any, RefreshToken.created_at),
+        )
+        stmt = (
+            select(RefreshToken)
+            .where(
+                cast(Any, RefreshToken.user_id) == user_id,
+                cast(Any, RefreshToken.is_revoked).is_(False),
+                cast(Any, RefreshToken.expires_at) > now,
+            )
+            .order_by(activity.desc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def revoke_user_session(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        token_id: UUID,
+        *,
+        reason: str = "Session revoked",
+    ) -> int:
+        """
+        Revoke one active session (and any other active tokens in its family).
+
+        Returns:
+            Number of tokens revoked.
+
+        Raises:
+            TokenInvalidError: If the session is missing, belongs to another user,
+                or is already inactive.
+        """
+        if not self.config.store_refresh_tokens:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        token_stmt = select(RefreshToken).where(cast(Any, RefreshToken.id) == token_id)
+        token_result = await session.execute(token_stmt)
+        token_model = token_result.scalar_one_or_none()
+
+        if (
+            token_model is None
+            or token_model.user_id != user_id
+            or token_model.is_revoked
+            or token_model.expires_at <= now
+        ):
+            raise TokenInvalidError(
+                message="Session not found",
+                details={"reason": "session_not_found", "session_id": str(token_id)},
+            )
+
+        family_stmt = select(RefreshToken).where(
+            cast(Any, RefreshToken.user_id) == user_id,
+            cast(Any, RefreshToken.family_id) == token_model.family_id,
+            cast(Any, RefreshToken.is_revoked).is_(False),
+        )
+        family_result = await session.execute(family_stmt)
+        revoked_count = 0
+        for family_token in family_result.scalars().all():
+            family_token.revoke(reason)
+            revoked_count += 1
+
+        await session.flush()
+        return revoked_count
+
+    async def generate_reset_token(
+        self,
+        session: AsyncSession,
+        user: User,
+    ) -> str:
+        """
+        Generate a password reset token for user.
+
+        Args:
+            session: Database session
+            user: User requesting password reset
+
+        Returns:
+            Plain reset token (to be sent via email)
+        """
+        import secrets
+
+        # Generate secure random token
+        plain_token = secrets.token_urlsafe(32)
+
+        # Hash token for storage
+        hashed_token = hashlib.sha256(plain_token.encode()).hexdigest()
+
+        # Set expiration (1 hour)
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        # Store hashed token
+        previous_reset_expires = user.password_reset_expires
+        user.password_reset_token = hashed_token
+        user.password_reset_expires = expires
+        await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="credential",
+                event_type="user.password_reset_requested",
+                event_source="auth_service.generate_reset_token",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "password_reset_requested": previous_reset_expires is not None,
+                    "password_reset_expires": previous_reset_expires,
+                },
+                after={
+                    "password_reset_requested": True,
+                    "password_reset_expires": user.password_reset_expires,
+                },
+                metadata={"delivery_channel": "email"},
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        return plain_token
+
+    async def generate_magic_link_token(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        redirect_url: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        next_url: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a single-use magic-link token for an active user.
+
+        ``profile_id`` / ``next_url`` carry the resolved frontend profile and
+        the canonical, policy-validated return target (DD-059); the bundled
+        router supplies them from request-time resolution.
+
+        The returned token is plain text for host-owned email delivery. Only a
+        hash is stored in the database.
+        """
+        plain_token = secrets.token_urlsafe(32)
+        hashed_token = self._hash_token(plain_token)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.magic_link_expire_minutes)
+
+        # Keep only the newest outstanding magic link for a user valid.
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=AuthChallengeType.MAGIC_LINK,
+            token_hash=hashed_token,
+            recipient=user.email,
+            expires_at=expires,
+            redirect_url=redirect_url,
+            profile_id=profile_id,
+            next_url=next_url,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.magic_link_requested",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "expires_at": expires.isoformat(),
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.magic_link_requested",
+                event_source="auth_service.generate_magic_link_token",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "magic_link_expires_at": expires,
+                    "recipient": user.email,
+                },
+                metadata={
+                    "delivery_channel": "email",
+                    "redirect_url": redirect_url,
+                    "profile_id": profile_id,
+                    "next_url": next_url,
+                },
+                occurred_at=now,
+            )
+
+        return plain_token
+
+    async def generate_access_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        recipient: Optional[str] = None,
+        channel: Optional[str] = None,
+        redirect_url: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        next_url: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a short-lived, single-use access code for an active user.
+
+        The returned code is plain text for host-owned delivery. The stored
+        verifier is a nonce-prefixed HMAC bound to ``recipient`` (email by
+        default, or E.164 phone when requested via WhatsApp/SMS login).
+
+        Phone requests store ``whatsapp_otp`` or ``sms_otp``; email requests
+        store ``access_code``.
+        """
+        challenge_recipient = (recipient or user.email).strip()
+        if not challenge_recipient:
+            raise InvalidInputError(
+                message="Access code recipient is required",
+                details={"field": "recipient"},
+            )
+
+        normalized_channel = (channel or "").strip().lower() or None
+        if challenge_recipient.startswith("+"):
+            delivery_channel = normalized_channel or "whatsapp"
+            if delivery_channel not in {"whatsapp", "sms"}:
+                raise InvalidInputError(
+                    message="Phone access codes must use channel=whatsapp or channel=sms",
+                    details={"field": "channel", "channel": delivery_channel},
+                )
+            challenge_type = (
+                AuthChallengeType.WHATSAPP_OTP
+                if delivery_channel == "whatsapp"
+                else AuthChallengeType.SMS_OTP
+            )
+        else:
+            delivery_channel = "email"
+            if normalized_channel not in {None, "email"}:
+                raise InvalidInputError(
+                    message="Email access codes must use channel=email or omit channel",
+                    details={"field": "channel", "channel": normalized_channel},
+                )
+            challenge_type = AuthChallengeType.ACCESS_CODE
+
+        code = self._generate_access_code()
+        token_hash = self._hash_access_code(code, challenge_recipient)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.access_code_expire_minutes)
+
+        # Keep only the newest outstanding code for this user+challenge type.
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == challenge_type.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=challenge_type,
+            token_hash=token_hash,
+            recipient=challenge_recipient,
+            expires_at=expires,
+            redirect_url=redirect_url,
+            profile_id=profile_id,
+            next_url=next_url,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.access_code_requested",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "expires_at": expires.isoformat(),
+                    "challenge_type": challenge_type.value,
+                    "delivery_channel": delivery_channel,
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.access_code_requested",
+                event_source="auth_service.generate_access_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "access_code_expires_at": expires,
+                    "recipient": challenge_recipient,
+                    "challenge_type": challenge_type.value,
+                },
+                metadata={
+                    "delivery_channel": delivery_channel,
+                    "redirect_url": redirect_url,
+                    "profile_id": profile_id,
+                    "next_url": next_url,
+                },
+                occurred_at=now,
+            )
+
+        return code
+
+    async def generate_phone_verify_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a short-lived code to verify the user's registered phone.
+
+        Plain code is for host-owned WhatsApp/SMS delivery. Stored verifier is
+        a nonce-prefixed HMAC bound to the E.164 phone number.
+        """
+        phone = (user.phone or "").strip()
+        if not phone:
+            raise InvalidInputError(
+                message="Phone number is required before verification",
+                details={"field": "phone"},
+            )
+
+        code = self._generate_access_code()
+        token_hash = self._hash_phone_verify_code(code, phone)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.access_code_expire_minutes)
+
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.PHONE_VERIFY.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=AuthChallengeType.PHONE_VERIFY,
+            token_hash=token_hash,
+            recipient=phone,
+            expires_at=expires,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.phone_verify_requested",
+                data={
+                    "user_id": str(user.id),
+                    "phone": phone,
+                    "expires_at": expires.isoformat(),
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.phone_verify_requested",
+                event_source="auth_service.generate_phone_verify_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "phone_verify_expires_at": expires,
+                    "recipient": phone,
+                },
+                metadata={"delivery_channel": "whatsapp"},
+                occurred_at=now,
+            )
+
+        return code
+
+    async def reset_password(
+        self,
+        session: AsyncSession,
+        token: str,
+        new_password: str,
+    ) -> User:
+        """
+        Reset user password using reset token.
+
+        Args:
+            session: Database session
+            token: Plain reset token (from email)
+            new_password: New password (will be hashed)
+
+        Returns:
+            User with updated password
+
+        Raises:
+            TokenInvalidError: If token is invalid or expired
+        """
+        # Hash token to find user
+        hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+        # Find user by hashed token
+        stmt = select(User).where(cast(Any, User.password_reset_token) == hashed_token)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired reset token",
+                details={"reason": "token_not_found"},
+            )
+
+        # Check expiration
+        if not user.password_reset_expires or user.password_reset_expires < datetime.now(timezone.utc):
+            # Clear expired token
+            user.password_reset_token = None
+            user.password_reset_expires = None
+            await session.flush()
+            await session.commit()
+
+            raise TokenExpiredError(
+                message="Reset token has expired",
+                details={"expired_at": user.password_reset_expires},
+            )
+
+        # Change password
+        previous_last_password_change = user.last_password_change
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+        previous_reset_expires = user.password_reset_expires
+        hashed_password = await generate_password_hash_async(new_password, self.config)
+        user.hashed_password = hashed_password
+        reset_recorded_at = datetime.now(timezone.utc)
+        user.last_password_change = reset_recorded_at
+
+        # Reset failed login attempts
+        user.failed_login_attempts = 0
+        user.locked_until = None
+
+        # Clear reset token
+        user.password_reset_token = None
+        user.password_reset_expires = None
+
+        revoked_token_count = await self.revoke_all_user_tokens(
+            session,
+            user.id,
+            reason="Password reset",
+        )
+        await session.flush()
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.password_reset",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "reset_at": reset_recorded_at.isoformat(),
+                },
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="credential",
+                event_type="user.password_reset_completed",
+                event_source="auth_service.reset_password",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "last_password_change": previous_last_password_change,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                    "password_reset_expires": previous_reset_expires,
+                },
+                after={
+                    "last_password_change": user.last_password_change,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "password_reset_expires": user.password_reset_expires,
+                },
+                metadata={"revoked_refresh_token_count": revoked_token_count},
+                occurred_at=reset_recorded_at,
+            )
+
+        return user
+
+    async def verify_access_code(
+        self,
+        session: AsyncSession,
+        *,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        code: str,
+        channel: Optional[str] = None,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Tuple[User, TokenPair]:
+        """
+        Verify an access code (email or verified phone) and create JWT tokens.
+
+        Raises:
+            TokenInvalidError: If the identifier/code pair is unknown or already used
+            TokenExpiredError: If the matching code has expired
+            AccountInactiveError: If the user cannot authenticate
+            InvalidInputError: If neither or both of email/phone are provided
+        """
+        has_email = bool(email and str(email).strip())
+        has_phone = bool(phone and str(phone).strip())
+        if has_email == has_phone:
+            raise InvalidInputError(
+                message="Provide exactly one of email or phone",
+                details={"fields": ["email", "phone"]},
+            )
+
+        normalized_code = self._normalize_access_code(code)
+        normalized_channel = (channel or "").strip().lower() or None
+
+        if has_email:
+            challenge_recipient = validate_email(str(email))
+            delivery_channel = "email"
+            challenge_types = [AuthChallengeType.ACCESS_CODE.value]
+            user_stmt = select(User).where(cast(Any, User.email) == challenge_recipient)
+        else:
+            challenge_recipient = validate_phone(str(phone))
+            delivery_channel = normalized_channel or "whatsapp"
+            if delivery_channel not in {"whatsapp", "sms"}:
+                raise InvalidInputError(
+                    message="Phone access codes must use channel=whatsapp or channel=sms",
+                    details={"field": "channel", "channel": delivery_channel},
+                )
+            primary_type = (
+                AuthChallengeType.WHATSAPP_OTP.value
+                if delivery_channel == "whatsapp"
+                else AuthChallengeType.SMS_OTP.value
+            )
+            # Accept legacy phone-bound ACCESS_CODE rows during migration.
+            challenge_types = [primary_type, AuthChallengeType.ACCESS_CODE.value]
+            user_stmt = select(User).where(
+                cast(Any, User.phone) == challenge_recipient,
+                cast(Any, User.phone_verified).is_(True),
+            )
+
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired access code",
+                details={"reason": "token_not_found"},
+            )
+
+        challenge_stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.user_id) == user.id,
+                cast(Any, AuthChallenge.challenge_type).in_(challenge_types),
+                cast(Any, AuthChallenge.used_at).is_(None),
+            )
+            .order_by(cast(Any, AuthChallenge.created_at).desc())
+            .with_for_update()
+        )
+        challenge_result = await session.execute(challenge_stmt)
+        matching_challenge = None
+        for challenge in challenge_result.scalars().all():
+            if self._verify_access_code_hash(
+                normalized_code, challenge_recipient, challenge.token_hash
+            ):
+                matching_challenge = challenge
+                break
+
+        if matching_challenge is None:
+            raise TokenInvalidError(
+                message="Invalid or expired access code",
+                details={"reason": "token_not_found"},
+            )
+
+        now = datetime.now(timezone.utc)
+        if matching_challenge.expires_at < now:
+            raise TokenExpiredError(
+                message="Access code has expired",
+                details={"expired_at": matching_challenge.expires_at.isoformat()},
+            )
+
+        previous_email_verified = user.email_verified
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+        verify_marks_email = has_email
+
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+
+        self._check_user_status(user)
+
+        matching_challenge.used_at = now
+        if verify_marks_email:
+            user.email_verified = True
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        auth_method_label = {
+            AuthChallengeType.ACCESS_CODE.value: "ACCESS_CODE",
+            AuthChallengeType.WHATSAPP_OTP.value: "WHATSAPP_OTP",
+            AuthChallengeType.SMS_OTP.value: "SMS_OTP",
+        }.get(str(matching_challenge.challenge_type), "ACCESS_CODE")
+        self._append_auth_method(user, auth_method_label)
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.access_code_verified",
+                event_source="auth_service.verify_access_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "email_verified": previous_email_verified,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "email_verified": user.email_verified,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "access_code_used_at": matching_challenge.used_at,
+                },
+                metadata={
+                    "redirect_url": matching_challenge.redirect_url,
+                    "requested_ip_address": matching_challenge.requested_ip_address,
+                    "identifier": "email" if has_email else "phone",
+                    "recipient": challenge_recipient,
+                    "delivery_channel": delivery_channel,
+                    "challenge_type": str(matching_challenge.challenge_type),
+                },
+                occurred_at=now,
+            )
+
+        tokens = await self.create_tokens_for_user(
+            session,
+            user,
+            device_name=device_name or "access_code",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            auth_method=f"access_code:{delivery_channel}",
+            app=matching_challenge.profile_id,
+        )
+
+        # Surface the challenge's frontend context (canonical next_url) to the
+        # response layer without changing this method's return shape (DD-059).
+        if matching_challenge.profile_id is not None or matching_challenge.next_url is not None:
+            stash_verified_challenge(matching_challenge.profile_id, matching_challenge.next_url)
+
+        return user, tokens
+
+    async def verify_phone_verify_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        code: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> User:
+        """
+        Verify a phone verification code and mark ``phone_verified``.
+
+        Does not issue login tokens — this is account verification only.
+        """
+        user_stmt = (
+            select(User)
+            .where(cast(Any, User.id) == user.id)
+            .with_for_update()
+        )
+        user_result = await session.execute(user_stmt)
+        locked_user = user_result.scalar_one_or_none()
+        if locked_user is None:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user.id)},
+            )
+
+        phone = (locked_user.phone or "").strip()
+        if not phone:
+            raise InvalidInputError(
+                message="Phone number is required before verification",
+                details={"field": "phone"},
+            )
+
+        normalized_code = self._normalize_access_code(code)
+        challenge_stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.user_id) == locked_user.id,
+                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.PHONE_VERIFY.value,
+                cast(Any, AuthChallenge.used_at).is_(None),
+            )
+            .order_by(cast(Any, AuthChallenge.created_at).desc())
+            .with_for_update()
+        )
+        challenge_result = await session.execute(challenge_stmt)
+        matching_challenge = None
+        for challenge in challenge_result.scalars().all():
+            if self._verify_phone_verify_code_hash(
+                normalized_code, phone, challenge.token_hash
+            ):
+                matching_challenge = challenge
+                break
+
+        if matching_challenge is None:
+            raise TokenInvalidError(
+                message="Invalid or expired verification code",
+                details={"reason": "token_not_found"},
+            )
+
+        now = datetime.now(timezone.utc)
+        expires_at = matching_challenge.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now:
+            raise TokenExpiredError(
+                message="Verification code has expired",
+                details={"expired_at": matching_challenge.expires_at.isoformat()},
+            )
+
+        if matching_challenge.recipient != phone:
+            raise TokenInvalidError(
+                message="Invalid or expired verification code",
+                details={"reason": "phone_mismatch"},
+            )
+
+        previous_phone_verified = locked_user.phone_verified
+        matching_challenge.used_at = now
+        locked_user.phone_verified = True
+        await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.phone_verified",
+                event_source="auth_service.verify_phone_verify_code",
+                subject_user_id=locked_user.id,
+                subject_email_snapshot=locked_user.email,
+                root_entity_id=locked_user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={"phone_verified": previous_phone_verified, "phone": phone},
+                after={"phone_verified": True, "phone": phone},
+                metadata={"phone_verify_used_at": matching_challenge.used_at},
+                occurred_at=now,
+            )
+
+        await session.refresh(locked_user)
+        return locked_user
+
+    async def verify_magic_link(
+        self,
+        session: AsyncSession,
+        token: str,
+        *,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Tuple[User, TokenPair]:
+        """
+        Verify a magic-link token and create JWT tokens.
+
+        Raises:
+            TokenInvalidError: If the token is unknown or already used
+            TokenExpiredError: If the token has expired
+            AccountInactiveError: If the user cannot authenticate
+        """
+        hashed_token = self._hash_token(token)
+        stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.token_hash) == hashed_token,
+                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
+            )
+            .with_for_update()
+        )
+        result = await session.execute(stmt)
+        challenge = result.scalar_one_or_none()
+
+        if not challenge:
+            raise TokenInvalidError(
+                message="Invalid or expired magic link",
+                details={"reason": "token_not_found"},
+            )
+
+        if challenge.used_at is not None:
+            raise TokenInvalidError(
+                message="Magic link has already been used",
+                details={"reason": "token_used"},
+            )
+
+        now = datetime.now(timezone.utc)
+        if challenge.expires_at < now:
+            raise TokenExpiredError(
+                message="Magic link has expired",
+                details={"expired_at": challenge.expires_at.isoformat()},
+            )
+
+        user_stmt = select(User).where(cast(Any, User.id) == challenge.user_id)
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired magic link",
+                details={"reason": "user_not_found"},
+            )
+
+        previous_email_verified = user.email_verified
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+
+        self._check_user_status(user)
+
+        challenge.used_at = now
+        user.email_verified = True
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        self._append_auth_method(user, "MAGIC_LINK")
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.magic_link_verified",
+                event_source="auth_service.verify_magic_link",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "email_verified": previous_email_verified,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "email_verified": user.email_verified,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "magic_link_used_at": challenge.used_at,
+                },
+                metadata={
+                    "redirect_url": challenge.redirect_url,
+                    "requested_ip_address": challenge.requested_ip_address,
+                },
+                occurred_at=now,
+            )
+
+        tokens = await self.create_tokens_for_user(
+            session,
+            user,
+            device_name=device_name or "magic_link",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            auth_method="magic_link",
+            app=challenge.profile_id,
+        )
+
+        # Surface the challenge's frontend context (canonical next_url) to the
+        # response layer without changing this method's return shape (DD-059).
+        if challenge.profile_id is not None or challenge.next_url is not None:
+            stash_verified_challenge(challenge.profile_id, challenge.next_url)
+
+        return user, tokens
+
+    async def verify_password(self, user: User, password: str) -> bool:
+        """
+        Verify a password against user's hashed password.
+
+        Args:
+            user: User to verify password for
+            password: Plain text password to verify
+
+        Returns:
+            True if password is correct
+        """
+        if not user.hashed_password:
+            return False
+        return await verify_password_async(password, user.hashed_password)
+
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
+    def _hash_token(self, token: str) -> str:
+        """Hash token for storage using SHA256."""
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    def _generate_access_code(self) -> str:
+        """Generate a zero-padded numeric access code."""
+        upper_bound = 10**self.config.access_code_length
+        return f"{secrets.randbelow(upper_bound):0{self.config.access_code_length}d}"
+
+    def _hash_access_code(self, code: str, recipient: str) -> str:
+        """Hash an access code with a per-challenge nonce and application secret."""
+        nonce = secrets.token_urlsafe(16)
+        digest = self._access_code_digest(code, recipient, nonce)
+        return f"v1:{nonce}:{digest}"
+
+    def _verify_access_code_hash(self, code: str, recipient: str, stored_hash: str) -> bool:
+        """Verify an access code against a stored nonce-prefixed HMAC."""
+        parts = stored_hash.split(":", 2)
+        if len(parts) != 3:
+            return False
+
+        version, nonce, expected_digest = parts
+        if version != "v1" or not nonce or not expected_digest:
+            return False
+
+        actual_digest = self._access_code_digest(code, recipient, nonce)
+        return hmac.compare_digest(actual_digest, expected_digest)
+
+    def _access_code_digest(self, code: str, recipient: str, nonce: str) -> str:
+        message = f"access_code:{nonce}:{recipient.lower()}:{code}".encode()
+        return hmac.new(self.config.secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+    def _hash_phone_verify_code(self, code: str, phone: str) -> str:
+        """Hash a phone-verify code bound to an E.164 phone number."""
+        nonce = secrets.token_urlsafe(16)
+        digest = self._phone_verify_digest(code, phone, nonce)
+        return f"v1:{nonce}:{digest}"
+
+    def _verify_phone_verify_code_hash(self, code: str, phone: str, stored_hash: str) -> bool:
+        parts = stored_hash.split(":", 2)
+        if len(parts) != 3:
+            return False
+
+        version, nonce, expected_digest = parts
+        if version != "v1" or not nonce or not expected_digest:
+            return False
+
+        actual_digest = self._phone_verify_digest(code, phone, nonce)
+        return hmac.compare_digest(actual_digest, expected_digest)
+
+    def _phone_verify_digest(self, code: str, phone: str, nonce: str) -> str:
+        message = f"phone_verify:{nonce}:{phone}:{code}".encode()
+        return hmac.new(self.config.secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _normalize_access_code(code: str) -> str:
+        """Allow common copy/paste separators without broadening valid codes."""
+        return "".join(char for char in code.strip() if char not in {" ", "-", "\t", "\n"})
+
+    @staticmethod
+    def _append_auth_method(user: User, method: str) -> None:
+        methods = list(user.auth_methods or [])
+        normalized_method = method.upper()
+        if normalized_method not in methods:
+            methods.append(normalized_method)
+            user.auth_methods = methods
+
+    @staticmethod
+    def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
+        if isinstance(value, Mapping):
+            precise_issued_at = value.get("iat_ms")
+            if precise_issued_at is not None:
+                try:
+                    return datetime.fromtimestamp(
+                        float(precise_issued_at) / 1000,
+                        tz=timezone.utc,
+                    )
+                except (TypeError, ValueError, OSError):
+                    return None
+            value = value.get("iat")
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    @classmethod
+    def _token_is_stale(
+        cls,
+        issued_at: Any,
+        last_password_change: Optional[datetime],
+    ) -> bool:
+        if last_password_change is None:
+            return False
+
+        issued_at_dt = cls._normalize_token_timestamp(issued_at)
+        if issued_at_dt is None:
+            return True
+
+        password_change_dt = (
+            last_password_change
+            if last_password_change.tzinfo is not None
+            else last_password_change.replace(tzinfo=timezone.utc)
+        )
+        return issued_at_dt < password_change_dt
+
+    async def accept_invite(
+        self,
+        session: AsyncSession,
+        token: str,
+        new_password: str,
+    ) -> User:
+        """
+        Accept an invitation by setting a password and activating the account.
+
+        Args:
+            session: Database session
+            token: Plain invite token
+            new_password: Password chosen by the invited user
+
+        Returns:
+            Activated user
+
+        Raises:
+            TokenInvalidError: If token is invalid
+            TokenExpiredError: If token has expired
+            AccountInactiveError: If user is not in INVITED status
+        """
+        # Hash token to find user (same pattern as reset_password)
+        hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+        stmt = select(User).where(cast(Any, User.invite_token) == hashed_token)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired invite token",
+                details={"reason": "token_not_found"},
+            )
+
+        # Check expiration
+        if not user.invite_token_expires or user.invite_token_expires < datetime.now(timezone.utc):
+            user.invite_token = None
+            user.invite_token_expires = None
+            await session.flush()
+
+            raise TokenExpiredError(
+                message="Invite token has expired",
+                details={"expired_at": user.invite_token_expires.isoformat() if user.invite_token_expires else None},
+            )
+
+        # Verify user is in INVITED status
+        if user.status != UserStatus.INVITED:
+            raise AccountInactiveError(
+                message="This invitation has already been accepted",
+                details={"status": user.status.value},
+            )
+
+        # Set password and activate
+        previous_status = user.status
+        previous_email_verified = user.email_verified
+        previous_invite_expires = user.invite_token_expires
+        hashed_password = await generate_password_hash_async(new_password, self.config)
+        user.hashed_password = hashed_password
+        user.status = UserStatus.ACTIVE
+        user.email_verified = True
+        accepted_at = datetime.now(timezone.utc)
+        user.last_password_change = accepted_at
+
+        # Clear invite token fields
+        user.invite_token = None
+        user.invite_token_expires = None
+
+        await session.flush()
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.invite_accepted",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "accepted_at": accepted_at.isoformat(),
+                },
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="invitation",
+                event_type="user.invite_accepted",
+                event_source="auth_service.accept_invite",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "status": previous_status,
+                    "email_verified": previous_email_verified,
+                    "invite_token_expires": previous_invite_expires,
+                },
+                after={
+                    "status": user.status,
+                    "email_verified": user.email_verified,
+                    "invite_token_expires": user.invite_token_expires,
+                },
+                occurred_at=accepted_at,
+            )
+
+        return user
+
+    def _check_user_status(self, user: User) -> None:
+        """Check if user account is active, raise appropriate error if not."""
+        if user.status == UserStatus.ACTIVE:
+            return
+
+        if user.status == UserStatus.INVITED:
+            raise AccountInactiveError(
+                message="Account has not been activated yet. Please check your email for the invitation link.",
+                details={"status": "invited"},
+            )
+        elif user.status == UserStatus.SUSPENDED:
+            suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+            raise AccountInactiveError(
+                message=f"Account is suspended{suspended_msg}",
+                details={
+                    "status": "suspended",
+                    "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None,
+                },
+            )
+        elif user.status == UserStatus.BANNED:
+            raise AccountInactiveError(
+                message="Account is permanently banned",
+                details={"status": "banned"},
+            )
+        elif user.status == UserStatus.DELETED:
+            raise AccountInactiveError(
+                message="Account has been deleted",
+                details={
+                    "status": "deleted",
+                    "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None,
+                },
+            )
+        else:
+            raise AccountInactiveError(
+                message=f"Account is {user.status.value}",
+                details={"status": user.status.value},
+            )
+
+    def _log_login_failed(
+        self,
+        email: str,
+        reason: str,
+        failed_attempts: int,
+        ip_address: Optional[str],
+        start_time: datetime,
+    ) -> None:
+        """Log failed login attempt for observability."""
+        if self.observability:
+            self.observability.log_login_failed(
+                email=email,
+                reason=reason,
+                method="password",
+                failed_attempts=failed_attempts,
+                ip_address=ip_address,
+            )
+
+    def _log_login_success(
+        self,
+        user_id: str,
+        email: str,
+        ip_address: Optional[str],
+        start_time: datetime,
+        phases: Optional[Mapping[str, float]] = None,
+    ) -> None:
+        """Log successful login for observability."""
+        if self.observability:
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            extras: dict[str, Any] = {}
+            if phases:
+                extras.update(phases)
+            self.observability.log_login_success(
+                user_id=user_id,
+                email=email,
+                method="password",
+                duration_ms=duration_ms,
+                ip_address=ip_address,
+                **extras,
+            )
+
+    def _log_account_locked(
+        self,
+        user_id: str,
+        email: str,
+        ip_address: Optional[str],
+    ) -> None:
+        """Log account lockout for observability."""
+        if self.observability:
+            self.observability.log_account_locked(
+                user_id=user_id,
+                email=email,
+                reason="Too many failed login attempts",
+                ip_address=ip_address,
+            )

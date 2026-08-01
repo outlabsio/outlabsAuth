@@ -1,0 +1,512 @@
+"""
+Activity Tracker Service for DAU/MAU/WAU/QAU metrics
+
+Uses Redis Sets for O(1) tracking with 99%+ write reduction.
+Background worker syncs to PostgreSQL for historical analytics.
+"""
+
+import asyncio
+import logging
+import time
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set, cast
+from uuid import UUID
+
+if TYPE_CHECKING:
+    from outlabs_auth.observability import ObservabilityService
+
+from sqlalchemy import bindparam
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import select
+from sqlalchemy import update as sql_update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
+
+from outlabs_auth.models.sql.activity_metric import ActivityMetric
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.services.redis_client import RedisClient
+
+logger = logging.getLogger(__name__)
+
+
+class ActivityTracker:
+    """
+    Track user activity for DAU/MAU/WAU/QAU metrics.
+
+    Uses Redis Sets for O(1) tracking with 99%+ write reduction.
+    Background worker syncs to PostgreSQL for historical analytics.
+
+    Redis Keys:
+    - active_users:daily:2025-01-24 (TTL: 48h)
+    - active_users:monthly:2025-01 (TTL: 90d)
+    - active_users:quarterly:2025-Q1 (TTL: 1y)
+    - last_activity:{user_id} (TTL: 7d)
+    """
+
+    def __init__(
+        self,
+        redis_client: RedisClient,
+        enabled: bool = True,
+        update_user_model: bool = True,
+        store_user_ids: bool = False,
+        observability: Optional["ObservabilityService"] = None,
+    ):
+        """
+        Initialize ActivityTracker.
+
+        Args:
+            redis_client: Redis client instance
+            enabled: Enable activity tracking (default: True)
+            update_user_model: Update User.last_activity (default: True)
+            store_user_ids: Store user IDs in ActivityMetric for cohort analysis (default: False)
+            observability: Optional observability service for metrics/logging
+        """
+        self.redis = redis_client
+        self.enabled = enabled
+        self.update_user_model = update_user_model
+        self.store_user_ids = store_user_ids
+        self.observability = observability
+        self._background_tasks: Set[asyncio.Task[None]] = set()
+
+    def track_activity_detached(self, user_id: str) -> None:
+        """Schedule track_activity as a background task with proper lifecycle.
+
+        Wraps asyncio.create_task so the task reference is retained (Python's
+        loop only keeps weak references — an un-held task can be GC'd mid-run)
+        and any exception that escapes track_activity's internal try/except
+        (e.g. CancelledError, unexpected raises) is surfaced to the logger
+        instead of bubbling up as "Task exception was never retrieved".
+        """
+        if not self.enabled:
+            return
+
+        task = asyncio.create_task(self.track_activity(user_id))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task: "asyncio.Task[None]") -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Activity tracking task failed", exc_info=exc)
+
+    async def track_activity(self, user_id: str) -> None:
+        """
+        Track user activity (fire-and-forget, non-blocking).
+
+        Adds user to Redis Sets for:
+        - Daily: active_users:daily:2025-01-24
+        - Monthly: active_users:monthly:2025-01
+        - Quarterly: active_users:quarterly:2025-Q1
+        - Last activity timestamp: last_activity:{user_id}
+
+        Args:
+            user_id: User ID to track
+
+        Note: This method should NEVER raise exceptions to avoid blocking
+              authenticated requests. All errors are logged and swallowed.
+        """
+        if not self.enabled:
+            return
+
+        try:
+            now = datetime.now(timezone.utc)
+
+            daily_key = self._make_daily_key(now.date())
+            monthly_key = self._make_monthly_key(now.year, now.month)
+            quarter = (now.month - 1) // 3 + 1
+            quarterly_key = self._make_quarterly_key(now.year, quarter)
+            last_activity_key = f"last_activity:{user_id}"
+            set_ops = [
+                (daily_key, 48 * 3600),
+                (monthly_key, 90 * 86400),
+                (quarterly_key, 365 * 86400),
+            ]
+
+            pipeline = getattr(self.redis, "record_activity_pipeline", None)
+            if pipeline is not None:
+                # One pipelined round trip (was 7 sequential Redis awaits per
+                # authenticated request).
+                await pipeline(
+                    member=user_id,
+                    set_ops=set_ops,
+                    last_activity_key=last_activity_key,
+                    last_activity_value=now.isoformat(),
+                    last_activity_ttl=7 * 86400,
+                )
+            else:
+                # Custom redis clients without the pipeline helper: per-op path.
+                for set_key, ttl_seconds in set_ops:
+                    await self.redis.sadd(set_key, user_id)
+                    await self.redis.expire(set_key, ttl_seconds)
+                await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
+
+            # Emit observability metrics
+            if self.observability:
+                self.observability.log_activity_tracked(user_id=user_id, period="daily")
+                self.observability.log_activity_tracked(
+                    user_id=user_id, period="monthly"
+                )
+                self.observability.log_activity_tracked(
+                    user_id=user_id, period="quarterly"
+                )
+
+            logger.debug(f"Tracked activity for user {user_id}")
+
+        except Exception as e:
+            # NEVER raise - log error and continue
+            logger.error(
+                f"Failed to track activity for user {user_id}: {e}", exc_info=True
+            )
+
+    async def get_daily_active_users(self, day: Optional[date] = None) -> int:
+        """
+        Get DAU count for a specific day (default: today).
+
+        Args:
+            day: Date to query (default: today)
+
+        Returns:
+            Count of unique active users for the day
+        """
+        if day is None:
+            day = datetime.now(timezone.utc).date()
+
+        key = self._make_daily_key(day)
+        count = await self.redis.scard(key)
+        return count
+
+    async def get_monthly_active_users(
+        self, year: Optional[int] = None, month: Optional[int] = None
+    ) -> int:
+        """
+        Get MAU count for a specific month (default: current month).
+
+        Args:
+            year: Year to query (default: current year)
+            month: Month to query (default: current month)
+
+        Returns:
+            Count of unique active users for the month
+        """
+        if year is None or month is None:
+            now = datetime.now(timezone.utc)
+            year, month = now.year, now.month
+
+        key = self._make_monthly_key(year, month)
+        count = await self.redis.scard(key)
+        return count
+
+    async def get_quarterly_active_users(
+        self, year: Optional[int] = None, quarter: Optional[int] = None
+    ) -> int:
+        """
+        Get QAU count for a specific quarter (default: current quarter).
+
+        Args:
+            year: Year to query (default: current year)
+            quarter: Quarter to query (1-4, default: current quarter)
+
+        Returns:
+            Count of unique active users for the quarter
+        """
+        if year is None or quarter is None:
+            now = datetime.now(timezone.utc)
+            year = now.year
+            quarter = (now.month - 1) // 3 + 1
+
+        key = self._make_quarterly_key(year, quarter)
+        count = await self.redis.scard(key)
+        return count
+
+    async def sync_to_database(self, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Sync Redis activity data to PostgreSQL (run periodically by background worker).
+
+        Creates ActivityMetric snapshots for historical analysis.
+        Optionally updates User.last_activity (batched).
+
+        Returns:
+            Statistics about the sync operation:
+            {
+                "daily": 1247,      # Users synced for daily metric
+                "monthly": 45892,   # Users synced for monthly metric
+                "quarterly": 128453,# Users synced for quarterly metric
+                "users_updated": 1247,  # User records updated
+                "errors": 0         # Number of errors encountered
+            }
+        """
+        start_time = time.perf_counter()
+
+        stats = {
+            "daily": 0,
+            "monthly": 0,
+            "quarterly": 0,
+            "users_updated": 0,
+            "errors": 0,
+        }
+
+        try:
+            now = datetime.now(timezone.utc)
+            today = now.date()
+
+            # 1. Sync daily metrics
+            stats["daily"] = await self._upsert_metric(
+                session,
+                metric_type="dau",
+                metric_date=today,
+                redis_key=self._make_daily_key(today),
+                snapshot_at=now,
+            )
+
+            # 2. Sync monthly metrics
+            month_date = date(now.year, now.month, 1)
+            stats["monthly"] = await self._upsert_metric(
+                session,
+                metric_type="mau",
+                metric_date=month_date,
+                redis_key=self._make_monthly_key(now.year, now.month),
+                snapshot_at=now,
+            )
+
+            # 3. Sync quarterly metrics
+            quarter = (now.month - 1) // 3 + 1
+            quarter_start_month = 3 * (quarter - 1) + 1
+            quarter_date = date(now.year, quarter_start_month, 1)
+            stats["quarterly"] = await self._upsert_metric(
+                session,
+                metric_type="qau",
+                metric_date=quarter_date,
+                redis_key=self._make_quarterly_key(now.year, quarter),
+                snapshot_at=now,
+            )
+
+            # 4. Update User.last_activity (batched)
+            if self.update_user_model and stats["daily"] > 0:
+                users_updated = await self._batch_update_last_activity(session)
+                stats["users_updated"] = users_updated
+
+            # 5. Cleanup old ActivityMetric records
+            await self._cleanup_old_metrics(session)
+
+            # Log observability
+            if self.observability:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self.observability.log_activity_sync(
+                    duration_ms=duration_ms,
+                    records_synced=stats["daily"]
+                    + stats["monthly"]
+                    + stats["quarterly"],
+                    metric_types={
+                        "dau": stats["daily"],
+                        "mau": stats["monthly"],
+                        "qau": stats["quarterly"],
+                    },
+                    errors=stats["errors"],
+                )
+
+            logger.info(
+                f"Activity sync completed: "
+                f"DAU={stats['daily']}, MAU={stats['monthly']}, QAU={stats['quarterly']}, "
+                f"users_updated={stats['users_updated']}, errors={stats['errors']}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error syncing activity metrics: {e}", exc_info=True)
+            stats["errors"] += 1
+
+            # Log observability for error case
+            if self.observability:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self.observability.log_activity_sync(
+                    duration_ms=duration_ms,
+                    records_synced=0,
+                    errors=1,
+                )
+
+        return stats
+
+    async def _upsert_metric(
+        self,
+        session: AsyncSession,
+        *,
+        metric_type: str,
+        metric_date: date,
+        redis_key: str,
+        snapshot_at: datetime,
+    ) -> int:
+        """
+        Upsert a single ActivityMetric row from a Redis set.
+        """
+        try:
+            count = await self.redis.scard(redis_key)
+            if count <= 0:
+                return 0
+
+            metric_type_col = cast(Any, ActivityMetric.metric_type)
+            metric_date_col = cast(Any, ActivityMetric.metric_date)
+            stmt = select(ActivityMetric).where(
+                metric_type_col == metric_type,
+                metric_date_col == metric_date,
+            )
+            result = await session.execute(stmt)
+            metric = result.scalar_one_or_none()
+
+            if metric:
+                metric.count = count
+                metric.unique_users = count
+                metric.snapshot_at = snapshot_at
+                await session.flush()
+            else:
+                metric = ActivityMetric(
+                    metric_type=metric_type,
+                    metric_date=metric_date,
+                    count=count,
+                    unique_users=count,
+                    snapshot_at=snapshot_at,
+                )
+                session.add(metric)
+                await session.flush()
+
+            return count
+        except Exception as e:
+            logger.error(
+                f"Error syncing metric {metric_type} {metric_date}: {e}", exc_info=True
+            )
+            return 0
+
+    async def _batch_update_last_activity(self, session: AsyncSession) -> int:
+        """
+        Batch update User.last_activity from Redis timestamps.
+
+        Returns:
+            Number of users updated
+        """
+        try:
+            # Get all last_activity keys from Redis
+            pattern = "last_activity:*"
+            cursor = 0
+            users_updated = 0
+            batch_size = 100
+            batch = []
+
+            # Scan Redis for all last_activity keys, fetching each page's
+            # values in one MGET (was one GET per user — 10k RTTs at 10k DAU).
+            while True:
+                cursor, keys = await self.redis.scan(cursor, match=pattern, count=200)
+
+                if keys:
+                    mget_raw = getattr(self.redis, "mget_raw", None)
+                    values = await mget_raw(keys) if mget_raw is not None else None
+                    if values is None or len(values) != len(keys):
+                        values = [await self.redis.get_raw(key) for key in keys]
+
+                    for key, timestamp_str in zip(keys, values):
+                        if not timestamp_str:
+                            continue
+                        user_id = key.replace("last_activity:", "")
+                        try:
+                            timestamp = datetime.fromisoformat(timestamp_str)
+                        except ValueError:
+                            continue
+
+                        batch.append((user_id, timestamp))
+
+                        # Process batch when it reaches batch_size
+                        if len(batch) >= batch_size:
+                            updated = await self._update_user_batch(session, batch)
+                            users_updated += updated
+                            batch = []
+
+                if cursor == 0:
+                    break
+
+            # Process remaining batch
+            if batch:
+                updated = await self._update_user_batch(session, batch)
+                users_updated += updated
+
+            logger.debug(f"Updated last_activity for {users_updated} users")
+            return users_updated
+
+        except Exception as e:
+            logger.error(f"Error batch updating last_activity: {e}", exc_info=True)
+            return 0
+
+    async def _update_user_batch(
+        self, session: AsyncSession, batch: list[tuple[str, datetime]]
+    ) -> int:
+        """
+        Update a batch of users' last_activity timestamps.
+
+        Args:
+            batch: List of (user_id, timestamp) tuples
+
+        Returns:
+            Number of update attempts issued (unknown user ids no-op in SQL)
+        """
+        params = []
+        for user_id, timestamp in batch:
+            try:
+                params.append({"u_id": UUID(user_id), "u_ts": timestamp})
+            except Exception:
+                continue
+
+        if not params:
+            return 0
+
+        # One executemany UPDATE per batch — previously one SELECT plus an ORM
+        # dirty-flush UPDATE per user (≈2 round trips per active user).
+        # Core-table form avoids the ORM bulk-update-by-primary-key mode.
+        users_table = User.__table__
+        stmt = (
+            sql_update(users_table)
+            .where(users_table.c.id == bindparam("u_id"))
+            .values(last_activity=bindparam("u_ts"))
+        )
+        await session.execute(stmt, params)
+        # Bulk UPDATEs bypass the unit of work; refresh rows this session
+        # already materialized so in-session readers see the change (the sync
+        # scheduler's fresh session skips this loop).
+        identity_map = session.sync_session.identity_map
+        for param in params:
+            instance = identity_map.get(identity_key(User, param["u_id"]))
+            if instance is not None:
+                await session.refresh(instance, ["last_activity"])
+        return len(params)
+
+    async def _cleanup_old_metrics(self, session: AsyncSession) -> None:
+        """
+        Cleanup old ActivityMetric records.
+
+        Deletes metrics older than activity_ttl_days (default: 90 days).
+        """
+        try:
+            ttl_days = 90
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+            stmt = sql_delete(ActivityMetric).where(
+                cast(Any, ActivityMetric.created_at) < cutoff_date
+            )
+            result = await session.execute(stmt)
+            deleted = int(getattr(result, "rowcount", 0) or 0)
+            if deleted > 0:
+                logger.info(f"Cleaned up {deleted} old ActivityMetric records")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up old metrics: {e}", exc_info=True)
+
+    # Helper methods for Redis key generation
+
+    def _make_daily_key(self, day: date) -> str:
+        """Generate Redis key for daily active users."""
+        return f"active_users:daily:{day.isoformat()}"
+
+    def _make_monthly_key(self, year: int, month: int) -> str:
+        """Generate Redis key for monthly active users."""
+        return f"active_users:monthly:{year:04d}-{month:02d}"
+
+    def _make_quarterly_key(self, year: int, quarter: int) -> str:
+        """Generate Redis key for quarterly active users."""
+        return f"active_users:quarterly:{year:04d}-Q{quarter}"
