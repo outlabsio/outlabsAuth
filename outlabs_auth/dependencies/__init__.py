@@ -23,6 +23,7 @@ from outlabs_auth.core.exceptions import (
     InvalidInputError,
     RateLimitError,
 )
+from outlabs_auth.utils.ip import ip_matches_rules
 
 logger = logging.getLogger(__name__)
 
@@ -91,15 +92,9 @@ class AuthDeps:
         granted_permissions: Iterable[str],
     ) -> bool:
         permission_service = self.services.get("permission_service")
-        normalized = {
-            ("*:*" if permission == "*" else permission)
-            for permission in granted_permissions
-            if permission
-        }
+        normalized = {("*:*" if permission == "*" else permission) for permission in granted_permissions if permission}
         if permission_service and hasattr(permission_service, "_permission_set_allows"):
-            return bool(
-                permission_service._permission_set_allows(required_permission, normalized)
-            )
+            return bool(permission_service._permission_set_allows(required_permission, normalized))
         return required_permission in normalized or "*:*" in normalized
 
     @staticmethod
@@ -127,7 +122,7 @@ class AuthDeps:
         if not whitelist:
             return True
         client_ip = request.client.host if request.client else None
-        return bool(client_ip and client_ip in whitelist)
+        return bool(client_ip and ip_matches_rules(client_ip, whitelist))
 
     async def _snapshot_entity_allowed(self, snapshot: dict[str, Any], entity_id: Optional[UUID]) -> bool:
         if entity_id is None:
@@ -453,9 +448,7 @@ class AuthDeps:
                 detail="Database session not configured for auth dependencies",
             )
 
-        abac_enabled = bool(
-            getattr(getattr(permission_service, "config", None), "enable_abac", False)
-        )
+        abac_enabled = bool(getattr(getattr(permission_service, "config", None), "enable_abac", False))
         capture: Optional[Dict[str, Any]] = None
         if (
             source == "api_key"
@@ -567,9 +560,7 @@ class AuthDeps:
         if not any(backend.has_credentials(request) for backend in self.backends):
             if optional:
                 return None
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
         for backend in self.backends:
             try:
@@ -591,9 +582,7 @@ class AuthDeps:
                             continue
 
                     if self.activity_tracker and result.get("user"):
-                        self.activity_tracker.track_activity_detached(
-                            str(result["user"].id)
-                        )
+                        self.activity_tracker.track_activity_detached(str(result["user"].id))
 
                     if is_default:
                         request.state._outlabs_auth_result = result
@@ -619,9 +608,7 @@ class AuthDeps:
         if optional:
             return None
 
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     @staticmethod
     def _rate_limit_http_exception(exc: RateLimitError) -> HTTPException:
@@ -646,9 +633,7 @@ class AuthDeps:
             headers=headers,
         )
 
-    def require_auth(
-        self, active: bool = True, verified: bool = False, optional: bool = False
-    ) -> Callable:
+    def require_auth(self, active: bool = True, verified: bool = False, optional: bool = False) -> Callable:
         signature = self._get_dependency_signature()
 
         @with_signature(signature)
@@ -685,8 +670,7 @@ class AuthDeps:
         if source == "api_key" and auth_result.get("integration_principal_id"):
             permission_service = self.services.get("permission_service")
             abac_enabled = bool(
-                permission_service
-                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+                permission_service and getattr(getattr(permission_service, "config", None), "enable_abac", False)
             )
             return entity_id is not None or abac_enabled
 
@@ -700,9 +684,7 @@ class AuthDeps:
         require_all: bool = False,
         session: Optional[AsyncSession] = None,
         entity_id: Optional[UUID] = None,
-        resource_context_provider: Optional[
-            Callable[[Request, AsyncSession, dict], Any]
-        ] = None,
+        resource_context_provider: Optional[Callable[[Request, AsyncSession, dict], Any]] = None,
     ) -> dict:
         """Authorize an auth-owned result without authenticating it again.
 
@@ -727,13 +709,15 @@ class AuthDeps:
 
         permission_service = self.services.get("permission_service")
         abac_enabled = bool(
-            permission_service
-            and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            permission_service and getattr(getattr(permission_service, "config", None), "enable_abac", False)
         )
-        if self.authenticated_authorization_requires_session(
-            auth_result,
-            entity_id=entity_id,
-        ) and session is None:
+        if (
+            self.authenticated_authorization_requires_session(
+                auth_result,
+                entity_id=entity_id,
+            )
+            and session is None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Database session not configured for auth dependencies",
@@ -743,11 +727,7 @@ class AuthDeps:
         env_context: Optional[Any] = None
         if abac_enabled:
             request_resource_context = getattr(request.state, "resource_context", None)
-            request_resource_context = (
-                request_resource_context
-                if isinstance(request_resource_context, dict)
-                else None
-            )
+            request_resource_context = request_resource_context if isinstance(request_resource_context, dict) else None
 
             if resource_context_provider is not None:
                 # ABAC always requires a session, checked above.
@@ -757,9 +737,7 @@ class AuthDeps:
                     maybe_context = await maybe_context
                 if isinstance(maybe_context, dict):
                     resource_context = (
-                        {**request_resource_context, **maybe_context}
-                        if request_resource_context
-                        else maybe_context
+                        {**request_resource_context, **maybe_context} if request_resource_context else maybe_context
                     )
             else:
                 resource_context = request_resource_context
@@ -809,9 +787,7 @@ class AuthDeps:
         *permissions: str,
         require_all: bool = False,
         allow_entity_context_header: bool = False,
-        resource_context_provider: Optional[
-            Callable[[Request, AsyncSession, dict], Any]
-        ] = None,
+        resource_context_provider: Optional[Callable[[Request, AsyncSession, dict], Any]] = None,
     ) -> Callable:
         signature = self._get_dependency_signature()
 
@@ -830,10 +806,7 @@ class AuthDeps:
                 )
 
         def _parse_entity_context_id(request: Request) -> Optional[UUID]:
-            raw = (
-                request.path_params.get("entity_id")
-                or request.query_params.get("entity_id")
-            )
+            raw = request.path_params.get("entity_id") or request.query_params.get("entity_id")
             if not raw and allow_entity_context_header:
                 raw = request.headers.get("X-Entity-Context")
             if not raw:
@@ -853,9 +826,7 @@ class AuthDeps:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Permission service not configured",
                 )
-            abac_enabled = bool(
-                getattr(getattr(permission_service, "config", None), "enable_abac", False)
-            )
+            abac_enabled = bool(getattr(getattr(permission_service, "config", None), "enable_abac", False))
 
             entity_id = _parse_entity_context_id(request)
             auth_result = getattr(request.state, "_outlabs_auth_result", None)
@@ -889,9 +860,7 @@ class AuthDeps:
 
         return cast(Callable[..., Any], dependency)
 
-    def require_entity_permission(
-        self, permission: str, entity_id_param: str = "entity_id"
-    ) -> Callable:
+    def require_entity_permission(self, permission: str, entity_id_param: str = "entity_id") -> Callable:
         """
         Require a permission in a specific entity context.
 
@@ -904,15 +873,11 @@ class AuthDeps:
 
         def _parse_uuid(raw: Any, *, detail: str) -> UUID:
             if raw is None or raw == "":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=detail
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
             try:
                 return raw if isinstance(raw, UUID) else UUID(str(raw))
             except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=detail
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
         @with_signature(signature)
         async def dependency(
@@ -923,13 +888,10 @@ class AuthDeps:
         ) -> dict:
             permission_service = self.services.get("permission_service")
             abac_enabled = bool(
-                permission_service
-                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+                permission_service and getattr(getattr(permission_service, "config", None), "enable_abac", False)
             )
 
-            raw_entity_id = request.path_params.get(
-                entity_id_param
-            ) or request.query_params.get(entity_id_param)
+            raw_entity_id = request.path_params.get(entity_id_param) or request.query_params.get(entity_id_param)
             if raw_entity_id is None and entity_id_param == "entity_id":
                 raw_entity_id = request.headers.get("X-Entity-Context")
 
@@ -974,9 +936,7 @@ class AuthDeps:
             env_context = None
             if abac_enabled:
                 resource_context = getattr(request.state, "resource_context", None)
-                resource_context = (
-                    resource_context if isinstance(resource_context, dict) else None
-                )
+                resource_context = resource_context if isinstance(resource_context, dict) else None
                 env_context = _EnvContextSupplier(request)
 
             has_perm = await self._auth_result_has_permission(
@@ -1054,8 +1014,7 @@ class AuthDeps:
         ) -> dict:
             permission_service = self.services.get("permission_service")
             abac_enabled = bool(
-                permission_service
-                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+                permission_service and getattr(getattr(permission_service, "config", None), "enable_abac", False)
             )
 
             raw_entity_id: Any = None
@@ -1092,11 +1051,7 @@ class AuthDeps:
                 )
                 snapshot_auth_result = await self._try_api_key_auth_snapshot(
                     request=request,
-                    permissions=[
-                        self._tree_permission_variant(permission)
-                        if entity_id is not None
-                        else permission
-                    ],
+                    permissions=[self._tree_permission_variant(permission) if entity_id is not None else permission],
                     require_all=True,
                     entity_id=entity_id,
                 )
@@ -1123,17 +1078,13 @@ class AuthDeps:
 
             if entity_id is None:
                 raw_entity_id = await _load_raw_entity_id()
-                entity_id = _parse_uuid_optional(
-                    raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
-                )
+                entity_id = _parse_uuid_optional(raw_entity_id, invalid_detail=f"Invalid {entity_id_field}")
 
             resource_context = None
             env_context = None
             if abac_enabled:
                 resource_context = getattr(request.state, "resource_context", None)
-                resource_context = (
-                    resource_context if isinstance(resource_context, dict) else None
-                )
+                resource_context = resource_context if isinstance(resource_context, dict) else None
                 env_context = _EnvContextSupplier(request)
 
             has_perm = await self._auth_result_has_permission(
@@ -1236,11 +1187,7 @@ class AuthDeps:
         if self._dependency_signature is not None:
             return self._dependency_signature
 
-        parameters = [
-            Parameter(
-                name="request", kind=Parameter.POSITIONAL_OR_KEYWORD, annotation=Request
-            )
-        ]
+        parameters = [Parameter(name="request", kind=Parameter.POSITIONAL_OR_KEYWORD, annotation=Request)]
 
         if self.get_session:
             parameters.append(

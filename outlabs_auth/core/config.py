@@ -6,11 +6,16 @@ from typing import Literal, Optional, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 # Minimum length for a symmetric (HS*) JWT signing secret. A short secret is
 # brute-forceable offline, which lets an attacker forge tokens — so we reject it at
 # construction time (SEC-9). Asymmetric algorithms (RS*/ES*) use PEM keys and are exempt.
 MIN_HS_SECRET_KEY_LENGTH = 32
+_SECRET_PLACEHOLDER_MARKERS = (
+    "change-me",
+    "changeme",
+    "generate-with-secrets",
+    "your-secret-key",
+)
 
 
 class AuthConfig(BaseModel):
@@ -83,6 +88,14 @@ class AuthConfig(BaseModel):
     )
     access_token_expire_minutes: int = Field(default=15, description="Access token TTL in minutes")
     refresh_token_expire_days: int = Field(default=30, description="Refresh token TTL in days")
+    refresh_token_absolute_lifetime_days: Optional[int] = Field(
+        default=90,
+        ge=1,
+        description=(
+            "Absolute session-family lifetime in days; set to None only when an "
+            "external session policy enforces an equivalent maximum"
+        ),
+    )
 
     # Password Settings
     password_min_length: int = Field(default=8, description="Minimum password length")
@@ -100,6 +113,23 @@ class AuthConfig(BaseModel):
     # Security
     max_login_attempts: int = Field(default=5, description="Max failed login attempts before lockout")
     lockout_duration_minutes: int = Field(default=30, description="Account lockout duration in minutes")
+    login_ip_rate_limit_max: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum password-login attempts per client IP in the configured window",
+    )
+    login_ip_rate_limit_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        description="Password-login client-IP rate-limit window in seconds",
+    )
+    login_ip_rate_limit_failure_mode: Literal["fail_closed", "local_fallback"] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when Redis is configured for cross-worker login throttling "
+            "but unavailable; production defaults to rejecting password login"
+        ),
+    )
 
     # Token Revocation Strategy
     enable_token_blacklist: bool = Field(
@@ -391,9 +421,7 @@ class AuthConfig(BaseModel):
                     "redis_enabled) or cache_backend='memory' for in-process caching"
                 )
             if self.cache_backend == "redis" and not self.redis_enabled:
-                raise ValueError(
-                    "cache_backend='redis' requires Redis; provide redis_url or redis_enabled=True"
-                )
+                raise ValueError("cache_backend='redis' requires Redis; provide redis_url or redis_enabled=True")
 
         if self.redis_enabled and not self.redis_key_prefix:
             raise ValueError(
@@ -411,6 +439,12 @@ class AuthConfig(BaseModel):
         RS*/ES* use PEM keys (long by construction) and are exempt.
         """
         algorithm = (self.algorithm or "").upper()
+        normalized_secret = (self.secret_key or "").strip().lower()
+        if any(marker in normalized_secret for marker in _SECRET_PLACEHOLDER_MARKERS):
+            raise ValueError(
+                "secret_key contains a known placeholder. Generate a unique secret with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
         if algorithm.startswith("HS") and len(self.secret_key or "") < MIN_HS_SECRET_KEY_LENGTH:
             raise ValueError(
                 f"secret_key must be at least {MIN_HS_SECRET_KEY_LENGTH} characters when using "

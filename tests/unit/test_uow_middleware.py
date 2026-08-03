@@ -6,6 +6,7 @@ methods) or rolled back (reads) BEFORE ``http.response.start`` is forwarded,
 so no response byte can reach the client while its writes are still pending.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -93,6 +94,32 @@ async def test_commit_failure_aborts_response_before_start_is_forwarded():
         await UnitOfWorkMiddleware(inner_app)(_http_scope("POST"), AsyncMock(), transport_send)
 
     assert forwarded == []
+    assert state.finalized
+
+
+async def test_dependency_fallback_waits_for_response_start_commit():
+    """A concurrent dependency teardown must not close the session mid-commit."""
+    state = _make_state()
+    commit_started = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def delayed_commit():
+        commit_started.set()
+        await release_commit.wait()
+
+    state.session.commit.side_effect = delayed_commit
+    middleware_finalizer = asyncio.create_task(state.finalize(commit=True))
+    await commit_started.wait()
+
+    dependency_finalizer = asyncio.create_task(state.finalize(commit=False))
+    await asyncio.sleep(0)
+    assert not dependency_finalizer.done()
+
+    release_commit.set()
+    await asyncio.gather(middleware_finalizer, dependency_finalizer)
+
+    state.session.commit.assert_awaited_once_with()
+    state.session.rollback.assert_not_awaited()
     assert state.finalized
 
 

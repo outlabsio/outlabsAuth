@@ -284,13 +284,14 @@ class SimpleRBAC(OutlabsAuth):
 
 **Example Usage**:
 ```python
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC
 
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
-SECRET_KEY = "your-secret-key"
+SECRET_KEY = os.environ["SECRET_KEY"]
 auth: SimpleRBAC = None
 
 @asynccontextmanager
@@ -380,10 +381,11 @@ class EnterpriseRBAC(OutlabsAuth):
 
 **Example - Basic Configuration** (entity hierarchy only):
 ```python
+import os
 from outlabs_auth import EnterpriseRBAC
 
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
-SECRET_KEY = "your-secret-key"
+SECRET_KEY = os.environ["SECRET_KEY"]
 
 # Minimal configuration - just entity hierarchy
 auth = EnterpriseRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
@@ -432,10 +434,11 @@ async def update_entity(
 
 **Example - Full Configuration** (all optional features enabled):
 ```python
+import os
 from outlabs_auth import EnterpriseRBAC
 
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
-SECRET_KEY = "your-secret-key"
+SECRET_KEY = os.environ["SECRET_KEY"]
 
 # Full configuration with all optional features
 auth = EnterpriseRBAC(

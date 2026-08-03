@@ -21,7 +21,7 @@ from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS, UnitOfWorkState
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.fastapi import ExceptionHandlerMode
-
+from outlabs_auth.utils.ip import ip_matches_rules
 
 logger = logging.getLogger("outlabs_auth")
 
@@ -40,9 +40,10 @@ class OutlabsAuth:
     - PostgreSQL with SQLAlchemy async
 
     Example:
+        >>> import os
         >>> auth = OutlabsAuth(
         ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-        ...     secret_key="your-secret-key-at-least-32-characters",
+        ...     secret_key=os.environ["SECRET_KEY"],
         ...     enable_entity_hierarchy=True
         ... )
         >>> await auth.initialize()
@@ -276,9 +277,7 @@ class OutlabsAuth:
         # DD-059: the canonical frontend resolution component. When not given
         # explicitly, adopt the one the multi-frontend mail service was built
         # with so routers and mail routing share a single registry.
-        self.frontend_resolver = frontend_resolver or getattr(
-            transactional_mail_service, "frontend_resolver", None
-        )
+        self.frontend_resolver = frontend_resolver or getattr(transactional_mail_service, "frontend_resolver", None)
 
         # Initialize observability
         self.observability_config = observability_config
@@ -416,7 +415,8 @@ class OutlabsAuth:
         It sets up the database connection, optionally runs migrations, and initializes services.
 
         Example:
-            >>> auth = OutlabsAuth(database_url="...", secret_key="your-secret-key-at-least-32-characters")
+            >>> import os
+            >>> auth = OutlabsAuth(database_url="...", secret_key=os.environ["SECRET_KEY"])
             >>> await auth.initialize()
             >>> # Now ready to use
         """
@@ -811,16 +811,12 @@ class OutlabsAuth:
             request.scope.setdefault(UOW_SCOPE_KEY, []).append(state)
             try:
                 yield session
-                if not state.finalized:
-                    state.finalized = True
-                    if request.method in WRITE_METHODS:
-                        await session.commit()
-                    else:
-                        await session.rollback()
-            except Exception:
-                if not state.finalized:
-                    state.finalized = True
-                    await session.rollback()
+                await state.finalize(commit=request.method in WRITE_METHODS)
+            except BaseException:
+                # Async-generator teardown uses GeneratorExit/CancelledError,
+                # not Exception. It must still wait for middleware-owned
+                # finalization before the session context is allowed to close.
+                await state.finalize(commit=False)
                 raise
 
     async def get_current_user(self, session: AsyncSession, token: str):
@@ -870,9 +866,9 @@ class OutlabsAuth:
         ip_address: Optional[str],
     ) -> bool:
         whitelist = snapshot.get("ip_whitelist") or []
-        if not whitelist or ip_address is None:
+        if not whitelist:
             return True
-        return ip_address in whitelist
+        return bool(ip_address and ip_matches_rules(ip_address, whitelist))
 
     async def _try_authorize_api_key_snapshot(
         self,

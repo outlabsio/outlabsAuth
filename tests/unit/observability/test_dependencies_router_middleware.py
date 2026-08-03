@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from prometheus_client import CollectorRegistry, Counter
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -41,10 +41,7 @@ def _make_request(
         "path": path,
         "raw_path": path.encode("utf-8"),
         "query_string": b"",
-        "headers": [
-            (key.lower().encode("utf-8"), value.encode("utf-8"))
-            for key, value in (headers or {}).items()
-        ],
+        "headers": [(key.lower().encode("utf-8"), value.encode("utf-8")) for key, value in (headers or {}).items()],
         "client": ("testclient", 123),
         "server": ("testserver", 80),
         "scheme": "http",
@@ -211,10 +208,7 @@ def _asgi_http_scope(headers: dict[str, str] | None = None) -> dict:
         "path": "/users",
         "raw_path": b"/users",
         "query_string": b"",
-        "headers": [
-            (key.lower().encode("utf-8"), value.encode("utf-8"))
-            for key, value in (headers or {}).items()
-        ],
+        "headers": [(key.lower().encode("utf-8"), value.encode("utf-8")) for key, value in (headers or {}).items()],
         "client": ("testclient", 123),
         "server": ("testserver", 80),
         "scheme": "http",
@@ -278,18 +272,13 @@ async def test_correlation_id_middleware_propagates_and_generates_ids(monkeypatc
 
     await middleware(_asgi_http_scope(), _noop_receive, send2)
     assert observed_cids[-1] == "11111111-1111-1111-1111-111111111111"
-    assert (
-        _response_header(messages2, header_name)
-        == "11111111-1111-1111-1111-111111111111"
-    )
+    assert _response_header(messages2, header_name) == "11111111-1111-1111-1111-111111111111"
     assert ObservabilityService.get_correlation_id() is None
 
 
 @pytest.mark.asyncio
 async def test_correlation_id_middleware_skips_generation_and_clears_on_errors():
-    obs_service = SimpleNamespace(
-        config=ObservabilityConfig(async_logging=False, generate_correlation_id=False)
-    )
+    obs_service = SimpleNamespace(config=ObservabilityConfig(async_logging=False, generate_correlation_id=False))
 
     async def failing_app(scope, receive, send):
         raise RuntimeError("boom")
@@ -349,7 +338,7 @@ def test_create_metrics_router_respects_enablement_and_serves_metrics():
         response = client.get("/internal/metrics")
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/plain; version=0.0.4")
+    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
     assert "outlabs_auth_test_metric_total" in response.text
     # Recent FastAPI versions retain included routers as a marker in ``app.routes``.
     # Inspect both concrete routes and that marker's original router.

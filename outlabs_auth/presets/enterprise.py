@@ -38,11 +38,12 @@ class EnterpriseRBAC(OutlabsAuth):
     - Entity path and descendant queries
 
     Example:
+        >>> import os
         >>> from outlabs_auth.presets import EnterpriseRBAC
         >>>
         >>> auth = EnterpriseRBAC(
         ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-        ...     secret_key="your-secret-key-at-least-32-characters"
+        ...     secret_key=os.environ["SECRET_KEY"]
         ... )
         >>> await auth.initialize()
         >>>

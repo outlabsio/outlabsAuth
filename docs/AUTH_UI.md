@@ -76,6 +76,11 @@ Config precedence and deploy options: see the UI repo’s
 `GET {authApiPrefix}/auth/config` advertises the preset and feature flags. The UI
 adapts navigation and forms from that snapshot.
 
+The active permission catalog is intentionally separate: authenticated admin
+screens fetch `GET {authApiPrefix}/auth/config/permissions` with a bearer token.
+That route requires `permission:read`; the public config never returns permission
+names.
+
 ### SimpleRBAC invite contract
 
 When `features.entity_hierarchy=false` and `features.context_aware_roles=false`:

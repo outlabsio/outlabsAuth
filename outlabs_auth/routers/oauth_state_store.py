@@ -55,6 +55,8 @@ async def issue_oauth_state(
     flow: str,
     user_id: Optional[UUID] = None,
     app: Optional[str] = None,
+    code_verifier: Optional[str] = None,
+    oidc_nonce: Optional[str] = None,
     cookie_secure: bool = True,
 ) -> None:
     """Persist a one-time state record and set its HttpOnly browser binding.
@@ -68,7 +70,9 @@ async def issue_oauth_state(
             state=state,
             provider=provider,
             user_id=user_id,
-            nonce=binding,
+            code_verifier=code_verifier,
+            nonce=oidc_nonce,
+            browser_binding=binding,
             profile_id=app,
         )
     )
@@ -110,7 +114,8 @@ async def consume_oauth_state(
         raise _invalid_state()
 
     result = await session.execute(
-        select(OAuthState).where(
+        select(OAuthState)
+        .where(
             cast(Any, OAuthState.state) == state,
             cast(Any, OAuthState.provider) == provider,
         )
@@ -120,8 +125,8 @@ async def consume_oauth_state(
     if (
         record is None
         or not record.is_valid()
-        or record.nonce is None
-        or not hmac.compare_digest(record.nonce, binding)
+        or record.browser_binding is None
+        or not hmac.compare_digest(record.browser_binding, binding)
         or (expected_user_id is not None and record.user_id != expected_user_id)
         or (record.profile_id or None) != (app or None)
     ):

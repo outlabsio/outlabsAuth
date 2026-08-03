@@ -8,7 +8,7 @@
 [![PyPI](https://img.shields.io/pypi/v/outlabs-auth.svg)](https://pypi.org/project/outlabs-auth/)
 [![Source](https://img.shields.io/badge/source-GitHub-black.svg)](https://github.com/outlabsio/outlabsAuth)
 
-> **Alpha** — packaged on PyPI; the public API is still settling before 1.0.
+> **Alpha release** - packaged on PyPI; the public API is still settling before 1.0.
 
 ## Why OutlabsAuth
 
@@ -124,7 +124,7 @@ For production, run migrations with the CLI (`auto_migrate=False`). Continue wit
 
 ## OutlabsAuth UI
 
-Optional sister repository: a **Vite/React** admin console that plugs into any app hosting this library. It reads `GET {authApiPrefix}/auth/config` and adapts to Simple vs Enterprise.
+Optional sister repository: a **Vite/React** admin console that plugs into any app hosting this library. It reads public feature flags from `GET {authApiPrefix}/auth/config`, then loads the permission catalog from authenticated `GET {authApiPrefix}/auth/config/permissions` when needed.
 
 ```bash
 # Terminal 1 — Enterprise example API
@@ -185,7 +185,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a26
+**Current Library Version**: 0.1.0a27
 
 **Publication Status**: Approved immutable release source for PyPI publication.
 

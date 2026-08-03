@@ -56,9 +56,7 @@ async def _ensure_database_exists(database_url: str) -> None:
         raise RuntimeError(f"Unsafe database name in DATABASE_URL: {db_name!r}")
 
     admin_url = url.set(database="postgres")
-    admin_engine = create_async_engine(
-        admin_url, echo=False, isolation_level="AUTOCOMMIT"
-    )
+    admin_engine = create_async_engine(admin_url, echo=False, isolation_level="AUTOCOMMIT")
     try:
         async with admin_engine.connect() as conn:
             exists = await conn.execute(
@@ -82,7 +80,7 @@ async def reset_database():
         database_url=DATABASE_URL,
         # The reset script never issues tokens; the secret only needs to pass
         # the library's >=32-char HS256 validation (SEC hardening).
-        secret_key=os.getenv("SECRET_KEY", "example-reset-secret-key-needs-32-characters"),
+        secret_key=os.environ["SECRET_KEY"],
         auto_migrate=False,
         enable_context_aware_roles=True,
         enable_abac=True,
@@ -108,22 +106,16 @@ async def reset_database():
     try:
         async with async_session() as session:
             print("Dropping existing test data...")
-            table_names_result = await session.execute(
-                text(
-                    """
+            table_names_result = await session.execute(text("""
                     SELECT quote_ident(tablename)
                     FROM pg_tables
                     WHERE schemaname = current_schema()
                       AND tablename != 'outlabs_auth_alembic_version'
                     ORDER BY tablename
-                    """
-                )
-            )
+                    """))
             table_names = [str(row[0]) for row in table_names_result]
             if table_names:
-                await session.execute(
-                    text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE")
-                )
+                await session.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
             await session.commit()
             print("Test data cleared\n")
 
@@ -550,9 +542,7 @@ async def reset_database():
 
             # If has parent, copy parent's ancestors
             if parent_entity:
-                stmt = select(EntityClosure).where(
-                    EntityClosure.descendant_id == parent_entity.id
-                )
+                stmt = select(EntityClosure).where(EntityClosure.descendant_id == parent_entity.id)
                 result = await session.execute(stmt)
                 parent_closures = result.scalars().all()
 
@@ -1095,14 +1085,10 @@ async def reset_database():
                 is_system_role=role_data["is_system_role"],
                 is_global=role_data["is_global"],
                 root_entity_id=(
-                    entities_map[role_data["root_entity_key"]].id
-                    if role_data.get("root_entity_key")
-                    else None
+                    entities_map[role_data["root_entity_key"]].id if role_data.get("root_entity_key") else None
                 ),
                 scope_entity_id=(
-                    entities_map[role_data["scope_entity_key"]].id
-                    if role_data.get("scope_entity_key")
-                    else None
+                    entities_map[role_data["scope_entity_key"]].id if role_data.get("scope_entity_key") else None
                 ),
                 scope=role_data.get("scope", RoleScope.HIERARCHY),
                 is_auto_assigned=role_data.get("is_auto_assigned", False),
@@ -1372,11 +1358,7 @@ async def reset_database():
 
         users_map = {}
         for user_data in users_data:
-            root_entity_id = (
-                entities_map[user_data["root_entity_key"]].id
-                if user_data.get("root_entity_key")
-                else None
-            )
+            root_entity_id = entities_map[user_data["root_entity_key"]].id if user_data.get("root_entity_key") else None
             if user_data.get("status") == UserStatus.INVITED:
                 invited_by_id = None
                 invited_by_email = user_data.get("invited_by_email")
@@ -1408,9 +1390,7 @@ async def reset_database():
             )
             user.last_login = seed_now - timedelta(hours=user_data.get("last_login_hours_ago", 18))
             user.last_activity = seed_now - timedelta(hours=user_data.get("last_activity_hours_ago", 2))
-            user.last_password_change = seed_now - timedelta(
-                days=user_data.get("last_password_change_days_ago", 45)
-            )
+            user.last_password_change = seed_now - timedelta(days=user_data.get("last_password_change_days_ago", 45))
             user.failed_login_attempts = user_data.get("failed_login_attempts", 0)
             user.locale = user_data.get("locale", "en-US")
             user.timezone = user_data.get("timezone", "America/Los_Angeles")
@@ -1448,9 +1428,7 @@ async def reset_database():
                     reason=membership_data.get("reason"),
                 )
 
-        print(
-            f"   Created {len(users_data)} test users with persona, lifecycle, and multi-root coverage\n"
-        )
+        print(f"   Created {len(users_data)} test users with persona, lifecycle, and multi-root coverage\n")
 
         print("Creating ABAC demo conditions...")
         after_hours_group = ConditionGroup(
@@ -1532,9 +1510,7 @@ async def reset_database():
             print(
                 f"   Status:   {user_data.get('status', UserStatus.ACTIVE).value if isinstance(user_data.get('status'), UserStatus) else user_data.get('status', 'active')}"
             )
-            print(
-                f"   Direct Roles: {', '.join(user_data['direct_roles']) or 'None'}"
-            )
+            print(f"   Direct Roles: {', '.join(user_data['direct_roles']) or 'None'}")
             print(
                 "   Entity Scope: "
                 + ", ".join(
@@ -1543,10 +1519,7 @@ async def reset_database():
                 )
             )
             if user_data.get("root_entity_key"):
-                print(
-                    "   Root Scope: "
-                    + entities_map[user_data["root_entity_key"]].display_name
-                )
+                print("   Root Scope: " + entities_map[user_data["root_entity_key"]].display_name)
             print(f"   Notes:    {user_data['notes']}")
             print()
 

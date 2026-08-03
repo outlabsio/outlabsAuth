@@ -84,6 +84,13 @@ def _suffix() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def _request() -> SimpleNamespace:
+    return SimpleNamespace(
+        client=SimpleNamespace(host="127.0.0.1"),
+        headers={"user-agent": "pytest"},
+    )
+
+
 async def _create_user(
     auth: EnterpriseRBAC,
     session,
@@ -135,6 +142,7 @@ async def test_auth_router_callback_happy_paths(
     verified_auth_router,
 ):
     get_config = _endpoint(auth_router, "/v1/auth/config", "GET")
+    get_permission_catalog = _endpoint(auth_router, "/v1/auth/config/permissions", "GET")
     register = _endpoint(auth_router, "/v1/auth/register", "POST")
     login = _endpoint(auth_router, "/v1/auth/login", "POST")
     verified_login = _endpoint(verified_auth_router, "/v1/auth/login", "POST")
@@ -165,9 +173,14 @@ async def test_auth_router_callback_happy_paths(
             name=f"config:{_suffix()}",
             display_name="Config Permission",
         )
-        config_response = await get_config(session=session)
+        config_response = await get_config()
         assert config_response.preset == "EnterpriseRBAC"
-        assert permission.name in config_response.available_permissions
+        assert not hasattr(config_response, "available_permissions")
+        permission_catalog = await get_permission_catalog(
+            session=session,
+            auth_result={"user_id": str(permission.id)},
+        )
+        assert permission.name in permission_catalog
 
         registered = await register(
             data=RegisterRequest(
@@ -182,6 +195,7 @@ async def test_auth_router_callback_happy_paths(
         assert registered.email.startswith("registered-")
 
         login_response = await login(
+            request=_request(),
             data=LoginRequest(email=registered.email, password="Register123!"),
             session=session,
             obs=DummyObs(),
@@ -191,6 +205,7 @@ async def test_auth_router_callback_happy_paths(
 
         with pytest.raises(HTTPException) as exc:
             await verified_login(
+                request=_request(),
                 data=LoginRequest(email=registered.email, password="Register123!"),
                 session=session,
                 obs=DummyObs(),
@@ -203,6 +218,7 @@ async def test_auth_router_callback_happy_paths(
         await session.flush()
 
         verified_login_response = await verified_login(
+            request=_request(),
             data=LoginRequest(email=registered.email, password="Register123!"),
             session=session,
             obs=DummyObs(),
@@ -240,6 +256,7 @@ async def test_auth_router_callback_happy_paths(
         assert reset_result is None
 
         relogin = await login(
+            request=_request(),
             data=LoginRequest(email=registered.email, password="Reset123!"),
             session=session,
             obs=DummyObs(),
@@ -277,6 +294,19 @@ async def test_auth_router_callback_happy_paths(
             email_prefix="super-inviter",
             is_superuser=True,
         )
+        await auth_instance.permission_service.create_permission(
+            session,
+            name="membership:create_tree",
+            display_name="Create memberships in entity trees",
+        )
+        inviter_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"inviter_role_{_suffix()}",
+            display_name="Inviter",
+            permission_names=["membership:create_tree"],
+            is_global=True,
+        )
+        await auth_instance.role_service.assign_role_to_user(session, actor.id, inviter_role.id)
 
         direct_permission = await auth_instance.permission_service.create_permission(
             session,
@@ -297,7 +327,7 @@ async def test_auth_router_callback_happy_paths(
                 role_ids=[str(direct_role.id)],
             ),
             session=session,
-            obs=DummyObs(str(actor.id)),
+            obs=DummyObs(str(super_actor.id)),
         )
         assert direct_invited.status == "invited"
         assert captured["invite_token"]
@@ -430,6 +460,7 @@ async def test_auth_router_callback_register_login_refresh_error_branches(
 
         with pytest.raises(InvalidCredentialsError):
             await login(
+                request=_request(),
                 data=LoginRequest(email=user.email, password="WrongPass123!"),
                 session=session,
                 obs=DummyObs(),
@@ -441,6 +472,7 @@ async def test_auth_router_callback_register_login_refresh_error_branches(
         monkeypatch.setattr(auth_instance.auth_service, "login", raise_http_login)
         with pytest.raises(HTTPException) as exc:
             await login(
+                request=_request(),
                 data=LoginRequest(email=user.email, password="TestPass123!"),
                 session=session,
                 obs=DummyObs(),
@@ -454,6 +486,7 @@ async def test_auth_router_callback_register_login_refresh_error_branches(
         obs = DummyObs()
         with pytest.raises(RuntimeError):
             await login(
+                request=_request(),
                 data=LoginRequest(email=user.email, password="TestPass123!"),
                 session=session,
                 obs=obs,
@@ -603,6 +636,19 @@ async def test_auth_router_callback_invite_and_accept_error_branches(
             is_global=False,
         )
         actor = await _create_user(auth_instance, session, email_prefix="invite-actor")
+        await auth_instance.permission_service.create_permission(
+            session,
+            name="membership:create_tree",
+            display_name="Create memberships in entity trees",
+        )
+        inviter_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"inviter_role_{_suffix()}",
+            display_name="Inviter",
+            permission_names=["membership:create_tree"],
+            is_global=True,
+        )
+        await auth_instance.role_service.assign_role_to_user(session, actor.id, inviter_role.id)
 
         duplicate_email = f"dup-{_suffix()}@example.com"
         await auth_instance.user_service.invite_user(

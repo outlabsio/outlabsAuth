@@ -27,13 +27,19 @@ from outlabs_auth.frontend.errors import (
 )
 from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.oauth.security import generate_nonce, generate_pkce_pair
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth_state_store import (
     consume_oauth_state,
     issue_oauth_state,
     oauth_callback_route_name,
 )
-from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
+from outlabs_auth.routers.oauth_utils import (
+    encrypt_provider_token,
+    get_oauth_user_info,
+    oauth_client_uses_oidc,
+    validate_oidc_nonce,
+)
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
 from outlabs_auth.utils.validation import validate_email
 
@@ -56,7 +62,7 @@ def _normalize_expires_at(expires_at: Optional[Any]) -> Optional[datetime]:
 
 def _generate_oauth_placeholder_password(config: Any) -> str:
     """Generate a password that satisfies the configured password policy."""
-    special_chars = "!@#$%^&*(),.?\":{}|<>"
+    special_chars = '!@#$%^&*(),.?":{}|<>'
     alphabet = "abcdefghijklmnopqrstuvwxyz"
     digits = "0123456789"
 
@@ -70,9 +76,7 @@ def _generate_oauth_placeholder_password(config: Any) -> str:
 
     min_length = max(getattr(config, "password_min_length", 8), len(required_parts))
     pool = alphabet + alphabet.upper() + digits + special_chars
-    password_chars = required_parts + [
-        secrets.choice(pool) for _ in range(min_length - len(required_parts))
-    ]
+    password_chars = required_parts + [secrets.choice(pool) for _ in range(min_length - len(required_parts))]
     secrets.SystemRandom().shuffle(password_chars)
     return "".join(password_chars)
 
@@ -228,22 +232,13 @@ def get_oauth_router(
     no self-registration via OAuth). When ``success_redirect_url`` is set, successful
     callbacks redirect to the SPA with tokens in the URL fragment instead of JSON.
     """
-    from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
-
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
     callback_route_name = oauth_callback_route_name("oauth", oauth_client.name, prefix)
 
-    if redirect_url is not None:
-        oauth2_authorize_callback = OAuth2AuthorizeCallback(
-            oauth_client,
-            redirect_url=redirect_url,
-        )
-    else:
-        oauth2_authorize_callback = OAuth2AuthorizeCallback(
-            oauth_client,
-            route_name=callback_route_name,
-        )
+    async def _no_injected_callback_state() -> None:
+        """HTTP callbacks always exchange their own authorization code."""
+        return None
 
     @router.get(
         "/authorize",
@@ -275,6 +270,8 @@ def get_oauth_router(
 
         state_data: dict[str, str] = {"app": app_key} if app_key else {}
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
+        code_verifier, code_challenge = generate_pkce_pair()
+        oidc_nonce = generate_nonce() if oauth_client_uses_oidc(oauth_client) else None
         await issue_oauth_state(
             session=session,
             response=response,
@@ -282,13 +279,18 @@ def get_oauth_router(
             provider=oauth_client.name,
             flow="login",
             app=app_key,
+            code_verifier=code_verifier,
+            oidc_nonce=oidc_nonce,
             cookie_secure=cookie_secure,
         )
 
         authorization_url = await oauth_client.get_authorization_url(
             authorize_redirect_url,
-            state,
-            scopes,
+            state=state,
+            scope=scopes,
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
+            extras_params={"nonce": oidc_nonce} if oidc_nonce else None,
         )
 
         return OAuthAuthorizeResponse(authorization_url=authorization_url)
@@ -341,9 +343,10 @@ def get_oauth_router(
         request: Request,
         response: Response,
         session: AsyncSession = Depends(auth.uow),
-        access_token_state: tuple[dict[str, Any], str] = Depends(
-            oauth2_authorize_callback
-        ),
+        code: Optional[str] = Query(default=None),
+        state: Optional[str] = Query(default=None),
+        error: Optional[str] = Query(default=None),
+        access_token_state: Optional[tuple[dict[str, Any], str]] = Depends(_no_injected_callback_state),
     ) -> Union[dict[str, Any], RedirectResponse]:
         effective_success_url = success_redirect_url
         effective_error_url = error_redirect_url
@@ -352,13 +355,20 @@ def get_oauth_router(
             if not effective_error_url:
                 raise exc
             return RedirectResponse(
-                url=_build_error_redirect(
-                    effective_error_url, error_code=_oauth_error_code(exc)
-                ),
+                url=_build_error_redirect(effective_error_url, error_code=_oauth_error_code(exc)),
                 status_code=status.HTTP_302_FOUND,
             )
 
-        token, state = access_token_state
+        token: Optional[dict[str, Any]] = None
+        if access_token_state is not None:
+            token, state = access_token_state
+        elif error or not code or not state:
+            return _maybe_error_redirect(
+                HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="OAuth provider authorization failed",
+                )
+            )
 
         try:
             state_payload = decode_state_token(state, state_secret)
@@ -383,7 +393,7 @@ def get_oauth_router(
         effective_error_url = profile_error_url or effective_error_url
 
         try:
-            await consume_oauth_state(
+            state_record = await consume_oauth_state(
                 session=session,
                 request=request,
                 response=response,
@@ -391,6 +401,33 @@ def get_oauth_router(
                 provider=oauth_client.name,
                 flow="login",
                 app=state_app,
+            )
+
+            if redirect_url is not None:
+                callback_redirect_url = redirect_url
+            else:
+                callback_redirect_url = str(request.url_for(callback_route_name))
+
+            if token is None:
+                try:
+                    token = cast(
+                        dict[str, Any],
+                        await oauth_client.get_access_token(
+                            code,
+                            callback_redirect_url,
+                            state_record.code_verifier,
+                        ),
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="OAuth authorization code exchange failed",
+                    ) from exc
+
+            await validate_oidc_nonce(
+                oauth_client,
+                token,
+                state_record.nonce if access_token_state is None else None,
             )
 
             user_info = await get_oauth_user_info(oauth_client, token)
@@ -475,12 +512,8 @@ async def oauth_callback(
             detail="is_verified_by_default requires a provider-verified email",
         )
 
-    provider_access_token = (
-        encrypt_provider_token(auth, access_token) if store_provider_tokens else None
-    )
-    provider_refresh_token = (
-        encrypt_provider_token(auth, refresh_token) if store_provider_tokens else None
-    )
+    provider_access_token = encrypt_provider_token(auth, access_token) if store_provider_tokens else None
+    provider_refresh_token = encrypt_provider_token(auth, refresh_token) if store_provider_tokens else None
 
     # 1) Existing provider account mapping.
     stmt = select(SocialAccount).where(

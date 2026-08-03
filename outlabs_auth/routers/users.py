@@ -684,9 +684,7 @@ def get_users_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
-        tokens = await auth.auth_service.list_user_sessions(
-            session, UUID(str(auth_result["user_id"]))
-        )
+        tokens = await auth.auth_service.list_user_sessions(session, UUID(str(auth_result["user_id"])))
         return [_serialize_user_session(token) for token in tokens]
 
     @router.delete(
@@ -741,9 +739,7 @@ def get_users_router(
             display_name=account.display_name,
             avatar_url=account.avatar_url,
             linked_at=account.created_at.isoformat(),
-            last_used_at=(
-                account.last_login_at.isoformat() if account.last_login_at else None
-            ),
+            last_used_at=(account.last_login_at.isoformat() if account.last_login_at else None),
         )
 
     @router.get(
@@ -800,9 +796,7 @@ def get_users_router(
             )
 
         remaining_accounts = await session.execute(
-            select(func.count())
-            .select_from(SocialAccount)
-            .where(cast(Any, SocialAccount.user_id) == user_id)
+            select(func.count()).select_from(SocialAccount).where(cast(Any, SocialAccount.user_id) == user_id)
         )
         social_count = int(remaining_accounts.scalar_one())
         # Usable password login is tracked via auth_methods, not merely a hash
@@ -1385,6 +1379,11 @@ def get_users_router(
         Triggers on_after_invite hook with the new token.
         """
         try:
+            if not auth.config.enable_invitations:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Invitation endpoints are disabled",
+                )
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
@@ -1658,7 +1657,6 @@ def get_users_router(
             obs.log_500_error(e, target_user_id=str(user_id), role_id=str(role_id))
             raise
 
-
     def _serialize_user_role_membership(membership: Any) -> UserRoleMembershipResponse:
         return UserRoleMembershipResponse(
             id=str(membership.id),
@@ -1681,8 +1679,7 @@ def get_users_router(
         response_model=UserRoleMembershipResponse,
         summary="Update user role membership",
         description=(
-            "Update a direct role membership validity window and/or status "
-            "(requires user:update permission)."
+            "Update a direct role membership validity window and/or status " "(requires user:update permission)."
         ),
     )
     async def update_user_role_membership_endpoint(
@@ -1795,9 +1792,7 @@ def get_users_router(
     ):
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            subject_user = await _get_target_user_or_404(
-                session, user_id, actor_user, for_mutation=True
-            )
+            subject_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
             reason = "Session revoked by admin"
             try:
                 revoked_count = await auth.auth_service.revoke_user_session(
@@ -1851,9 +1846,7 @@ def get_users_router(
     ):
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            subject_user = await _get_target_user_or_404(
-                session, user_id, actor_user, for_mutation=True
-            )
+            subject_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
             reason = "All sessions revoked by admin"
             revoked_count = await auth.auth_service.revoke_all_user_tokens(
                 session,
@@ -1881,8 +1874,7 @@ def get_users_router(
         response_model=List[ApiKeyResponse],
         summary="List a user's personal API keys",
         description=(
-            "List personal API keys owned by a user (requires user:read permission). "
-            "Does not return key secrets."
+            "List personal API keys owned by a user (requires user:read permission). " "Does not return key secrets."
         ),
     )
     async def list_user_api_keys_endpoint(
@@ -1913,9 +1905,7 @@ def get_users_router(
         "/{user_id}/api-keys/{key_id}",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Revoke a user's personal API key",
-        description=(
-            "Revoke a personal API key owned by a user (requires user:update permission)."
-        ),
+        description=("Revoke a personal API key owned by a user (requires user:update permission)."),
     )
     async def revoke_user_api_key_endpoint(
         user_id: UUID,

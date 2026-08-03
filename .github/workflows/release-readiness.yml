@@ -9,8 +9,20 @@ on:
       - "v*"
 
 jobs:
-  production-dependency-audit:
+  dependency-audit:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - graph: core
+            extras: ""
+          - graph: runtime-extras
+            extras: "--extra oauth --extra notifications --extra redis"
+          - graph: development
+            extras: "--extra dev --extra test"
+          - graph: stress
+            extras: "--extra stress"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -21,14 +33,15 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Audit production dependency set
-        # Audit the exact locked runtime dependency graph, excluding this unreleased
-        # local package (which is intentionally absent from PyPI until publication).
-        # Dev/stress extras remain out of scope for this production gate.
+      - name: Audit ${{ matrix.graph }} dependency set
+        # Audit each exact locked graph separately so a development-only issue
+        # cannot be mistaken for runtime exposure and optional production
+        # integrations cannot escape the release gate.
         run: >-
           uv export --locked --no-dev --no-emit-project --format requirements-txt
+          ${{ matrix.extras }}
           | uv run --no-project --with pip-audit pip-audit --strict --progress-spinner off
-          --no-deps --disable-pip -r /dev/stdin
+          --no-deps --disable-pip --timeout 60 -r /dev/stdin
 
   library:
     runs-on: ubuntu-latest

@@ -36,6 +36,7 @@ from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.utils.ip import ip_matches_rules, normalize_ip_rules
 
 if TYPE_CHECKING:
     from outlabs_auth.observability.service import ObservabilityService
@@ -268,6 +269,14 @@ class APIKeyService(BaseService[APIKey]):
         if integration_principal is not None:
             entity_id = integration_principal.anchor_entity_id
             inherit_from_tree = integration_principal.inherit_from_tree
+
+        try:
+            ip_whitelist = normalize_ip_rules(ip_whitelist or []) or None
+        except ValueError as exc:
+            raise InvalidInputError(
+                message="IP whitelist entries must be valid IP addresses or CIDR ranges",
+                details={"ip_whitelist": ip_whitelist or []},
+            ) from exc
 
         if self.policy_service is not None:
             await self.policy_service.validate_create(
@@ -517,10 +526,7 @@ class APIKeyService(BaseService[APIKey]):
                 last_used_key=self._make_last_used_key(key_id),
                 last_used_value=datetime.now(timezone.utc).isoformat(),
                 last_used_ttl=self.config.cache_ttl_seconds,
-                rate_windows=[
-                    (self._make_rate_limit_key(key_id, window), ttl)
-                    for window, ttl, _limit in windows
-                ],
+                rate_windows=[(self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows],
             )
             if counts is not None:
                 usage_count = int(counts.get(usage_key, 0))
@@ -568,9 +574,7 @@ class APIKeyService(BaseService[APIKey]):
         return PermissionService._permission_set_allows(required_scope, normalized)
 
     @staticmethod
-    def principal_scopes_allow_permission(
-        allowed_scopes: Optional[List[str]], required_scope: str
-    ) -> bool:
+    def principal_scopes_allow_permission(allowed_scopes: Optional[List[str]], required_scope: str) -> bool:
         """Like ``scopes_allow_permission`` but FAILS CLOSED on an empty allow-list (SEC-13).
 
         Integration principals / service accounts have no owner to bound them, so an empty
@@ -605,7 +609,7 @@ class APIKeyService(BaseService[APIKey]):
         if not allowed_ips:
             return True
 
-        return ip_address in allowed_ips
+        return ip_matches_rules(ip_address, allowed_ips)
 
     async def _check_rate_limits(self, api_key: APIKey) -> None:
         """
@@ -753,9 +757,7 @@ class APIKeyService(BaseService[APIKey]):
         assert self.redis_client is not None
         batches: dict[UUID, dict[str, int]] = {}
 
-        staged_counters = await self.redis_client.get_all_counters(
-            self._make_staged_usage_counter_pattern()
-        )
+        staged_counters = await self.redis_client.get_all_counters(self._make_staged_usage_counter_pattern())
         for counter_key, usage_count in staged_counters.items():
             parsed = self._parse_staged_usage_counter_key(counter_key)
             if parsed is None or usage_count <= 0:
@@ -820,9 +822,7 @@ class APIKeyService(BaseService[APIKey]):
                     raw_values = [await redis_client.get_raw(key) for key in last_used_keys]
 
                 existing_result = await session.execute(
-                    select(cast(Any, APIKey.id)).where(
-                        cast(Any, APIKey.id).in_([key_id for key_id, _, _ in entries])
-                    )
+                    select(cast(Any, APIKey.id)).where(cast(Any, APIKey.id).in_([key_id for key_id, _, _ in entries]))
                 )
                 existing_ids = set(existing_result.scalars().all())
                 params: list[dict[str, Any]] = []
@@ -1027,17 +1027,12 @@ class APIKeyService(BaseService[APIKey]):
         current_versions = await self._current_auth_snapshot_versions(
             user_id=str(snapshot["user_id"]) if snapshot.get("user_id") else None,
             integration_principal_id=(
-                str(snapshot["integration_principal_id"])
-                if snapshot.get("integration_principal_id")
-                else None
+                str(snapshot["integration_principal_id"]) if snapshot.get("integration_principal_id") else None
             ),
             entity_id=str(snapshot["entity_id"]) if snapshot.get("entity_id") else None,
         )
         try:
-            normalized_snapshot_versions = {
-                str(key): int(value)
-                for key, value in snapshot_versions.items()
-            }
+            normalized_snapshot_versions = {str(key): int(value) for key, value in snapshot_versions.items()}
         except (TypeError, ValueError):
             return False
         return normalized_snapshot_versions == current_versions
@@ -1131,9 +1126,7 @@ class APIKeyService(BaseService[APIKey]):
         )
         user_id = str(auth_result["user_id"]) if auth_result.get("user_id") else None
         integration_principal_id = (
-            str(auth_result["integration_principal_id"])
-            if auth_result.get("integration_principal_id")
-            else None
+            str(auth_result["integration_principal_id"]) if auth_result.get("integration_principal_id") else None
         )
         entity_id = str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None
         versions = await self._current_auth_snapshot_versions(
@@ -1257,9 +1250,7 @@ class APIKeyService(BaseService[APIKey]):
         key_id = str(snapshot["key_id"])
         usage_key = self._make_usage_counter_key(key_id)
         windows = self._snapshot_rate_windows(snapshot)
-        rate_windows = [
-            (self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows
-        ]
+        rate_windows = [(self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows]
 
         counts = await self.redis_client.record_api_key_usage_pipeline(
             usage_key=usage_key,
@@ -1860,6 +1851,15 @@ class APIKeyService(BaseService[APIKey]):
                 message="System integration API keys inherit entity scope from their integration principal",
                 details={"key_id": str(key_id)},
             )
+
+        if "ip_whitelist" in updates:
+            try:
+                updates["ip_whitelist"] = normalize_ip_rules(updates["ip_whitelist"] or [])
+            except ValueError as exc:
+                raise InvalidInputError(
+                    message="IP whitelist entries must be valid IP addresses or CIDR ranges",
+                    details={"ip_whitelist": updates["ip_whitelist"] or []},
+                ) from exc
 
         grant_fields_changed = any(field in updates for field in {"scopes", "entity_id", "inherit_from_tree"})
         if self.policy_service is not None and grant_fields_changed:

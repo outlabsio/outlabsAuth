@@ -118,8 +118,7 @@ class MagicLinkRequest(BaseModel):
         default=None,
         max_length=64,
         description=(
-            "Registered frontend profile key naming the app this request came "
-            "from (DD-059). A key, never a URL."
+            "Registered frontend profile key naming the app this request came " "from (DD-059). A key, never a URL."
         ),
     )
     redirect_url: Optional[str] = Field(
@@ -160,8 +159,7 @@ class AccessCodeRequest(BaseModel):
         default=None,
         max_length=64,
         description=(
-            "Registered frontend profile key naming the app this request came "
-            "from (DD-059). A key, never a URL."
+            "Registered frontend profile key naming the app this request came " "from (DD-059). A key, never a URL."
         ),
     )
     redirect_url: Optional[str] = Field(
@@ -268,10 +266,7 @@ class AcceptInviteRequest(BaseModel):
     app: Optional[str] = Field(
         default=None,
         max_length=64,
-        description=(
-            "Registered frontend profile key the auto-login session is for "
-            "(DD-059). A key, never a URL."
-        ),
+        description=("Registered frontend profile key the auto-login session is for " "(DD-059). A key, never a URL."),
     )
 
 
@@ -291,7 +286,4 @@ class AuthConfigResponse(BaseModel):
     auth_methods: Dict[str, bool] = Field(
         default_factory=lambda: {"password": True, "magic_link": False, "access_code": False},
         description="Public human-auth methods currently enabled by this auth router.",
-    )
-    available_permissions: List[str] = Field(
-        ..., description="List of all available permission strings for this preset"
     )

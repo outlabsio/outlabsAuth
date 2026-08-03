@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC, SimpleRBAC
 from outlabs_auth.fastapi import register_exception_handlers
-from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.models.sql.enums import EntityClass, RoleScope
 from outlabs_auth.routers import get_auth_router, get_memberships_router, get_users_router
 from outlabs_auth.utils.jwt import create_access_token
 
@@ -137,8 +137,9 @@ async def verification_client(verification_app: FastAPI) -> httpx.AsyncClient:
 async def test_auth_config_returns_expected_features_and_permissions(
     enterprise_client: httpx.AsyncClient,
     enterprise_auth_instance: EnterpriseRBAC,
+    enterprise_admin: dict,
 ):
-    """Cover the auth runtime config contract consumed by admin UIs."""
+    """Keep feature flags public and expose permissions only to authorized users."""
     permission_name = f"config{uuid.uuid4().hex[:6]}:read"
     async with enterprise_auth_instance.get_session() as session:
         await enterprise_auth_instance.permission_service.create_permission(
@@ -159,7 +160,80 @@ async def test_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["magic_links"] is False
     assert payload["features"]["access_codes"] is False
     assert payload["auth_methods"] == {"password": True, "magic_link": False, "access_code": False}
-    assert permission_name in payload["available_permissions"]
+    assert "available_permissions" not in payload
+
+    unauthenticated_catalog = await enterprise_client.get("/v1/auth/config/permissions")
+    assert unauthenticated_catalog.status_code == 401
+
+    catalog_response = await enterprise_client.get(
+        "/v1/auth/config/permissions",
+        headers={"Authorization": f"Bearer {enterprise_admin['token']}"},
+    )
+    assert catalog_response.status_code == 200
+    assert permission_name in catalog_response.json()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_invitation_feature_flag_disables_all_invitation_routes(
+    enterprise_client: httpx.AsyncClient,
+    enterprise_auth_instance: EnterpriseRBAC,
+    enterprise_admin: dict,
+):
+    enterprise_auth_instance.config.enable_invitations = False
+    headers = {"Authorization": f"Bearer {enterprise_admin['token']}"}
+
+    invite_response = await enterprise_client.post(
+        "/v1/auth/invite",
+        headers=headers,
+        json={
+            "email": f"disabled-invite-{uuid.uuid4().hex[:8]}@example.com",
+            "first_name": "Disabled",
+            "last_name": "Invite",
+            "role_ids": [],
+        },
+    )
+    assert invite_response.status_code == 404
+
+    accept_response = await enterprise_client.post(
+        "/v1/auth/accept-invite",
+        json={"token": "not-used", "new_password": "AcceptedPass123!"},
+    )
+    assert accept_response.status_code == 404
+
+    async with enterprise_auth_instance.get_session() as session:
+        invited, _ = await enterprise_auth_instance.user_service.invite_user(
+            session,
+            email=f"disabled-resend-{uuid.uuid4().hex[:8]}@example.com",
+            first_name="Disabled",
+            last_name="Resend",
+        )
+        await session.commit()
+
+    resend_response = await enterprise_client.post(
+        f"/v1/users/{invited.id}/resend-invite",
+        headers=headers,
+    )
+    assert resend_response.status_code == 404
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_password_login_is_rate_limited_by_client_ip_without_enumeration_details(
+    enterprise_client: httpx.AsyncClient,
+    enterprise_auth_instance: EnterpriseRBAC,
+):
+    enterprise_auth_instance.config.login_ip_rate_limit_max = 1
+    email = f"unknown-login-{uuid.uuid4().hex[:8]}@example.com"
+    payload = {"email": email, "password": "WrongPass123!"}
+
+    first = await enterprise_client.post("/v1/auth/login", json=payload)
+    second = await enterprise_client.post("/v1/auth/login", json=payload)
+
+    assert first.status_code == 401
+    assert "failed_attempts" not in first.text
+    assert "max_attempts" not in first.text
+    assert second.status_code == 429
 
 
 @pytest.mark.integration
@@ -245,6 +319,92 @@ async def test_invite_with_entity_membership_can_be_accepted_and_activated(
         assert user.email_verified is True
         assert user.invite_token is None
         assert user.invite_token_expires is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_invite_rejects_implicit_auto_role_the_actor_cannot_grant(
+    enterprise_client: httpx.AsyncClient,
+    enterprise_auth_instance: EnterpriseRBAC,
+):
+    """Auto-assigned roles cannot bypass invite-time delegation containment."""
+    unique = uuid.uuid4().hex[:8]
+    invited_email = f"blocked-auto-role-{unique}@example.com"
+
+    async with enterprise_auth_instance.get_session() as session:
+        for permission_name in (
+            "user:create",
+            "membership:create_tree",
+            "user:delete",
+        ):
+            await enterprise_auth_instance.permission_service.create_permission(
+                session,
+                name=permission_name,
+                display_name=permission_name,
+            )
+
+        root = await enterprise_auth_instance.entity_service.create_entity(
+            session=session,
+            name=f"auto-role-root-{unique}",
+            display_name="Auto Role Root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        actor_role = await enterprise_auth_instance.role_service.create_role(
+            session,
+            name=f"invite-actor-{unique}",
+            display_name="Invite Actor",
+            permission_names=["user:create", "membership:create_tree"],
+            is_global=True,
+        )
+        await enterprise_auth_instance.role_service.create_role(
+            session,
+            name=f"dangerous-auto-role-{unique}",
+            display_name="Dangerous Auto Role",
+            permission_names=["user:delete"],
+            root_entity_id=root.id,
+            scope_entity_id=root.id,
+            scope=RoleScope.ENTITY_ONLY,
+            is_global=False,
+            is_auto_assigned=True,
+        )
+        actor = await enterprise_auth_instance.user_service.create_user(
+            session=session,
+            email=f"invite-actor-{unique}@example.com",
+            password="TestPass123!",
+            first_name="Invite",
+            last_name="Actor",
+        )
+        await enterprise_auth_instance.role_service.assign_role_to_user(
+            session,
+            actor.id,
+            actor_role.id,
+        )
+        await session.commit()
+
+        actor_token = create_access_token(
+            {"sub": str(actor.id)},
+            secret_key=enterprise_auth_instance.config.secret_key,
+            algorithm=enterprise_auth_instance.config.algorithm,
+            audience=enterprise_auth_instance.config.jwt_audience,
+        )
+
+    response = await enterprise_client.post(
+        "/v1/auth/invite",
+        headers={"Authorization": f"Bearer {actor_token}"},
+        json={
+            "email": invited_email,
+            "first_name": "Blocked",
+            "last_name": "Invite",
+            "entity_id": str(root.id),
+            "role_ids": [],
+        },
+    )
+    assert response.status_code == 403
+    assert "user:delete" in response.text
+
+    async with enterprise_auth_instance.get_session() as session:
+        assert await enterprise_auth_instance.user_service.get_user_by_email(session, invited_email) is None
 
 
 @pytest.mark.integration

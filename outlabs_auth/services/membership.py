@@ -257,9 +257,7 @@ class MembershipService(BaseService[EntityMembership]):
 
             # Update roles via junction table
             # First, clear existing roles
-            stmt = sql_delete(EntityMembershipRole).where(
-                cast(Any, EntityMembershipRole.membership_id) == existing.id
-            )
+            stmt = sql_delete(EntityMembershipRole).where(cast(Any, EntityMembershipRole.membership_id) == existing.id)
             await session.execute(stmt)
 
             # Add new roles
@@ -636,11 +634,7 @@ class MembershipService(BaseService[EntityMembership]):
         # Get paginated results with roles eager loaded
         skip = (page - 1) * limit
         stmt = (
-            select(EntityMembership)
-            .where(*filters)
-            .options(self._membership_roles_option())
-            .offset(skip)
-            .limit(limit)
+            select(EntityMembership).where(*filters).options(self._membership_roles_option()).offset(skip).limit(limit)
         )
         result = await session.execute(stmt)
         memberships = list(result.scalars().all())
@@ -807,11 +801,7 @@ class MembershipService(BaseService[EntityMembership]):
         if active_only:
             filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
-        stmt = (
-            select(EntityMembership)
-            .where(*filters)
-            .options(*self._membership_roles_entity_options())
-        )
+        stmt = select(EntityMembership).where(*filters).options(*self._membership_roles_entity_options())
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -900,11 +890,7 @@ class MembershipService(BaseService[EntityMembership]):
         if active_only:
             filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
-        stmt = (
-            select(EntityMembership)
-            .where(*filters)
-            .options(self._membership_roles_option())
-        )
+        stmt = select(EntityMembership).where(*filters).options(self._membership_roles_option())
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1144,9 +1130,7 @@ class MembershipService(BaseService[EntityMembership]):
         entity_contexts = await self._entity_snapshot_contexts(session, [entity_id])
         entity_context = entity_contexts.get(entity_id)
         user_ids = {membership.user_id for membership in memberships}
-        users_result = await session.execute(
-            select(User).where(cast(Any, User.id).in_(user_ids))
-        )
+        users_result = await session.execute(select(User).where(cast(Any, User.id).in_(user_ids)))
         users_by_id = {user.id: user for user in users_result.scalars().all()}
 
         for membership in memberships:
@@ -1316,24 +1300,14 @@ class MembershipService(BaseService[EntityMembership]):
                 active_membership_count=0,
                 total_membership_count=int(membership_counts.get(user.id, 0) or 0),
                 last_event_type=(
-                    latest_history_by_user[user.id].event_type
-                    if user.id in latest_history_by_user
-                    else None
+                    latest_history_by_user[user.id].event_type if user.id in latest_history_by_user else None
                 ),
-                last_event_at=(
-                    latest_history_by_user[user.id].event_at
-                    if user.id in latest_history_by_user
-                    else None
-                ),
+                last_event_at=(latest_history_by_user[user.id].event_at if user.id in latest_history_by_user else None),
                 last_entity_id=(
-                    latest_history_by_user[user.id].entity_id
-                    if user.id in latest_history_by_user
-                    else None
+                    latest_history_by_user[user.id].entity_id if user.id in latest_history_by_user else None
                 ),
                 last_entity_name=(
-                    latest_history_by_user[user.id].entity_display_name
-                    if user.id in latest_history_by_user
-                    else None
+                    latest_history_by_user[user.id].entity_display_name if user.id in latest_history_by_user else None
                 ),
             )
             for user in users
@@ -1494,9 +1468,7 @@ class MembershipService(BaseService[EntityMembership]):
             root_entity_id = await self._get_root_entity_id(session, membership.entity_id)
             root_entity = await session.get(Entity, root_entity_id) if root_entity_id else None
             root_entity_name = (
-                root_entity.display_name
-                if root_entity is not None
-                else (entity_path[0] if entity_path else None)
+                root_entity.display_name if root_entity is not None else (entity_path[0] if entity_path else None)
             )
 
         return {
@@ -1505,9 +1477,7 @@ class MembershipService(BaseService[EntityMembership]):
             "valid_until": membership.valid_until,
             "role_ids": [role.id for role in roles],
             "role_names": [
-                (getattr(role, "display_name", None) or role.name)
-                for role in roles
-                if getattr(role, "name", None)
+                (getattr(role, "display_name", None) or role.name) for role in roles if getattr(role, "name", None)
             ],
             "entity_display_name": entity_display_name,
             "entity_path": entity_path,
@@ -1688,9 +1658,7 @@ class MembershipService(BaseService[EntityMembership]):
 
         for role_id in ordered_ids:
             if role_id not in by_id:
-                raise RoleNotFoundError(
-                    message="Role not found", details={"role_id": str(role_id)}
-                )
+                raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
 
         return [by_id[role_id] for role_id in ordered_ids]
 
@@ -1713,9 +1681,7 @@ class MembershipService(BaseService[EntityMembership]):
         if cached is not None:
             return set(cached)
 
-        stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
-            cast(Any, EntityClosure.descendant_id) == entity_id
-        )
+        stmt = select(cast(Any, EntityClosure.ancestor_id)).where(cast(Any, EntityClosure.descendant_id) == entity_id)
         result = await session.execute(stmt)
         ancestors = {row[0] for row in result.all()}
         request_cache.set_value(("ancestors", entity_id), ancestors)
@@ -1773,9 +1739,7 @@ class MembershipService(BaseService[EntityMembership]):
                 # ancestor. Reuse a pre-fetched ancestor set when the caller is
                 # validating multiple roles for the same entity in a batch.
                 if ancestor_ids is None:
-                    ancestor_ids = await self._get_entity_ancestor_ids(
-                        session, entity_id
-                    )
+                    ancestor_ids = await self._get_entity_ancestor_ids(session, entity_id)
                 return role.scope_entity_id in ancestor_ids
             else:
                 # Entity-only scope: available only at the exact scope entity
@@ -1792,9 +1756,7 @@ class MembershipService(BaseService[EntityMembership]):
         if not entity_type:
             return False
 
-        return entity_type.lower() in {
-            role_entity_type.lower() for role_entity_type in role.assignable_at_types
-        }
+        return entity_type.lower() in {role_entity_type.lower() for role_entity_type in role.assignable_at_types}
 
     async def _get_auto_assigned_roles_for_entity(
         self,
@@ -1853,11 +1815,15 @@ class MembershipService(BaseService[EntityMembership]):
 
         stmt = select(Role).where(role_filter).order_by(cast(Any, Role.name))
         result = await session.execute(stmt)
-        return [
-            role
-            for role in result.scalars().all()
-            if self._allows_entity_type(role, entity.entity_type)
-        ]
+        return [role for role in result.scalars().all() if self._allows_entity_type(role, entity.entity_type)]
+
+    async def get_auto_assigned_roles_for_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> List[Role]:
+        """Return roles implicitly granted when a membership is created."""
+        return await self._get_auto_assigned_roles_for_entity(session, entity_id)
 
     async def apply_auto_assigned_role(
         self,
@@ -1939,11 +1905,7 @@ class MembershipService(BaseService[EntityMembership]):
         # Add role to memberships that don't already have it
         updated_count = 0
         for membership in memberships:
-            entity_type = (
-                membership.entity.entity_type
-                if getattr(membership, "entity", None) is not None
-                else None
-            )
+            entity_type = membership.entity.entity_type if getattr(membership, "entity", None) is not None else None
             if not self._allows_entity_type(role, entity_type):
                 continue
 

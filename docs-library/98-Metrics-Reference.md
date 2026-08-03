@@ -13,6 +13,11 @@ OutlabsAuth registers auth-domain Prometheus metrics. In **embedded** hosts they
 appear on the host’s `/metrics` scrape; in **standalone** demos the library may
 mount `/metrics` itself.
 
+The optional OutlabsAuth metrics router is mounted only when
+`include_metrics=True` and does not add application-level authentication.
+Expose it only on an internal listener or protect it with gateway authentication
+or network policy. Do not publish it directly to the internet.
+
 **Metric types:** Counter (monotonic), Histogram (distributions), Gauge (up/down).
 
 **Common labels:** `status`, `method`, `permission`, `result` (exact sets vary

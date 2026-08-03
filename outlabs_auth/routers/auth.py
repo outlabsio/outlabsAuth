@@ -5,12 +5,17 @@ Provides ready-to-use authentication routes (DD-041).
 """
 
 from enum import Enum
-from typing import Any, Optional
+import secrets
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.core.exceptions import OutlabsAuthException
+from outlabs_auth.core.exceptions import (
+    OutlabsAuthException,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from outlabs_auth.frontend.errors import WrongApplicationError
 from outlabs_auth.frontend.flows import (
     consume_verified_challenge,
@@ -25,6 +30,7 @@ from outlabs_auth.observability import (
     get_observability_with_auth,
 )
 from outlabs_auth.response_builders import build_user_response_async
+from outlabs_auth.routers._authz_utils import require_can_delegate_roles
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
     AccessCodeRequest,
@@ -47,6 +53,7 @@ from outlabs_auth.utils.rate_limit import (
     check_access_code_request_rate_limit,
     check_access_code_verify_rate_limit,
     check_forgot_password_rate_limit,
+    check_login_ip_rate_limit,
     check_magic_link_rate_limit,
 )
 
@@ -87,6 +94,9 @@ def get_auth_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["auth"])
+    login_rate_limit_namespace = (
+        auth.config.redis_key_prefix if auth.config.redis_enabled else f"instance:{secrets.token_urlsafe(12)}"
+    )
 
     # Create observability dependency (no auth required for public endpoints)
     get_obs = get_observability_dependency(auth.observability)
@@ -97,19 +107,16 @@ def get_auth_router(
         summary="Get auth configuration",
         description="Returns preset type and enabled features (used by admin UIs)",
     )
-    async def get_config(
-        session: AsyncSession = Depends(auth.uow),
-    ):
+    async def get_config():
         """
         Get OutlabsAuth configuration.
 
         Returns:
             - preset: SimpleRBAC or EnterpriseRBAC
             - features: Enabled features (entity_hierarchy, context_aware_roles, etc.)
-            - available_permissions: All permission strings for this preset
-
-        This endpoint is used by admin UIs to conditionally show/hide features
-        based on the detected preset and enabled features.
+        This public endpoint contains capability flags only. The permission
+        catalog is available from the authenticated ``/config/permissions``
+        endpoint.
         """
         # Determine preset name
         preset_name = auth.__class__.__name__
@@ -134,16 +141,29 @@ def get_auth_router(
             "access_code": auth.config.enable_access_codes,
         }
 
-        # Get available permissions from database
-        permissions, _ = await auth.permission_service.list_permissions(session, page=1, limit=1000, is_active=True)
-        available_permissions = [p.name for p in permissions]
-
         return AuthConfigResponse(
             preset=preset_name,
             features=features,
             auth_methods=auth_methods,
-            available_permissions=available_permissions,
         )
+
+    @router.get(
+        "/config/permissions",
+        response_model=List[str],
+        summary="Get permission catalog",
+        description="Returns active permission names (requires permission:read)",
+    )
+    async def get_permission_catalog(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+    ) -> List[str]:
+        permissions, _ = await auth.permission_service.list_permissions(
+            session,
+            page=1,
+            limit=1000,
+            is_active=True,
+        )
+        return [permission.name for permission in permissions]
 
     @router.post(
         "/register",
@@ -188,6 +208,7 @@ def get_auth_router(
         description="Login with email and password to get JWT tokens",
     )
     async def login(
+        request: Request,
         data: LoginRequest,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(get_obs),
@@ -198,9 +219,34 @@ def get_auth_router(
         Triggers on_after_login hook.
         """
         try:
+            # Trust the ASGI server's resolved client address. Deployments behind
+            # a proxy must configure that server's trusted-proxy handling; raw
+            # X-Forwarded-For is intentionally not accepted here.
+            ip_address = request.client.host if request.client else "unknown"
+            user_agent = request.headers.get("user-agent", "")[:512] or None
+            limited, retry_after = await check_login_ip_rate_limit(
+                ip_address,
+                auth.redis_client,
+                max_requests=auth.config.login_ip_rate_limit_max,
+                window_seconds=auth.config.login_ip_rate_limit_window_seconds,
+                redis_required=auth.config.redis_enabled,
+                failure_mode=auth.config.login_ip_rate_limit_failure_mode,
+                namespace=login_rate_limit_namespace,
+            )
+            if limited:
+                raise RateLimitError(
+                    message="Too many login attempts. Please try again later.",
+                    details={"retry_after_seconds": retry_after},
+                )
+
             # Authenticate user and get tokens
             user, tokens = await auth.auth_service.login(
-                session, email=data.email, password=data.password, app=data.app
+                session,
+                email=data.email,
+                password=data.password,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                app=data.app,
             )
 
             # Check verification requirement
@@ -633,13 +679,9 @@ def get_auth_router(
                 challenge_recipient = None
                 challenge_type = "access_code"
             else:
-                user = await auth.user_service.get_user_by_verified_phone(
-                    session, data.phone or ""
-                )
+                user = await auth.user_service.get_user_by_verified_phone(session, data.phone or "")
                 challenge_recipient = data.phone
-                challenge_type = (
-                    "whatsapp_otp" if delivery_channel == "whatsapp" else "sms_otp"
-                )
+                challenge_type = "whatsapp_otp" if delivery_channel == "whatsapp" else "sms_otp"
 
             if not user:
                 return None
@@ -802,6 +844,11 @@ def get_auth_router(
         from uuid import UUID
 
         try:
+            if not auth.config.enable_invitations:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Invitation endpoints are disabled",
+                )
             actor_user_id = UUID(obs.user_id) if obs.user_id else None
             actor_user = (
                 await auth.user_service.get_user_by_id(session, actor_user_id) if actor_user_id is not None else None
@@ -810,6 +857,45 @@ def get_auth_router(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Only superusers can invite superusers",
+                )
+
+            role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
+            target_entity_id = UUID(data.entity_id) if data.entity_id else None
+            containment_role_ids = role_ids
+            if target_entity_id is not None:
+                if actor_user_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authenticated actor is required for membership delegation",
+                    )
+                can_create_membership = await auth.permission_service.check_permission(
+                    session,
+                    actor_user_id,
+                    "membership:create_tree",
+                    entity_id=target_entity_id,
+                    user=actor_user,
+                )
+                if not can_create_membership:
+                    raise PermissionDeniedError(message="Insufficient permissions to create this entity membership")
+                if auth.membership_service:
+                    auto_roles = await auth.membership_service.get_auto_assigned_roles_for_entity(
+                        session, target_entity_id
+                    )
+                    containment_role_ids = list({*role_ids, *(role.id for role in auto_roles)})
+
+            if containment_role_ids and actor_user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authenticated actor is required for role delegation",
+                )
+            if containment_role_ids:
+                assert actor_user_id is not None
+                await require_can_delegate_roles(
+                    session,
+                    auth=auth,
+                    actor_user_id=actor_user_id,
+                    role_ids=containment_role_ids,
+                    entity_id=target_entity_id,
                 )
 
             user, plain_token = await auth.user_service.invite_user(
@@ -821,8 +907,6 @@ def get_auth_router(
                 invited_by_id=actor_user_id,
                 root_entity_id=None,
             )
-
-            role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
 
             # If entity_id is provided, roles are applied through the entity
             # membership. Without an entity, role_ids represent direct RBAC
@@ -878,6 +962,11 @@ def get_auth_router(
         Activates the account and returns JWT tokens for immediate login.
         """
         try:
+            if not auth.config.enable_invitations:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Invitation endpoints are disabled",
+                )
             user = await auth.auth_service.accept_invite(
                 session,
                 token=data.token,

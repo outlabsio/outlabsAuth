@@ -74,8 +74,8 @@ To learn how the library works, in order:
 | **SECURITY.md** | Security hardening |
 | **DEPLOYMENT_GUIDE.md** | Production deployment, schema ownership, migrations |
 | **TESTING_GUIDE.md** | Testing strategy |
-| **ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md** | Latest audit |
-| **SECURITY_AUDIT_2026-06-10.md**, **PERFORMANCE_AUDIT_*.md** | Point-in-time audits |
+| **SECURITY_AUDIT_2026-08-02.md** | Current security audit and release evidence |
+| **PERFORMANCE_AUDIT_*.md** | Point-in-time performance audits |
 
 #### `docs-library/` - User Handbook (Implementers)
 

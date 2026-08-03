@@ -105,7 +105,7 @@ async def test_api_key_service_scope_ip_update_and_delete_helpers(
         owner_id=owner.id,
         name="Managed Key",
         scopes=["user:*"],
-        ip_whitelist=["10.0.0.1"],
+        ip_whitelist=["10.0.0.0/24"],
     )
     _, unrestricted = await service.create_api_key(
         test_session,
@@ -124,8 +124,9 @@ async def test_api_key_service_scope_ip_update_and_delete_helpers(
     assert await service._check_scope(test_session, unrestricted.id, "role:read") is True
 
     assert await service._check_ip(test_session, key.id, "10.0.0.1") is True
-    assert await service._check_ip(test_session, key.id, "10.0.0.2") is False
-    assert await service._check_ip(test_session, unrestricted.id, "10.0.0.2") is True
+    assert await service._check_ip(test_session, key.id, "10.0.0.200") is True
+    assert await service._check_ip(test_session, key.id, "10.0.1.2") is False
+    assert await service._check_ip(test_session, unrestricted.id, "10.0.1.2") is True
 
     updated = await service.update_api_key(
         test_session,
@@ -564,7 +565,10 @@ async def test_api_key_policy_and_service_emit_observability_for_enterprise_deni
         )
 
     assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["surface"] == "grant_create"
-    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "inherit_from_tree_requires_anchor"
+    assert (
+        observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"]
+        == "inherit_from_tree_requires_anchor"
+    )
 
     full_key, _ = await service.create_api_key(
         test_session,

@@ -106,29 +106,21 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
-SECRET_KEY = os.getenv("SECRET_KEY", "enterprise-rbac-secret-change-in-production-please")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        'SECRET_KEY is required; generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
 REDIS_URL = os.getenv("REDIS_URL", None)
 ENV = os.getenv("ENV", "development")
-REDIS_KEY_PREFIX = (
-    os.getenv("REDIS_KEY_PREFIX", f"outlabs-auth:{ENV}:enterprise-rbac")
-    if REDIS_URL
-    else None
-)
+REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", f"outlabs-auth:{ENV}:enterprise-rbac") if REDIS_URL else None
 DEBUG_MODE = ENV != "production"
 ENABLE_MAGIC_LINKS = _env_flag("ENABLE_MAGIC_LINKS", default=DEBUG_MODE)
 ENABLE_ACCESS_CODES = _env_flag("ENABLE_ACCESS_CODES", default=DEBUG_MODE)
-MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
-    "MAGIC_LINK_DEBUG_TOKENS", default=DEBUG_MODE
-)
-ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag(
-    "ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE
-)
-INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
-    "INVITE_DEBUG_TOKENS", default=DEBUG_MODE
-)
-PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag(
-    "PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE
-)
+MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag("MAGIC_LINK_DEBUG_TOKENS", default=DEBUG_MODE)
+ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag("ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE)
+INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag("INVITE_DEBUG_TOKENS", default=DEBUG_MODE)
+PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag("PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 API_PUBLIC_URL = _trim_trailing_slash(os.getenv("API_PUBLIC_URL", "http://localhost:8004"))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -139,16 +131,12 @@ MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
 MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
 MAILGUN_FROM_EMAIL = os.getenv("MAILGUN_FROM_EMAIL")
 MAILGUN_FROM_NAME = os.getenv("MAILGUN_FROM_NAME", "Outlabs Auth")
-MAIL_RECIPIENT_OVERRIDE = os.getenv("MAIL_RECIPIENT_OVERRIDE") or os.getenv(
-    "MAILGUN_RECIPIENT_OVERRIDE"
-)
+MAIL_RECIPIENT_OVERRIDE = os.getenv("MAIL_RECIPIENT_OVERRIDE") or os.getenv("MAILGUN_RECIPIENT_OVERRIDE")
 MAILGUN_RECIPIENT_OVERRIDE = MAIL_RECIPIENT_OVERRIDE  # backward-compatible alias
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
-TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID = os.getenv(
-    "TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID"
-)
+TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID = os.getenv("TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID")
 TWILIO_SMS_FROM = os.getenv("TWILIO_SMS_FROM")
 FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
 
@@ -338,9 +326,7 @@ async def lifespan(app: FastAPI):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             print(f"Magic link for {email}: {magic_link_url}")
-            await original_on_after_magic_link(
-                user, token, request, redirect_url=redirect_url
-            )
+            await original_on_after_magic_link(user, token, request, redirect_url=redirect_url)
 
         auth.user_service.on_after_magic_link_requested = capture_magic_link
 
@@ -348,9 +334,7 @@ async def lifespan(app: FastAPI):
         print("Access codes enabled with dev code capture")
         original_on_after_access_code = auth.user_service.on_after_access_code_requested
 
-        async def capture_access_code(
-            user, code, request=None, redirect_url=None, **kwargs
-        ):
+        async def capture_access_code(user, code, request=None, redirect_url=None, **kwargs):
             email = str(user.email).lower()
             phone = (getattr(user, "phone", None) or "").strip() or None
             access_code_url = _build_frontend_access_code_url(redirect_url=redirect_url)
@@ -371,9 +355,7 @@ async def lifespan(app: FastAPI):
             if phone:
                 print(f"Access code also keyed by phone {phone}")
             print(f"Access code entry URL for {email}: {access_code_url}")
-            await original_on_after_access_code(
-                user, code, request, redirect_url=redirect_url, **kwargs
-            )
+            await original_on_after_access_code(user, code, request, redirect_url=redirect_url, **kwargs)
 
         auth.user_service.on_after_access_code_requested = capture_access_code
 
@@ -399,9 +381,7 @@ async def lifespan(app: FastAPI):
         print("Phone verify enabled with dev code capture")
         original_send_phone_verify = auth.user_service.send_phone_verify_delivery
 
-        async def capture_phone_verify(
-            user, code, request=None, metadata=None, **extra_metadata
-        ):
+        async def capture_phone_verify(user, code, request=None, metadata=None, **extra_metadata):
             email = str(user.email).lower()
             latest_phone_verifies[email] = {
                 "email": email,
@@ -491,10 +471,7 @@ async def lifespan(app: FastAPI):
             f"(callback {API_PUBLIC_URL}{google_associate_prefix}/callback)"
         )
     else:
-        print(
-            "Google OAuth login/associate: not mounted "
-            "(set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable)"
-        )
+        print("Google OAuth login/associate: not mounted " "(set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable)")
 
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")
@@ -507,10 +484,7 @@ async def lifespan(app: FastAPI):
     if MAGIC_LINK_DEBUG_TOKENS:
         print("Magic link debug endpoint: /dev/auth/magic-link/latest?email=<email>")
     if ACCESS_CODE_DEBUG_CODES:
-        print(
-            "Access code debug endpoint: "
-            "/dev/auth/access-code/latest?email=<email> or ?phone=<e164>"
-        )
+        print("Access code debug endpoint: " "/dev/auth/access-code/latest?email=<email> or ?phone=<e164>")
     if INVITE_DEBUG_TOKENS:
         print("Invite debug endpoint: /dev/auth/invite/latest?email=<email>")
     if PHONE_VERIFY_DEBUG_CODES:
@@ -525,17 +499,11 @@ async def lifespan(app: FastAPI):
             "(set OUTLABS_AUTH_MAIL_PROVIDER + provider credentials to send live mail)"
         )
     whatsapp_live = bool(
-        TWILIO_ACCOUNT_SID
-        and TWILIO_AUTH_TOKEN
-        and TWILIO_WHATSAPP_FROM
-        and TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID
+        TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID
     )
     sms_live = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_SMS_FROM)
     if whatsapp_live:
-        print(
-            "Challenge messaging WhatsApp: Twilio "
-            f"(from {TWILIO_WHATSAPP_FROM}; content SID configured)"
-        )
+        print("Challenge messaging WhatsApp: Twilio " f"(from {TWILIO_WHATSAPP_FROM}; content SID configured)")
     else:
         print(
             "Challenge messaging WhatsApp: console spike "
@@ -546,8 +514,7 @@ async def lifespan(app: FastAPI):
         print(f"Challenge messaging SMS: Twilio (from {TWILIO_SMS_FROM})")
     else:
         print(
-            "Challenge messaging SMS: console spike "
-            "(set TWILIO_ACCOUNT_SID/AUTH_TOKEN/SMS_FROM for live Twilio SMS)"
+            "Challenge messaging SMS: console spike " "(set TWILIO_ACCOUNT_SID/AUTH_TOKEN/SMS_FROM for live Twilio SMS)"
         )
 
     yield

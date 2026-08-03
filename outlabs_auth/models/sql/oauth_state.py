@@ -24,6 +24,7 @@ class OAuthState(BaseModel, table=True):
 
     Table: oauth_states
     """
+
     __tablename__ = "oauth_states"
     __table_args__ = (
         Index("ix_oauth_states_state", "state"),
@@ -68,6 +69,11 @@ class OAuthState(BaseModel, table=True):
         default=None,
         sa_column=Column(String(255), nullable=True),
         description="OpenID Connect nonce",
+    )
+    browser_binding: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="HttpOnly browser-cookie binding for one-time state consumption",
     )
     profile_id: Optional[str] = Field(
         default=None,

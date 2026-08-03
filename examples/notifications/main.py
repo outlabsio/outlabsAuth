@@ -15,6 +15,7 @@ This example shows:
 3. Filtering events per channel
 4. Integration with FastAPI auth system
 """
+
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
@@ -31,21 +32,24 @@ from outlabs_auth.services.channels.smtp import SMTPChannel
 from outlabs_auth.services.channels.telegram import TelegramChannel
 from outlabs_auth.services.channels.rabbitmq import RabbitMQChannel
 
-
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications"
+    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications"
 )
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        'SECRET_KEY is required; generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
 
 
 # ============================================================================
 # MESSAGE BUILDERS
 # ============================================================================
+
 
 async def build_email_notification(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """
@@ -58,7 +62,7 @@ async def build_email_notification(event: Dict[str, Any]) -> Optional[Dict[str, 
     data = event["data"]
 
     # Get recipient email (from event data or configured admin)
-    to_email = data.get('email') or os.getenv("ADMIN_EMAIL", "admin@example.com")
+    to_email = data.get("email") or os.getenv("ADMIN_EMAIL", "admin@example.com")
 
     # Map events to email content
     if event_type == "user.login":
@@ -66,36 +70,36 @@ async def build_email_notification(event: Dict[str, Any]) -> Optional[Dict[str, 
             "to": to_email,
             "subject": "New Login Detected",
             "body": f"A new login was detected for {data.get('email', 'your account')}.\n\n"
-                   f"Time: {event['timestamp']}\n"
-                   f"IP: {event['metadata'].get('ip', 'Unknown')}",
+            f"Time: {event['timestamp']}\n"
+            f"IP: {event['metadata'].get('ip', 'Unknown')}",
             "html": f"<h2>New Login Detected</h2>"
-                   f"<p>A new login was detected for <strong>{data.get('email', 'your account')}</strong>.</p>"
-                   f"<ul><li>Time: {event['timestamp']}</li>"
-                   f"<li>IP: {event['metadata'].get('ip', 'Unknown')}</li></ul>"
+            f"<p>A new login was detected for <strong>{data.get('email', 'your account')}</strong>.</p>"
+            f"<ul><li>Time: {event['timestamp']}</li>"
+            f"<li>IP: {event['metadata'].get('ip', 'Unknown')}</li></ul>",
         }
     elif event_type == "user.locked":
         return {
             "to": to_email,
             "subject": "Account Locked - Security Alert",
             "body": f"Your account ({data.get('email')}) has been locked due to multiple failed login attempts.\n\n"
-                   f"If this wasn't you, please contact support immediately.\n"
-                   f"Time: {event['timestamp']}",
+            f"If this wasn't you, please contact support immediately.\n"
+            f"Time: {event['timestamp']}",
             "html": f"<h2 style='color: red;'>Account Locked</h2>"
-                   f"<p>Your account (<strong>{data.get('email')}</strong>) has been locked due to multiple failed login attempts.</p>"
-                   f"<p>If this wasn't you, please <a href='mailto:support@example.com'>contact support</a> immediately.</p>"
-                   f"<p><small>Time: {event['timestamp']}</small></p>"
+            f"<p>Your account (<strong>{data.get('email')}</strong>) has been locked due to multiple failed login attempts.</p>"
+            f"<p>If this wasn't you, please <a href='mailto:support@example.com'>contact support</a> immediately.</p>"
+            f"<p><small>Time: {event['timestamp']}</small></p>",
         }
     elif event_type == "user.password_changed":
         return {
             "to": to_email,
             "subject": "Password Changed Successfully",
             "body": f"Your password has been changed successfully.\n\n"
-                   f"Time: {event['timestamp']}\n\n"
-                   f"If you didn't make this change, please contact support immediately.",
+            f"Time: {event['timestamp']}\n\n"
+            f"If you didn't make this change, please contact support immediately.",
             "html": f"<h2>Password Changed</h2>"
-                   f"<p>Your password has been changed successfully.</p>"
-                   f"<p><small>Time: {event['timestamp']}</small></p>"
-                   f"<p><em>If you didn't make this change, please contact support immediately.</em></p>"
+            f"<p>Your password has been changed successfully.</p>"
+            f"<p><small>Time: {event['timestamp']}</small></p>"
+            f"<p><em>If you didn't make this change, please contact support immediately.</em></p>",
         }
 
     return None
@@ -118,32 +122,27 @@ async def build_telegram_alert(event: Dict[str, Any]) -> Optional[Dict[str, str]
 
     text = None
     if event_type == "user.locked":
-        text = f"*Account Locked*\n" \
-               f"User: {data.get('email')}\n" \
-               f"Reason: Too many failed attempts"
+        text = f"*Account Locked*\n" f"User: {data.get('email')}\n" f"Reason: Too many failed attempts"
     elif event_type == "user.login_failed":
-        text = f"*Login Failed*\n" \
-               f"Email: {data.get('email')}\n" \
-               f"Attempts: {data.get('failed_attempts')}\n" \
-               f"IP: {event['metadata'].get('ip', 'Unknown')}"
+        text = (
+            f"*Login Failed*\n"
+            f"Email: {data.get('email')}\n"
+            f"Attempts: {data.get('failed_attempts')}\n"
+            f"IP: {event['metadata'].get('ip', 'Unknown')}"
+        )
     elif event_type == "user.created":
-        text = f"*New User*\n" \
-               f"Email: {data.get('email')}\n" \
-               f"Role: {data.get('role', 'user')}"
+        text = f"*New User*\n" f"Email: {data.get('email')}\n" f"Role: {data.get('role', 'user')}"
 
     if not text:
         return None
 
-    return {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
+    return {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
 
 
 # ============================================================================
 # NOTIFICATION SETUP
 # ============================================================================
+
 
 def create_notification_service() -> NotificationService:
     """
@@ -161,12 +160,9 @@ def create_notification_service() -> NotificationService:
     if webhook_url := os.getenv("WEBHOOK_URL"):
         webhook = WebhookChannel(
             url=webhook_url,
-            headers={
-                "Authorization": f"Bearer {os.getenv('WEBHOOK_TOKEN', '')}",
-                "Content-Type": "application/json"
-            },
+            headers={"Authorization": f"Bearer {os.getenv('WEBHOOK_TOKEN', '')}", "Content-Type": "application/json"},
             enabled=True,
-            event_filter=None  # All events
+            event_filter=None,  # All events
         )
         channels.append(webhook)
         print("Webhook channel enabled")
@@ -183,7 +179,7 @@ def create_notification_service() -> NotificationService:
             from_name="Auth System",
             email_builder=build_email_notification,
             enabled=True,
-            event_filter=["user.login", "user.locked", "user.password_changed"]
+            event_filter=["user.login", "user.locked", "user.password_changed"],
         )
         channels.append(smtp)
         print("SMTP email channel enabled")
@@ -194,7 +190,7 @@ def create_notification_service() -> NotificationService:
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
             message_builder=build_telegram_alert,
             enabled=True,
-            event_filter=["user.locked", "user.login_failed", "user.created"]
+            event_filter=["user.locked", "user.login_failed", "user.created"],
         )
         channels.append(telegram)
         print("Telegram channel enabled")
@@ -206,7 +202,7 @@ def create_notification_service() -> NotificationService:
             exchange="auth_events",
             routing_key="auth.events",
             enabled=True,
-            event_filter=None  # All events for microservices
+            event_filter=None,  # All events for microservices
         )
         channels.append(rabbitmq)
         print("RabbitMQ channel enabled")
@@ -246,7 +242,7 @@ async def lifespan(app: FastAPI):
         database_url=DATABASE_URL,
         secret_key=SECRET_KEY,
         notification_service=notification_service,
-        enable_notifications=True
+        enable_notifications=True,
     )
 
     await auth.initialize()
@@ -295,6 +291,7 @@ def get_auth() -> SimpleRBAC:
 # AUTH ENDPOINTS
 # ============================================================================
 
+
 @app.post("/auth/register")
 async def register(email: str, password: str, role: str = "user"):
     """
@@ -303,15 +300,11 @@ async def register(email: str, password: str, role: str = "user"):
     Triggers: user.created notification
     """
     try:
-        user = await get_auth().user_service.create_user(
-            email=email,
-            password=password,
-            role_names=[role]
-        )
+        user = await get_auth().user_service.create_user(email=email, password=password, role_names=[role])
         return {
             "user_id": str(user.id),
             "email": user.email,
-            "message": "User created. Check your email/Telegram for notification!"
+            "message": "User created. Check your email/Telegram for notification!",
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -326,27 +319,20 @@ async def login(email: str, password: str):
     """
     try:
         result = await get_auth().auth_service.login(
-            email=email,
-            password=password,
-            metadata={"ip": "127.0.0.1", "user_agent": "Example"}
+            email=email, password=password, metadata={"ip": "127.0.0.1", "user_agent": "Example"}
         )
         return {
             "access_token": result["access_token"],
             "refresh_token": result["refresh_token"],
-            "message": "Login successful. Check your email for notification!"
+            "message": "Login successful. Check your email for notification!",
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
 
 @app.post("/auth/change-password")
 async def change_password(
-    old_password: str,
-    new_password: str,
-    user: User = Depends(lambda: get_auth().deps.authenticated())
+    old_password: str, new_password: str, user: User = Depends(lambda: get_auth().deps.authenticated())
 ):
     """
     Change user password.
@@ -355,9 +341,7 @@ async def change_password(
     """
     try:
         await get_auth().user_service.change_password(
-            user_id=str(user.id),
-            old_password=old_password,
-            new_password=new_password
+            user_id=str(user.id), old_password=old_password, new_password=new_password
         )
         return {"message": "Password changed. Check your email for confirmation!"}
     except ValueError as e:
@@ -370,7 +354,7 @@ async def get_me(user: User = Depends(lambda: get_auth().deps.authenticated())):
     return {
         "id": str(user.id),
         "email": user.email,
-        "status": user.status.value if hasattr(user.status, 'value') else user.status
+        "status": user.status.value if hasattr(user.status, "value") else user.status,
     }
 
 
@@ -382,7 +366,7 @@ async def notification_status():
     return {
         "enabled": notification_service.enabled,
         "active_channels": notification_service.active_channels,
-        "total_channels": len(notification_service.channels)
+        "total_channels": len(notification_service.channels),
     }
 
 

@@ -1,8 +1,8 @@
 """
 Authorization security regression tests (privilege-escalation chain).
 
-End-to-end HTTP coverage for the Critical/High findings patched from
-docs/SECURITY_AUDIT_2026-06-10.md:
+End-to-end HTTP coverage for authorization findings retained in
+docs/SECURITY_AUDIT_2026-08-02.md:
 
 - SEC-2: assigning a role grants its permissions — a non-superuser may only
   assign a role whose permissions they already hold.
@@ -32,6 +32,7 @@ from outlabs_auth.utils.jwt import create_access_token, create_refresh_token
 
 ALL_PERMISSIONS = [
     "user:read",
+    "user:create",
     "user:update",
     "user:delete",
     "role:read",
@@ -40,7 +41,14 @@ ALL_PERMISSIONS = [
 ]
 
 # Permissions the limited admin legitimately holds — note: NO user:delete.
-LIMITED_ADMIN_PERMISSIONS = ["user:read", "user:update", "role:read", "role:create", "role:update"]
+LIMITED_ADMIN_PERMISSIONS = [
+    "user:read",
+    "user:create",
+    "user:update",
+    "role:read",
+    "role:create",
+    "role:update",
+]
 
 
 @pytest_asyncio.fixture
@@ -101,9 +109,7 @@ async def scenario(auth_instance: SimpleRBAC) -> dict:
         admin_role = await auth_instance.role_service.create_role(
             session, name="limited_admin", display_name="Limited Admin", description="scoped admin"
         )
-        await auth_instance.role_service.add_permissions_by_name(
-            session, admin_role.id, LIMITED_ADMIN_PERMISSIONS
-        )
+        await auth_instance.role_service.add_permissions_by_name(session, admin_role.id, LIMITED_ADMIN_PERMISSIONS)
         limited = await auth_instance.user_service.create_user(
             session=session,
             email="limited@example.com",
@@ -132,9 +138,7 @@ async def scenario(auth_instance: SimpleRBAC) -> dict:
         powerful_role = await auth_instance.role_service.create_role(
             session, name="powerful_role", display_name="Powerful", description="carries user:delete"
         )
-        await auth_instance.role_service.add_permissions_by_name(
-            session, powerful_role.id, ["user:delete"]
-        )
+        await auth_instance.role_service.add_permissions_by_name(session, powerful_role.id, ["user:delete"])
 
         victim = await auth_instance.user_service.create_user(
             session=session,
@@ -164,6 +168,7 @@ def _auth(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # SEC-3 — role permission editing requires delegation containment
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -207,6 +212,7 @@ async def test_superuser_can_add_any_permission(client, scenario):
 # SEC-2 — assigning a role requires holding the role's permissions
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_limited_admin_cannot_assign_role_carrying_unheld_permission(client, scenario):
@@ -230,9 +236,36 @@ async def test_superuser_can_assign_powerful_role(client, scenario):
     assert resp.status_code in (200, 201)
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_limited_admin_cannot_invite_with_role_carrying_unheld_permission(
+    client,
+    scenario,
+    auth_instance,
+):
+    """Invite-time grants obey the same containment rule as user role assignment."""
+    email = "blocked-invite@example.com"
+    resp = await client.post(
+        "/v1/auth/invite",
+        json={
+            "email": email,
+            "first_name": "Blocked",
+            "last_name": "Invite",
+            "role_ids": [scenario["powerful_role_id"]],
+        },
+        headers=_auth(scenario["limited_token"]),
+    )
+    assert resp.status_code == 403
+    assert "user:delete" in resp.text
+
+    async with auth_instance.get_session() as session:
+        assert await auth_instance.user_service.get_user_by_email(session, email) is None
+
+
 # ---------------------------------------------------------------------------
 # SEC-1 — a refresh token must not authenticate as an access token
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio

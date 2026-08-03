@@ -8,7 +8,9 @@ For production multi-instance deployments, use Redis-based rate limiting.
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Literal, Tuple
+
+from outlabs_auth.core.exceptions import AuthenticationInfrastructureError
 
 
 class RateLimiter:
@@ -76,6 +78,50 @@ class RateLimiter:
 
 # Global rate limiter instance
 _rate_limiter = RateLimiter()
+
+
+async def check_login_ip_rate_limit(
+    ip_address: str,
+    redis_client: Any = None,
+    *,
+    max_requests: int = 20,
+    window_seconds: int = 300,
+    redis_required: bool = False,
+    failure_mode: Literal["fail_closed", "local_fallback"] = "fail_closed",
+    namespace: str = "outlabs-auth",
+) -> Tuple[bool, int]:
+    """Rate-limit password login attempts by the ASGI-resolved client IP.
+
+    Redis provides the cross-worker enforcement path. If Redis is absent or a
+    counter operation fails, the process-local limiter remains a bounded
+    fallback instead of silently allowing unlimited attempts.
+    """
+    rate_limit_key = f"{namespace}:login_ip:{ip_address}"
+
+    if (
+        redis_client is not None
+        and getattr(redis_client, "is_available", False)
+        and hasattr(redis_client, "increment_with_ttl")
+    ):
+        count = await redis_client.increment_with_ttl(
+            rate_limit_key,
+            amount=1,
+            ttl=window_seconds,
+        )
+        if count is not None:
+            return count > max_requests, window_seconds if count > max_requests else 0
+
+    if redis_required and failure_mode == "fail_closed":
+        raise AuthenticationInfrastructureError(
+            "Password login is temporarily unavailable because distributed rate limiting is unavailable",
+            details={"control": "login_ip_rate_limit", "retry_after_seconds": 5},
+        )
+
+    return await _rate_limiter.is_rate_limited(
+        key=rate_limit_key,
+        max_requests=max_requests,
+        window_seconds=window_seconds,
+    )
 
 
 async def check_forgot_password_rate_limit(

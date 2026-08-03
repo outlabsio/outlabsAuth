@@ -1,4 +1,4 @@
-"""Release rehearsal for upgrading populated pre-0.1.0a24 auth schemas."""
+"""Release rehearsal for upgrading populated pre-release auth schemas."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from outlabs_auth.cli import run_migrations
 from tests.conftest import TEST_DATABASE_URL
-
 
 PRE_RELEASE_REVISION = "20260611_0018"
 
@@ -55,7 +54,9 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
         async with engine.begin() as conn:
             # The squashed baseline is model-backed, so current source code can
             # expose newly-added columns even when targeting an older revision.
-            # Remove only 0020's shape to reconstruct an actual a23 database.
+            # Remove post-baseline columns to reconstruct an actual older
+            # database even though the model-backed baseline uses current
+            # metadata when this test runs.
             await conn.execute(
                 text(f"ALTER TABLE {_qualified(schema, 'refresh_tokens')} DROP COLUMN IF EXISTS replaced_by_token_id")
             )
@@ -63,25 +64,27 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
                 text(f"ALTER TABLE {_qualified(schema, 'refresh_tokens')} DROP COLUMN IF EXISTS family_id")
             )
             await conn.execute(
-                text(
-                    f"""
+                text(f"ALTER TABLE {_qualified(schema, 'oauth_states')} " "DROP COLUMN IF EXISTS browser_binding")
+            )
+            await conn.execute(
+                text(f"ALTER TABLE {_qualified(schema, 'refresh_tokens')} " "DROP COLUMN IF EXISTS family_expires_at")
+            )
+            await conn.execute(
+                text(f"""
                     INSERT INTO {_qualified(schema, 'users')}
                         (id, email, auth_methods, status, is_superuser, email_verified,
                          phone_verified, failed_login_attempts)
                     VALUES
                         (:id, :email, ARRAY['PASSWORD'], 'active', FALSE, TRUE, FALSE, 0)
-                    """
-                ),
+                    """),
                 {"id": user_id, "email": f"upgrade-{user_id.hex[:12]}@example.com"},
             )
             await conn.execute(
-                text(
-                    f"""
+                text(f"""
                     INSERT INTO {_qualified(schema, 'refresh_tokens')}
                         (id, user_id, token_hash, expires_at, is_revoked, usage_count)
                     VALUES (:id, :user_id, :token_hash, :expires_at, FALSE, 3)
-                    """
-                ),
+                    """),
                 {
                     "id": token_id,
                     "user_id": user_id,
@@ -90,15 +93,13 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
                 },
             )
             await conn.execute(
-                text(
-                    f"""
+                text(f"""
                     INSERT INTO {_qualified(schema, 'api_keys')}
                         (id, name, prefix, key_hash, owner_id, key_kind, status,
                          usage_count, rate_limit_per_minute, inherit_from_tree)
                     VALUES (:id, 'seeded pre-upgrade key', :prefix, :key_hash, :owner_id,
                             'personal', 'active', 17, 60, TRUE)
-                    """
-                ),
+                    """),
                 {
                     "id": api_key_id,
                     "prefix": f"sk_test_{api_key_id.hex[:8]}",
@@ -107,23 +108,18 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
                 },
             )
 
-        before_counts = {
-            table: await _row_count(schema, table)
-            for table in ("users", "refresh_tokens", "api_keys")
-        }
+        before_counts = {table: await _row_count(schema, table) for table in ("users", "refresh_tokens", "api_keys")}
 
         await run_migrations(TEST_DATABASE_URL, schema=schema)
 
         async with engine.connect() as conn:
             token = (
                 await conn.execute(
-                    text(
-                        f"""
+                    text(f"""
                         SELECT family_id, replaced_by_token_id, usage_count
                         FROM {_qualified(schema, 'refresh_tokens')}
                         WHERE id = :id
-                        """
-                    ),
+                        """),
                     {"id": token_id},
                 )
             ).one()
@@ -131,33 +127,42 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
                 text(f"SELECT version_num FROM {_qualified(schema, 'outlabs_auth_alembic_version')}")
             )
             index_exists = await conn.execute(
-                text(
-                    """
+                text("""
                     SELECT 1 FROM pg_indexes
                     WHERE schemaname = :schema AND tablename = 'refresh_tokens'
                       AND indexname = 'ix_refresh_tokens_family_id'
-                    """
-                ),
+                    """),
                 {"schema": schema},
             )
 
         assert UUID(str(token.family_id)) == token_id
         assert token.replaced_by_token_id is None
         assert token.usage_count == 3
-        assert revision.scalar_one() == "20260729_0023"
+        assert revision.scalar_one() == "20260802_0025"
         assert index_exists.scalar_one() == 1
+        async with engine.connect() as conn:
+            new_columns = await conn.execute(
+                text("""
+                    SELECT table_name, column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = :schema
+                      AND (table_name, column_name) IN (
+                          ('oauth_states', 'browser_binding'),
+                          ('refresh_tokens', 'family_expires_at')
+                      )
+                    """),
+                {"schema": schema},
+            )
+        assert set(new_columns) == {
+            ("oauth_states", "browser_binding"),
+            ("refresh_tokens", "family_expires_at"),
+        }
         assert await _row_count(schema, "api_key_usage_sync_batches") == 0
-        assert {
-            table: await _row_count(schema, table)
-            for table in before_counts
-        } == before_counts
+        assert {table: await _row_count(schema, table) for table in before_counts} == before_counts
 
         # A second upgrade must neither mutate seeded rows nor create receipts.
         await run_migrations(TEST_DATABASE_URL, schema=schema)
-        assert {
-            table: await _row_count(schema, table)
-            for table in before_counts
-        } == before_counts
+        assert {table: await _row_count(schema, table) for table in before_counts} == before_counts
         assert await _row_count(schema, "api_key_usage_sync_batches") == 0
     finally:
         await engine.dispose()

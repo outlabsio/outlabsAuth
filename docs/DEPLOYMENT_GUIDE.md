@@ -1721,8 +1721,7 @@ LIMIT 10;
 ### Pre-Deployment
 
 - [ ] All tests passing
-- [ ] Security audit reviewed (see `docs/SECURITY_AUDIT_2026-06-10.md` and
-      `docs/ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md`)
+- [ ] Security audit reviewed (see `docs/SECURITY_AUDIT_2026-08-02.md`)
 - [ ] Load testing completed
 - [ ] `SECRET_KEY` is >= 32 chars and unique per environment
 - [ ] `DATABASE_URL` uses `postgresql+asyncpg://` and `ssl=verify-full`
