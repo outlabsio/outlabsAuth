@@ -17,6 +17,7 @@ No database is touched: `create_async_engine` is lazy, so priming never connects
 
 import pytest
 from fastapi import FastAPI
+from unittest.mock import AsyncMock
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.core.exceptions import ConfigurationError
@@ -106,3 +107,37 @@ def test_priming_requires_a_database_url_or_engine(test_secret_key: str) -> None
     construction instead of pretending the later branch is reachable."""
     with pytest.raises(ConfigurationError):
         SimpleRBAC(secret_key=test_secret_key)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initialize_preserves_primed_router_services(test_secret_key: str) -> None:
+    """Startup must connect the exact services captured by mounted routers.
+
+    Rebuilding services during ``initialize()`` leaves router dependencies bound
+    to the primed API-key service and its never-connected Redis client. Machine
+    auth then fails closed on mounted routes even though direct host dependencies
+    use the connected replacement service.
+    """
+    auth = _auth(
+        test_secret_key,
+        redis_url="redis://localhost:6379/0",
+        redis_key_prefix="test:prime-routing",
+        background_job_mode="disabled",
+    )
+    auth.prime_fastapi_routing()
+
+    session_factory = auth._session_factory
+    deps = auth.deps
+    api_key_service = auth.api_key_service
+    redis_client = auth.redis_client
+    assert redis_client is not None
+    redis_client.connect = AsyncMock(return_value=True)
+
+    await auth.initialize()
+
+    assert auth._session_factory is session_factory
+    assert auth.deps is deps
+    assert auth.api_key_service is api_key_service
+    assert auth.redis_client is redis_client
+    redis_client.connect.assert_awaited_once()
