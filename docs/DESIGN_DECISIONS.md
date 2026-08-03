@@ -3619,7 +3619,7 @@ Entities do not store live direct permission grants. Access is granted through:
 ### Related Decisions
 
 - DD-005 (Entity-Based Isolation), DD-050 (Role Scoping to Root Entities), DD-053/DD-054 (role/permission scope enforcement)
-- Security audit: `docs/SECURITY_AUDIT_2026-06-10.md` (SEC-4); investigation: `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`
+- Security audit: `docs/SECURITY_AUDIT_2026-08-02.md`; investigation: `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`
 
 ---
 

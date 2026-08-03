@@ -101,7 +101,7 @@ async def test_auth_service_login_failure_paths_cover_not_found_lockout_and_lock
     observability.log_account_locked.assert_called_once()
     assert audit.record_event.await_count == 2
 
-    with pytest.raises(AccountLockedError):
+    with pytest.raises(InvalidCredentialsError):
         await service.login(
             test_session,
             email=user.email,
@@ -158,8 +158,8 @@ async def test_auth_service_login_success_emits_notification_tracks_activity_and
     audit.record_event.assert_awaited_once()
 
     stored_tokens = (
-        await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))
-    ).scalars().all()
+        (await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))).scalars().all()
+    )
     assert len(stored_tokens) == 1
     assert stored_tokens[0].device_name == "MacBook"
 
@@ -170,9 +170,7 @@ async def test_auth_service_logout_covers_stateless_blacklist_and_stateful_revoc
     test_session,
     auth_config: AuthConfig,
 ):
-    stateless_config = auth_config.model_copy(
-        update={"store_refresh_tokens": False, "enable_token_blacklist": True}
-    )
+    stateless_config = auth_config.model_copy(update={"store_refresh_tokens": False, "enable_token_blacklist": True})
     stateless_service = AuthService(config=stateless_config)
     redis_client = SimpleNamespace(is_available=True, set=AsyncMock(return_value=True))
 
@@ -291,6 +289,7 @@ async def test_auth_service_refresh_access_token_covers_invalid_and_missing_payl
         is_revoked=False,
         revoked_at=None,
         revoked_reason=None,
+        family_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
     )
     mock_session.execute = AsyncMock(
         side_effect=[
@@ -332,7 +331,9 @@ async def test_auth_service_refresh_access_token_revokes_stale_token_and_tracks_
         await service.refresh_access_token(test_session, refreshed.refresh_token)
 
     stored_token = (
-        await test_session.execute(select(RefreshToken).where(RefreshToken.token_hash == service._hash_token(refreshed.refresh_token)))
+        await test_session.execute(
+            select(RefreshToken).where(RefreshToken.token_hash == service._hash_token(refreshed.refresh_token))
+        )
     ).scalar_one()
     assert stored_token.is_revoked is True
     assert stored_token.revoked_reason == "Password changed"
@@ -354,6 +355,34 @@ async def test_auth_service_refresh_token_reuse_revokes_entire_family(test_sessi
     assert len(tokens) == 2
     assert all(token.is_revoked for token in tokens)
     assert any(token.token_hash == service._hash_token(replacement.refresh_token) for token in tokens)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_auth_service_absolute_session_expiry_revokes_family(
+    test_session,
+    auth_config: AuthConfig,
+):
+    service = AuthService(config=auth_config)
+    user = await _create_user(
+        test_session,
+        auth_config,
+        email="absolute-session-expired@example.com",
+    )
+    token_pair = await service.create_tokens_for_user(test_session, user)
+    stored_token = (
+        await test_session.execute(
+            select(RefreshToken).where(RefreshToken.token_hash == service._hash_token(token_pair.refresh_token))
+        )
+    ).scalar_one()
+    stored_token.family_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await test_session.flush()
+
+    with pytest.raises(RefreshTokenInvalidError, match="session has expired") as exc_info:
+        await service.refresh_access_token(test_session, token_pair.refresh_token)
+
+    assert exc_info.value.details["reason"] == "absolute_session_expired"
+    assert stored_token.is_revoked is True
 
 
 @pytest.mark.unit
@@ -401,9 +430,7 @@ async def test_auth_service_revoke_all_tokens_reset_password_and_accept_invite_c
         user_audit_service=audit,
     )
 
-    disabled_service = AuthService(
-        config=auth_config.model_copy(update={"store_refresh_tokens": False})
-    )
+    disabled_service = AuthService(config=auth_config.model_copy(update={"store_refresh_tokens": False}))
     user = await _create_user(test_session, auth_config, email="reset@example.com")
     assert await disabled_service.revoke_all_user_tokens(test_session, user.id) == 0
 
@@ -428,8 +455,8 @@ async def test_auth_service_revoke_all_tokens_reset_password_and_accept_invite_c
     )
     token_hash = service._hash_token(first_tokens.refresh_token)
     revoked_tokens = (
-        await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))
-    ).scalars().all()
+        (await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))).scalars().all()
+    )
     assert revoked_tokens
     assert all(token.is_revoked for token in revoked_tokens)
     assert any(token.token_hash == token_hash for token in revoked_tokens)
@@ -474,9 +501,7 @@ async def test_auth_service_reset_password_expired_token_clears_token_and_commit
         password_reset_token=hashlib.sha256(b"expired-token").hexdigest(),
         password_reset_expires=datetime.now(timezone.utc) - timedelta(minutes=5),
     )
-    session.execute.return_value = MagicMock(
-        scalar_one_or_none=MagicMock(return_value=user)
-    )
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=user))
     session.flush = AsyncMock()
     session.commit = AsyncMock()
 
@@ -505,9 +530,7 @@ async def test_auth_service_create_tokens_for_locked_user_and_invalid_reset_toke
         await service.create_tokens_for_user(AsyncMock(), locked_user)
 
     missing_reset_session = AsyncMock()
-    missing_reset_session.execute.return_value = MagicMock(
-        scalar_one_or_none=MagicMock(return_value=None)
-    )
+    missing_reset_session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
     with pytest.raises(TokenInvalidError, match="Invalid or expired reset token"):
         await service.reset_password(missing_reset_session, "missing-token", "NewPass123!")
 

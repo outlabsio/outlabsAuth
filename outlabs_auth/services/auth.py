@@ -107,6 +107,18 @@ class AuthService:
         self.observability = observability
         self.user_audit_service = user_audit_service
 
+    def _new_family_expiry(self, started_at: datetime) -> Optional[datetime]:
+        days = self.config.refresh_token_absolute_lifetime_days
+        return started_at + timedelta(days=days) if days is not None else None
+
+    def _refresh_row_expiry(
+        self,
+        now: datetime,
+        family_expires_at: Optional[datetime],
+    ) -> datetime:
+        rolling_expiry = now + timedelta(days=self.config.refresh_token_expire_days)
+        return min(rolling_expiry, family_expires_at) if family_expires_at else rolling_expiry
+
     async def login(
         self,
         session: AsyncSession,
@@ -156,18 +168,16 @@ class AuthService:
             self._log_login_failed(email, "user_not_found", 0, ip_address, start_time)
             raise InvalidCredentialsError(
                 message="Invalid email or password",
-                details={"email": email},
             )
 
         # Check if account is locked
         if user.is_locked:
             self._log_login_failed(email, "account_locked", user.failed_login_attempts, ip_address, start_time)
-            raise AccountLockedError(
-                message=f"Account is locked until {user.locked_until.isoformat() if user.locked_until else 'unknown'}",
-                details={
-                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
-                    "reason": "Too many failed login attempts",
-                },
+            # Keep the externally visible response indistinguishable from an
+            # unknown account or wrong password. Exact lock state remains in
+            # audit/observability records for operators.
+            raise InvalidCredentialsError(
+                message="Invalid email or password",
             )
 
         # Check if account is active
@@ -245,10 +255,6 @@ class AuthService:
 
             raise InvalidCredentialsError(
                 message="Invalid email or password",
-                details={
-                    "failed_attempts": user.failed_login_attempts,
-                    "max_attempts": self.config.max_login_attempts,
-                },
             )
 
         if upgraded_hash and upgraded_hash != user.hashed_password:
@@ -289,10 +295,9 @@ class AuthService:
         # Create JWT token pair
         _t = time.perf_counter()
         # DD-059 sign-in gate: may this user authenticate through this app?
-        await enforce_sign_in_gate(
-            getattr(self, "frontend_resolver", None), session, user, app=app
-        )
+        await enforce_sign_in_gate(getattr(self, "frontend_resolver", None), session, user, app=app)
 
+        family_expires_at = self._new_family_expiry(login_recorded_at)
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -301,6 +306,7 @@ class AuthService:
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
             azp=app,
+            session_expires_at=family_expires_at,
         )
         phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
 
@@ -311,7 +317,8 @@ class AuthService:
             refresh_token_model = RefreshToken(
                 user_id=user.id,
                 token_hash=refresh_token_hash,
-                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                expires_at=self._refresh_row_expiry(login_recorded_at, family_expires_at),
+                family_expires_at=family_expires_at,
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -397,14 +404,13 @@ class AuthService:
         self._check_user_status(user)
 
         # DD-059 sign-in gate: may this user authenticate through this app?
-        await enforce_sign_in_gate(
-            getattr(self, "frontend_resolver", None), session, user, app=app
-        )
+        await enforce_sign_in_gate(getattr(self, "frontend_resolver", None), session, user, app=app)
 
         previous_last_login = user.last_login
         login_recorded_at = datetime.now(timezone.utc)
         user.last_login = login_recorded_at
 
+        family_expires_at = self._new_family_expiry(login_recorded_at)
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -413,6 +419,7 @@ class AuthService:
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
             azp=app,
+            session_expires_at=family_expires_at,
         )
 
         if self.config.store_refresh_tokens:
@@ -420,7 +427,8 @@ class AuthService:
             refresh_token_model = RefreshToken(
                 user_id=user.id,
                 token_hash=refresh_token_hash,
-                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                expires_at=self._refresh_row_expiry(login_recorded_at, family_expires_at),
+                family_expires_at=family_expires_at,
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -595,9 +603,7 @@ class AuthService:
         if self.config.store_refresh_tokens:
             token_hash = self._hash_token(refresh_token)
             refresh_token_stmt = (
-                select(RefreshToken)
-                .where(cast(Any, RefreshToken.token_hash) == token_hash)
-                .with_for_update()
+                select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash).with_for_update()
             )
             result = await session.execute(refresh_token_stmt)
             token_model = result.scalar_one_or_none()
@@ -643,6 +649,54 @@ class AuthService:
                     },
                 )
 
+        family_expiry_candidates: List[datetime] = []
+        session_exp = payload.get("session_exp")
+        if session_exp is not None:
+            try:
+                family_expiry_candidates.append(datetime.fromtimestamp(int(session_exp), tz=timezone.utc))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RefreshTokenInvalidError(
+                    message="Invalid refresh token",
+                    details={"reason": "invalid_session_expiry"},
+                ) from exc
+
+        stored_family_expires_at = getattr(token_model, "family_expires_at", None) if token_model is not None else None
+        if stored_family_expires_at is not None:
+            family_expiry_candidates.append(stored_family_expires_at)
+
+        if (
+            token_model is not None
+            and stored_family_expires_at is None
+            and self.config.refresh_token_absolute_lifetime_days is not None
+        ):
+            family_start_result = await session.execute(
+                select(func.min(cast(Any, RefreshToken.created_at))).where(
+                    cast(Any, RefreshToken.family_id) == token_model.family_id
+                )
+            )
+            family_started_at = family_start_result.scalar_one_or_none()
+            if family_started_at is not None:
+                family_expiry_candidates.append(
+                    family_started_at + timedelta(days=self.config.refresh_token_absolute_lifetime_days)
+                )
+
+        family_expires_at = min(family_expiry_candidates) if family_expiry_candidates else None
+        if family_expires_at is not None and datetime.now(timezone.utc) >= family_expires_at:
+            if token_model is not None:
+                family_result = await session.execute(
+                    select(RefreshToken).where(
+                        cast(Any, RefreshToken.family_id) == token_model.family_id,
+                        cast(Any, RefreshToken.is_revoked).is_(False),
+                    )
+                )
+                for family_token in family_result.scalars().all():
+                    family_token.revoke("Absolute session lifetime expired")
+                await session.flush()
+            raise RefreshTokenInvalidError(
+                message="Refresh session has expired",
+                details={"reason": "absolute_session_expired"},
+            )
+
         # Get user from database
         user_stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
         user_result = await session.execute(user_stmt)
@@ -670,9 +724,7 @@ class AuthService:
         # and the sign-in gate re-runs so audience changes take effect here.
         azp_raw = token_model.azp if token_model is not None else payload.get("azp")
         azp = azp_raw if isinstance(azp_raw, str) and azp_raw else None
-        await enforce_sign_in_gate(
-            getattr(self, "frontend_resolver", None), session, user, app=azp
-        )
+        await enforce_sign_in_gate(getattr(self, "frontend_resolver", None), session, user, app=azp)
 
         # Rotate the stored refresh token atomically with its replacement. The
         # SELECT ... FOR UPDATE above serializes concurrent refresh attempts for
@@ -686,6 +738,7 @@ class AuthService:
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
             azp=azp,
+            session_expires_at=family_expires_at,
         )
 
         # Store the replacement before revoking the old token so the lineage is
@@ -695,7 +748,8 @@ class AuthService:
                 user_id=user.id,
                 token_hash=self._hash_token(replacement_refresh_token),
                 family_id=token_model.family_id,
-                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                expires_at=self._refresh_row_expiry(datetime.now(timezone.utc), family_expires_at),
+                family_expires_at=family_expires_at,
                 device_name=token_model.device_name,
                 device_fingerprint=token_model.device_fingerprint,
                 ip_address=token_model.ip_address,
@@ -1090,9 +1144,7 @@ class AuthService:
                     details={"field": "channel", "channel": delivery_channel},
                 )
             challenge_type = (
-                AuthChallengeType.WHATSAPP_OTP
-                if delivery_channel == "whatsapp"
-                else AuthChallengeType.SMS_OTP
+                AuthChallengeType.WHATSAPP_OTP if delivery_channel == "whatsapp" else AuthChallengeType.SMS_OTP
             )
         else:
             delivery_channel = "email"
@@ -1442,9 +1494,7 @@ class AuthService:
         challenge_result = await session.execute(challenge_stmt)
         matching_challenge = None
         for challenge in challenge_result.scalars().all():
-            if self._verify_access_code_hash(
-                normalized_code, challenge_recipient, challenge.token_hash
-            ):
+            if self._verify_access_code_hash(normalized_code, challenge_recipient, challenge.token_hash):
                 matching_challenge = challenge
                 break
 
@@ -1555,11 +1605,7 @@ class AuthService:
 
         Does not issue login tokens — this is account verification only.
         """
-        user_stmt = (
-            select(User)
-            .where(cast(Any, User.id) == user.id)
-            .with_for_update()
-        )
+        user_stmt = select(User).where(cast(Any, User.id) == user.id).with_for_update()
         user_result = await session.execute(user_stmt)
         locked_user = user_result.scalar_one_or_none()
         if locked_user is None:
@@ -1589,9 +1635,7 @@ class AuthService:
         challenge_result = await session.execute(challenge_stmt)
         matching_challenge = None
         for challenge in challenge_result.scalars().all():
-            if self._verify_phone_verify_code_hash(
-                normalized_code, phone, challenge.token_hash
-            ):
+            if self._verify_phone_verify_code_hash(normalized_code, phone, challenge.token_hash):
                 matching_challenge = challenge
                 break
 

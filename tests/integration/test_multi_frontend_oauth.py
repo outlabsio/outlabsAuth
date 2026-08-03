@@ -41,7 +41,17 @@ class DummyOAuthClient:
     def __init__(self, name: str = "github") -> None:
         self.name = name
 
-    async def get_authorization_url(self, redirect_url, state, scopes):
+    async def get_authorization_url(
+        self,
+        redirect_url,
+        state=None,
+        scope=None,
+        code_challenge=None,
+        code_challenge_method=None,
+        extras_params=None,
+    ):
+        assert code_challenge
+        assert code_challenge_method == "S256"
         query = {"redirect_uri": redirect_url, "state": state}
         return f"https://oauth.example/{self.name}?{urlencode(query)}"
 
@@ -153,26 +163,20 @@ async def _authorize(auth, router, app_key=None):
     authorize_ep = _endpoint(router, "/authorize", "GET")
     response = Response()
     async with auth.get_session() as session:
-        result = await authorize_ep(
-            request=_request(), response=response, session=session, scopes=None, app=app_key
-        )
+        result = await authorize_ep(request=_request(), response=response, session=session, scopes=None, app=app_key)
     return _state_from(result)
 
 
 async def _cookies_for(auth, state: str, *, flow: str = "login", app_key=None) -> dict[str, str]:
     async with auth.get_session() as session:
-        record = (
-            await session.execute(select(OAuthState).where(OAuthState.state == state))
-        ).scalar_one()
-    assert record.nonce is not None
-    return {oauth_state_cookie_name("github", flow, app_key): record.nonce}
+        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+    assert record.browser_binding is not None
+    return {oauth_state_cookie_name("github", flow, app_key): record.browser_binding}
 
 
 def _patch_user_info(monkeypatch, module, email: str, provider_user_id: str):
     async def fake_get_oauth_user_info(client, token):
-        return SimpleNamespace(
-            provider_user_id=provider_user_id, email=email, email_verified=True
-        )
+        return SimpleNamespace(provider_user_id=provider_user_id, email=email, email_verified=True)
 
     monkeypatch.setattr(module, "get_oauth_user_info", fake_get_oauth_user_info)
 
@@ -204,9 +208,7 @@ async def test_single_mount_lands_each_profile_on_its_own_frontend(
         state = await _authorize(auth, router, app_key=app_key)
         assert decode_state_token(state, STATE_SECRET)["app"] == app_key
         async with auth.get_session() as session:
-            record = (
-                await session.execute(select(OAuthState).where(OAuthState.state == state))
-            ).scalar_one()
+            record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
         assert record.profile_id == app_key
 
         _patch_user_info(monkeypatch, oauth_router_module, email, f"gh-{email}")
@@ -241,9 +243,7 @@ async def test_concurrent_same_provider_flows_do_not_clobber(
 
     _patch_user_info(monkeypatch, oauth_router_module, "c2@example.com", "gh-c2")
     console_result = await _callback(auth, router, console_state, cookies)
-    assert console_result.headers["location"].startswith(
-        "https://console.example.com/auth/oauth/callback#"
-    )
+    assert console_result.headers["location"].startswith("https://console.example.com/auth/oauth/callback#")
 
 
 @pytest.mark.integration
@@ -301,13 +301,19 @@ async def test_callback_route_names_are_unique_per_mount(auth_instance: SimpleRB
     app = FastAPI()
     app.include_router(
         get_oauth_router(
-            DummyOAuthClient("github"), auth, STATE_SECRET, prefix="/a",
+            DummyOAuthClient("github"),
+            auth,
+            STATE_SECRET,
+            prefix="/a",
             redirect_url="https://api.example/a/cb",
         )
     )
     app.include_router(
         get_oauth_router(
-            DummyOAuthClient("github"), auth, STATE_SECRET, prefix="/b",
+            DummyOAuthClient("github"),
+            auth,
+            STATE_SECRET,
+            prefix="/b",
             redirect_url="https://api.example/b/cb",
         )
     )
@@ -376,7 +382,4 @@ async def test_associate_flow_lands_on_profile_association_route(
             session=session,
             access_token_state=(token, state),
         )
-    assert (
-        response.headers["location"]
-        == "https://console.example.com/settings/connections?linked=github"
-    )
+    assert response.headers["location"] == "https://console.example.com/settings/connections?linked=github"

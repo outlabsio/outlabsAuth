@@ -13,6 +13,7 @@ use it without dragging in the service layer.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,15 +29,33 @@ UOW_SCOPE_KEY = "outlabs_auth.uow_states"
 
 
 class UnitOfWorkState:
-    """One request-scoped session and whether its unit of work is finalized.
+    """One request-scoped session and serialized finalization state.
 
-    ``finalized`` flips exactly once — by the middleware at response start,
-    or by the dependency's teardown fallback — so commit/rollback never runs
-    twice for the same request.
+    FastAPI may begin dependency teardown while the response-start middleware
+    is still awaiting a commit. The lock keeps the session context from
+    closing until that commit/rollback completes, while ``finalized`` ensures
+    the second caller becomes a no-op.
     """
 
-    __slots__ = ("session", "finalized")
+    __slots__ = ("session", "finalized", "_finalize_lock")
 
     def __init__(self, session: "AsyncSession") -> None:
         self.session = session
         self.finalized = False
+        self._finalize_lock = asyncio.Lock()
+
+    async def finalize(self, *, commit: bool) -> None:
+        """Commit or roll back exactly once, waiting for an active finalizer."""
+        async with self._finalize_lock:
+            if self.finalized:
+                return
+            try:
+                if commit:
+                    await self.session.commit()
+                else:
+                    await self.session.rollback()
+            finally:
+                # A failed commit is still terminal for this request. The
+                # owning caller propagates the error and session close handles
+                # transaction cleanup; a second finalizer must not race it.
+                self.finalized = True

@@ -27,22 +27,69 @@ class DummyOAuthClient:
     def __init__(self, name: str = "github") -> None:
         self.name = name
         self.calls: list[tuple[str, str, list[str] | None]] = []
+        self.exchange_calls: list[tuple[str, str, str | None]] = []
+        self.authorization_extras: dict[str, str] = {}
 
     async def get_authorization_url(
         self,
         redirect_url: str,
-        state: str,
-        scopes: list[str] | None,
+        state: str | None = None,
+        scope: list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+        extras_params=None,
     ) -> str:
-        self.calls.append((redirect_url, state, scopes))
+        assert state is not None
+        assert code_challenge
+        assert code_challenge_method == "S256"
+        self.authorization_extras = dict(extras_params or {})
+        self.calls.append((redirect_url, state, scope))
         query = {
             "redirect_uri": redirect_url,
             "state": state,
         }
-        if scopes:
-            query["scope"] = " ".join(scopes)
+        if scope:
+            query["scope"] = " ".join(scope)
         encoded = urlencode(query)
         return f"https://oauth.example/{self.name}?{encoded}"
+
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_url: str,
+        code_verifier: str | None = None,
+    ) -> dict[str, object]:
+        self.exchange_calls.append((code, redirect_url, code_verifier))
+        return {
+            "access_token": "provider-access-token",
+            "refresh_token": "provider-refresh-token",
+            "expires_at": 1_900_000_000,
+        }
+
+
+class DummyOIDCClient(DummyOAuthClient):
+    is_oidc = True
+
+    def __init__(self, *, returned_nonce: str | None = None) -> None:
+        super().__init__("openid")
+        self.returned_nonce = returned_nonce
+
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_url: str,
+        code_verifier: str | None = None,
+    ) -> dict[str, object]:
+        token = await super().get_access_token(code, redirect_url, code_verifier)
+        token["id_token"] = "signed-provider-id-token"
+        return token
+
+    def validate_id_token(self, id_token: str) -> dict[str, str]:
+        assert id_token == "signed-provider-id-token"
+        return {
+            "sub": "openid-user",
+            "nonce": self.returned_nonce or self.authorization_extras["nonce"],
+        }
 
 
 def _endpoint(router, path: str, method: str):
@@ -75,22 +122,18 @@ async def _store_oauth_state(
                 state=state,
                 provider=provider,
                 user_id=user_id,
-                nonce=binding,
+                browser_binding=binding,
             )
         )
         await session.commit()
     return {oauth_state_cookie_name(provider, flow): binding}
 
 
-async def _oauth_state_cookies(
-    auth: SimpleRBAC, state: str, provider: str, flow: str = "login"
-) -> dict[str, str]:
+async def _oauth_state_cookies(auth: SimpleRBAC, state: str, provider: str, flow: str = "login") -> dict[str, str]:
     async with auth.get_session() as session:
-        record = (
-            await session.execute(select(OAuthState).where(OAuthState.state == state))
-        ).scalar_one()
-    assert record.nonce is not None
-    return {oauth_state_cookie_name(provider, flow): record.nonce}
+        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+    assert record.browser_binding is not None
+    return {oauth_state_cookie_name(provider, flow): record.browser_binding}
 
 
 @pytest.fixture(autouse=True)
@@ -183,18 +226,17 @@ async def test_oauth_authorize_returns_signed_state_and_callback_creates_user(
             request=_request(state_cookies),
             response=Response(),
             session=session,
-            access_token_state=(
-                {
-                    "access_token": "provider-access-token",
-                    "refresh_token": "provider-refresh-token",
-                    "expires_at": 1_900_000_000,
-                },
-                state,
-            ),
+            code="provider-code",
+            state=state,
+            error=None,
+            access_token_state=None,
         )
 
     assert callback_result["access_token"]
     assert callback_result["refresh_token"]
+    assert oauth_client.exchange_calls[0][0] == "provider-code"
+    assert oauth_client.exchange_calls[0][1] == "https://app.example.com/oauth/github/callback"
+    assert oauth_client.exchange_calls[0][2]
 
     async with auth_instance.get_session() as session:
         social_account = (
@@ -214,6 +256,57 @@ async def test_oauth_authorize_returns_signed_state_and_callback_creates_user(
         assert social_account.provider_email_verified is True
 
     assert email is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_oidc_nonce_mismatch_is_rejected_after_state_and_pkce_are_consumed(
+    auth_instance: SimpleRBAC,
+):
+    oauth_client = DummyOIDCClient(returned_nonce="wrong-nonce")
+    router = get_oauth_router(
+        oauth_client,
+        auth_instance,
+        state_secret="oauth-state-secret",
+        prefix="/v1/oauth/openid",
+        redirect_url="https://app.example.com/oauth/openid/callback",
+    )
+    authorize = _endpoint(router, "/v1/oauth/openid/authorize", "GET")
+    callback = _endpoint(router, "/v1/oauth/openid/callback", "GET")
+
+    async with auth_instance.get_session() as session:
+        response = await authorize(
+            request=SimpleNamespace(),
+            response=Response(),
+            session=session,
+            scopes=["openid", "email"],
+        )
+
+    state = parse_qs(urlparse(response.authorization_url).query)["state"][0]
+    cookies = await _oauth_state_cookies(auth_instance, state, "openid")
+    async with auth_instance.get_session() as session:
+        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        assert record.code_verifier
+        assert record.nonce == oauth_client.authorization_extras["nonce"]
+        assert record.browser_binding != record.nonce
+        code_verifier = record.code_verifier
+
+    async with auth_instance.get_session() as session:
+        with pytest.raises(HTTPException, match="ID-token nonce"):
+            await callback(
+                request=_request(cookies),
+                response=Response(),
+                session=session,
+                code="provider-code",
+                state=state,
+                error=None,
+                access_token_state=None,
+            )
+
+    assert oauth_client.exchange_calls[0][2] == code_verifier
+    async with auth_instance.get_session() as session:
+        consumed = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        assert consumed.used_at is not None
 
 
 @pytest.mark.integration
@@ -288,9 +381,7 @@ async def test_oauth_state_is_browser_bound_and_single_use(
     monkeypatch.setattr(oauth_router_module, "get_oauth_user_info", fake_get_oauth_user_info)
 
     async with auth_instance.get_session() as session:
-        authorize_response = await authorize(
-            request=SimpleNamespace(), response=Response(), session=session, scopes=[]
-        )
+        authorize_response = await authorize(request=SimpleNamespace(), response=Response(), session=session, scopes=[])
     state = parse_qs(urlparse(authorize_response.authorization_url).query)["state"][0]
     valid_cookies = await _oauth_state_cookies(auth_instance, state, "github")
     callback_args = {"access_token": "provider-access-token"}, state
@@ -361,9 +452,7 @@ async def test_oauth_associate_authorize_embeds_authenticated_user_in_state(
     decoded = decode_state_token(state, "oauth-associate-secret")
 
     assert decoded["sub"] == user_id
-    assert params["redirect_uri"] == [
-        "https://app.example.com/oauth/associate/github/callback"
-    ]
+    assert params["redirect_uri"] == ["https://app.example.com/oauth/associate/github/callback"]
 
 
 @pytest.mark.integration
@@ -410,9 +499,7 @@ async def test_oauth_associate_callback_links_account_for_authenticated_user(
     )
 
     state = generate_state_token({"sub": user_id}, "oauth-associate-secret", lifetime_seconds=600)
-    state_cookies = await _store_oauth_state(
-        auth_instance, state, "github", user_id=user_uuid, flow="associate"
-    )
+    state_cookies = await _store_oauth_state(auth_instance, state, "github", user_id=user_uuid, flow="associate")
 
     async with auth_instance.get_session() as session:
         result = await callback(
@@ -493,9 +580,7 @@ async def test_oauth_associate_callback_rejects_state_user_mismatch(
         "oauth-associate-secret",
         lifetime_seconds=600,
     )
-    state_cookies = await _store_oauth_state(
-        auth_instance, state, "github", user_id=user.id, flow="associate"
-    )
+    state_cookies = await _store_oauth_state(auth_instance, state, "github", user_id=user.id, flow="associate")
 
     async with auth_instance.get_session() as session:
         with pytest.raises(HTTPException) as exc_info:
@@ -510,9 +595,7 @@ async def test_oauth_associate_callback_rejects_state_user_mismatch(
             )
 
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == (
-        "Invalid, expired, replayed, or browser-mismatched OAuth state"
-    )
+    assert exc_info.value.detail == ("Invalid, expired, replayed, or browser-mismatched OAuth state")
 
 
 @pytest.mark.integration
@@ -570,9 +653,7 @@ async def test_oauth_associate_callback_rejects_provider_account_linked_to_anoth
     )
 
     state = generate_state_token({"sub": owner_id}, "oauth-associate-secret", lifetime_seconds=600)
-    state_cookies = await _store_oauth_state(
-        auth_instance, state, "github", user_id=owner.id, flow="associate"
-    )
+    state_cookies = await _store_oauth_state(auth_instance, state, "github", user_id=owner.id, flow="associate")
 
     async with auth_instance.get_session() as session:
         with pytest.raises(HTTPException) as exc_info:

@@ -7,8 +7,9 @@ and multi-source authentication (JWT, API keys, service tokens).
 PostgreSQL backend with SQLModel/SQLAlchemy.
 
 Quick Start:
+    >>> import os
     >>> from outlabs_auth import OutlabsAuth
-    >>> auth = OutlabsAuth(database_url="postgresql+asyncpg://...", secret_key="your-secret-key-at-least-32-characters")
+    >>> auth = OutlabsAuth(database_url="postgresql+asyncpg://...", secret_key=os.environ["SECRET_KEY"])
     >>> await auth.initialize()
 """
 

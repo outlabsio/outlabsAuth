@@ -78,16 +78,28 @@ def get_google_client(
         - Always use HTTPS in production redirect URIs
     """
     if not HTTPX_OAUTH_AVAILABLE:
-        raise ImportError(
-            "httpx-oauth is required for OAuth support. "
-            "Install with: pip install outlabs-auth[oauth]"
-        )
+        raise ImportError("httpx-oauth is required for OAuth support. " "Install with: pip install outlabs-auth[oauth]")
 
-    return GoogleOAuth2(
+    resolved_scopes = scopes or ["openid", "email", "profile"]
+    client = GoogleOAuth2(
         client_id,
         client_secret,
-        scopes=scopes or ["openid", "email", "profile"],
+        scopes=resolved_scopes,
     )
+    if "openid" in resolved_scopes:
+        # httpx-oauth's Google client supports OIDC token responses but does not
+        # expose discovery metadata. Attach Google's stable OIDC metadata so
+        # the routers can require and validate the ID-token nonce.
+        setattr(
+            client,
+            "openid_configuration",
+            {
+                "issuer": "https://accounts.google.com",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "id_token_signing_alg_values_supported": ["RS256"],
+            },
+        )
+    return client
 
 
 def get_facebook_client(
@@ -117,10 +129,7 @@ def get_facebook_client(
         - Always use HTTPS in production
     """
     if not HTTPX_OAUTH_AVAILABLE:
-        raise ImportError(
-            "httpx-oauth is required for OAuth support. "
-            "Install with: pip install outlabs-auth[oauth]"
-        )
+        raise ImportError("httpx-oauth is required for OAuth support. " "Install with: pip install outlabs-auth[oauth]")
 
     return FacebookOAuth2(
         client_id,
@@ -155,10 +164,7 @@ def get_github_client(
         - Request "user:email" scope to get verified email
     """
     if not HTTPX_OAUTH_AVAILABLE:
-        raise ImportError(
-            "httpx-oauth is required for OAuth support. "
-            "Install with: pip install outlabs-auth[oauth]"
-        )
+        raise ImportError("httpx-oauth is required for OAuth support. " "Install with: pip install outlabs-auth[oauth]")
 
     return GitHubOAuth2(
         client_id,
@@ -196,10 +202,7 @@ def get_microsoft_client(
         - Use specific tenant ID for better security (not "common")
     """
     if not HTTPX_OAUTH_AVAILABLE:
-        raise ImportError(
-            "httpx-oauth is required for OAuth support. "
-            "Install with: pip install outlabs-auth[oauth]"
-        )
+        raise ImportError("httpx-oauth is required for OAuth support. " "Install with: pip install outlabs-auth[oauth]")
 
     return MicrosoftGraphOAuth2(
         client_id,
@@ -235,10 +238,7 @@ def get_discord_client(
         - Require "email" scope to get email address
     """
     if not HTTPX_OAUTH_AVAILABLE:
-        raise ImportError(
-            "httpx-oauth is required for OAuth support. "
-            "Install with: pip install outlabs-auth[oauth]"
-        )
+        raise ImportError("httpx-oauth is required for OAuth support. " "Install with: pip install outlabs-auth[oauth]")
 
     return DiscordOAuth2(
         client_id,

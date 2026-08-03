@@ -1560,12 +1560,13 @@ migration `20260611_0018_index_hygiene.py`.
 ### Setup with SQLAlchemy/SQLModel
 
 ```python
+import os
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
 
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
-SECRET_KEY = "your-secret-key"
+SECRET_KEY = os.environ["SECRET_KEY"]
 
 @asynccontextmanager
 async def lifespan(app):
@@ -1585,11 +1586,12 @@ async def lifespan(app):
 ### Initialize with OutlabsAuth
 
 ```python
+import os
 from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
 
 auth = SimpleRBAC(
     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-    secret_key="your-secret-key"
+    secret_key=os.environ["SECRET_KEY"]
 )
 await auth.initialize()  # Creates engine and session factory
 ```

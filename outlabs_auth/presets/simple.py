@@ -6,6 +6,7 @@ Thin wrapper around OutlabsAuth that disables entity hierarchy.
 This preset is for simple applications that need basic role-based
 access control without organizational hierarchies.
 """
+
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -31,11 +32,12 @@ class SimpleRBAC(OutlabsAuth):
     - Account lockout
 
     Example:
+        >>> import os
         >>> from outlabs_auth.presets import SimpleRBAC
         >>>
         >>> auth = SimpleRBAC(
         ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-        ...     secret_key="your-secret-key-at-least-32-characters"
+        ...     secret_key=os.environ["SECRET_KEY"]
         ... )
         >>> await auth.initialize()
         >>>

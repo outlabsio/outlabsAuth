@@ -27,6 +27,7 @@ class RefreshToken(BaseModel, table=True):
 
     Table: refresh_tokens
     """
+
     __tablename__ = "refresh_tokens"
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_refresh_tokens_hash"),
@@ -81,6 +82,11 @@ class RefreshToken(BaseModel, table=True):
     expires_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False),
         description="Token expiration timestamp",
+    )
+    family_expires_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+        description="Absolute expiration shared by every token in this session family",
     )
 
     # === Revocation ===

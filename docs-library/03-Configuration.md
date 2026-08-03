@@ -90,7 +90,11 @@ Other common toggles:
 | `enable_audit_log` | `False` | Legacy audit feature-status flag (does **not** gate session/audit HTTP routes) |
 | `enable_caching` | follows Redis | Permission cache |
 | `store_refresh_tokens` | `True` | DB-backed refresh revocation (powers session inventory) |
+| `refresh_token_absolute_lifetime_days` | `90` | Maximum age of one refresh-token family |
 | `enable_token_blacklist` | `False` | Immediate access-token blacklist (Redis) |
+| `login_ip_rate_limit_max` | `20` | Password-login attempts per client IP/window |
+| `login_ip_rate_limit_window_seconds` | `300` | Password-login IP window in seconds |
+| `login_ip_rate_limit_failure_mode` | `fail_closed` | Redis outage behavior (`local_fallback` is opt-in) |
 
 Passwordless and messaging walkthrough:
 [Passwordless & Messaging](./06-Passwordless-and-Messaging.md).  

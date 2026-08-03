@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.routers._authz_utils import require_can_delegate_roles
 from outlabs_auth.schemas.membership import (
     EntityMemberResponse,
     MembershipCreateRequest,
@@ -140,11 +141,21 @@ def get_memberships_router(
         auth_result=Depends(auth.require_tree_permission("membership:create", "entity_id", source="body")),
     ):
         """Add a user to an entity with specific roles."""
+        role_ids = [UUID(rid) for rid in data.role_ids]
+        auto_roles = await auth.membership_service.get_auto_assigned_roles_for_entity(session, UUID(data.entity_id))
+        containment_role_ids = list({*role_ids, *(role.id for role in auto_roles)})
+        await require_can_delegate_roles(
+            session,
+            auth=auth,
+            actor_user_id=UUID(auth_result["user_id"]),
+            role_ids=containment_role_ids,
+            entity_id=UUID(data.entity_id),
+        )
         membership = await auth.membership_service.add_member(
             session=session,
             entity_id=UUID(data.entity_id),
             user_id=UUID(data.user_id),
-            role_ids=[UUID(rid) for rid in data.role_ids],
+            role_ids=role_ids,
             joined_by_id=UUID(auth_result["user_id"]),
             valid_from=data.valid_from,
             valid_until=data.valid_until,
@@ -273,11 +284,21 @@ def get_memberships_router(
         """Update a user's roles and lifecycle state in an entity."""
         fields_set = data.model_fields_set
 
+        role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
+        if "role_ids" in fields_set:
+            await require_can_delegate_roles(
+                session,
+                auth=auth,
+                actor_user_id=UUID(auth_result["user_id"]),
+                role_ids=role_ids,
+                entity_id=entity_id,
+            )
+
         membership = await auth.membership_service.update_membership(
             session=session,
             entity_id=entity_id,
             user_id=user_id,
-            role_ids=[UUID(rid) for rid in data.role_ids] if data.role_ids else None,
+            role_ids=role_ids if "role_ids" in fields_set else None,
             update_roles="role_ids" in fields_set,
             status=data.status,
             update_status="status" in fields_set,

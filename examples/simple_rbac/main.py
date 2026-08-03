@@ -45,7 +45,11 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac",
 )
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-please")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        'SECRET_KEY is required; generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
 REDIS_URL = os.getenv("REDIS_URL", None)
 REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "outlabs-auth:development:simple-rbac") if REDIS_URL else None
 

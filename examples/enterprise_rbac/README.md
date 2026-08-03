@@ -241,6 +241,7 @@ All implementations include these standardized routes:
 - `POST /v1/auth/refresh` - Refresh access token
 - `POST /v1/auth/logout` - Logout
 - `GET /v1/auth/config` - Preset + feature flags (admin UI discovery)
+- `GET /v1/auth/config/permissions` - Permission catalog (`permission:read` required)
 - `GET /v1/auth/me` - Get current user info
 - Magic link / access-code / invite routes when those flags are enabled (see OpenAPI)
 
@@ -411,7 +412,8 @@ The same system handles:
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac
 
 # JWT secret (CHANGE IN PRODUCTION!)
-SECRET_KEY=your-secret-key-change-in-production-please
+# Generate once with: python -c 'import secrets; print(secrets.token_urlsafe(48))'
+SECRET_KEY=<generated-random-secret>
 
 # Optional: Redis for caching
 REDIS_URL=redis://localhost:6379

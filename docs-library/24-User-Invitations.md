@@ -49,9 +49,9 @@ auth = SimpleRBAC(
 
 `GET /v1/auth/config` → `features.invitations` for UI show/hide.
 
-> **Caveat:** `enable_invitations=False` currently hides the feature in config /
-> UI discovery. Invite HTTP routes remain registered — treat the flag as a
-> product switch.
+`enable_invitations=False` is an enforcement switch: invite, accept-invite, and
+resend-invite endpoints return 404 in addition to hiding the feature in config
+and UI discovery.
 
 ---
 

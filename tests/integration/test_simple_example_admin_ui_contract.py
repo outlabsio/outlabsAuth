@@ -96,8 +96,9 @@ def _auth_headers(token: str) -> dict[str, str]:
 async def test_simple_auth_config_returns_expected_features_and_permissions(
     simple_client: httpx.AsyncClient,
     simple_auth_instance: SimpleRBAC,
+    simple_admin: dict[str, str],
 ):
-    """SimpleRBAC should expose the shared auth-config contract consumed by the UI."""
+    """Public config omits permissions; the authenticated catalog exposes them."""
     permission_name = f"simpleconfig{uuid.uuid4().hex[:6]}:read"
     async with simple_auth_instance.get_session() as session:
         await simple_auth_instance.permission_service.create_permission(
@@ -124,7 +125,17 @@ async def test_simple_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["magic_links"] is False
     assert payload["features"]["access_codes"] is False
     assert payload["auth_methods"] == {"password": True, "magic_link": False, "access_code": False}
-    assert permission_name in payload["available_permissions"]
+    assert "available_permissions" not in payload
+
+    unauthenticated_catalog = await simple_client.get("/v1/auth/config/permissions")
+    assert unauthenticated_catalog.status_code == 401
+
+    catalog_response = await simple_client.get(
+        "/v1/auth/config/permissions",
+        headers=_auth_headers(simple_admin["token"]),
+    )
+    assert catalog_response.status_code == 200
+    assert permission_name in catalog_response.json()
 
 
 @pytest.mark.integration

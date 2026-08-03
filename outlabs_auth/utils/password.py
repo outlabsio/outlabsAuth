@@ -16,14 +16,11 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 from outlabs_auth.core.exceptions import InvalidPasswordError
 
-
 # Primary hasher is Argon2id; bcrypt remains enabled for legacy hash verify.
 # Parameters default to OWASP 2023 minimums (m=19 MiB, t=2, p=1) — secure and
 # ~3x faster than pwdlib's stock defaults. Override via configure_argon2() at
 # library init (AuthConfig.argon2_* fields).
-password_hasher = PasswordHash(
-    (Argon2Hasher(time_cost=2, memory_cost=19456, parallelism=1), BcryptHasher())
-)
+password_hasher = PasswordHash((Argon2Hasher(time_cost=2, memory_cost=19456, parallelism=1), BcryptHasher()))
 
 # Lazily computed Argon2id hash used only to equalize timing on the login path
 # when no user matches the supplied email — prevents account enumeration via
@@ -114,6 +111,7 @@ def verify_and_upgrade_password(plain_password: str, hashed_password: str) -> tu
 # stays free for other requests. Under concurrent logins this is the difference
 # between serialized and parallel hashing; see benchmarks/bench_login.py.
 
+
 async def hash_password_async(password: str) -> str:
     return await asyncio.to_thread(hash_password, password)
 
@@ -122,9 +120,7 @@ async def verify_password_async(plain_password: str, hashed_password: str) -> bo
     return await asyncio.to_thread(verify_password, plain_password, hashed_password)
 
 
-async def verify_and_upgrade_password_async(
-    plain_password: str, hashed_password: str
-) -> tuple[bool, Optional[str]]:
+async def verify_and_upgrade_password_async(plain_password: str, hashed_password: str) -> tuple[bool, Optional[str]]:
     return await asyncio.to_thread(verify_and_upgrade_password, plain_password, hashed_password)
 
 
@@ -143,9 +139,7 @@ async def verify_password_dummy_async() -> None:
     "no such user" response costs the same as a "wrong password" response,
     mitigating user enumeration via timing (SEC-7).
     """
-    await asyncio.to_thread(
-        verify_password, "outlabs-timing-equalizer-probe", _get_dummy_password_hash()
-    )
+    await asyncio.to_thread(verify_password, "outlabs-timing-equalizer-probe", _get_dummy_password_hash())
 
 
 def validate_password_strength(
@@ -211,8 +205,9 @@ def validate_password_with_config(password: str, config) -> None:
         InvalidPasswordError: If password doesn't meet requirements
 
     Example:
+        >>> import os
         >>> from outlabs_auth.core.config import AuthConfig
-        >>> config = AuthConfig(secret_key="your-secret-key-at-least-32-characters", password_min_length=10)
+        >>> config = AuthConfig(secret_key=os.environ["SECRET_KEY"], password_min_length=10)
         >>> validate_password_with_config("short", config)
         InvalidPasswordError: Password must be at least 10 characters long
     """
@@ -256,8 +251,9 @@ def generate_password_hash(password: str, config) -> str:
         InvalidPasswordError: If password doesn't meet requirements
 
     Example:
+        >>> import os
         >>> from outlabs_auth.core.config import AuthConfig
-        >>> config = AuthConfig(secret_key="your-secret-key-at-least-32-characters")
+        >>> config = AuthConfig(secret_key=os.environ["SECRET_KEY"])
         >>> hashed = generate_password_hash("StrongPass123!", config)
         >>> verify_password("StrongPass123!", hashed)
         True

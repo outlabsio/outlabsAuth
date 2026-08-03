@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import InvalidInputError, RoleNotFoundError
-from outlabs_auth.models.sql.enums import RoleScope
+from outlabs_auth.models.sql.enums import DefinitionStatus, RoleScope
 from outlabs_auth.models.sql.role import ConditionGroup, Role, RoleCondition
 from outlabs_auth.observability import (
     ObservabilityContext,
@@ -74,6 +74,27 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
 
     def _role_is_system_wide(role: Role) -> bool:
         return role.is_global and role.root_entity_id is None and role.scope_entity_id is None
+
+    def _role_entity_context(role: Role) -> Optional[UUID]:
+        """Entity where a role's grants become effective, if scoped."""
+        return role.scope_entity_id or role.root_entity_id
+
+    async def _require_role_grant_containment(
+        session: AsyncSession,
+        auth_result: dict[str, Any],
+        role: Role,
+        permission_names: Optional[List[str]] = None,
+    ) -> None:
+        names = permission_names
+        if names is None:
+            names = await auth.role_service.get_role_permission_names(session, role.id)
+        await require_can_delegate_permissions(
+            session,
+            auth=auth,
+            actor_user_id=UUID(auth_result["user_id"]),
+            permission_names=names,
+            entity_id=_role_entity_context(role),
+        )
 
     async def _resolve_actor_scope(
         session: AsyncSession,
@@ -292,11 +313,15 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         await _require_role_create_scope(session, auth_result, data)
 
         # SEC-2/SEC-3: a role may only be created carrying permissions the actor holds.
+        create_entity_id = (
+            UUID(data.scope_entity_id or data.root_entity_id) if (data.scope_entity_id or data.root_entity_id) else None
+        )
         await require_can_delegate_permissions(
             session,
             auth=auth,
             actor_user_id=UUID(auth_result["user_id"]),
             permission_names=data.permissions or [],
+            entity_id=create_entity_id,
         )
 
         # Map schema scope enum to model enum
@@ -362,14 +387,46 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
 
         update_dict = data.model_dump(exclude_unset=True)
 
-        # SEC-2/SEC-3: when replacing permissions, the actor must hold each new one.
+        current_permission_names = await auth.role_service.get_role_permission_names(session, current_role.id)
+
+        # Permission replacement only needs containment for newly introduced
+        # grants. Removing a dangerous grant must remain possible for an
+        # incident responder who does not hold it.
         if "permissions" in update_dict:
-            await require_can_delegate_permissions(
-                session,
-                auth=auth,
-                actor_user_id=UUID(auth_result["user_id"]),
-                permission_names=update_dict.get("permissions") or [],
+            added_permissions = sorted(set(update_dict.get("permissions") or []) - set(current_permission_names))
+            await _require_role_grant_containment(session, auth_result, current_role, added_permissions)
+
+        widens_authority = any(
+            (
+                update_dict.get("is_global") is True and not current_role.is_global,
+                update_dict.get("status") == DefinitionStatus.ACTIVE and current_role.status != DefinitionStatus.ACTIVE,
+                update_dict.get("scope") == RoleScopeEnum.HIERARCHY and current_role.scope == RoleScope.ENTITY_ONLY,
+                update_dict.get("is_auto_assigned") is True and not current_role.is_auto_assigned,
+                "assignable_at_types" in update_dict
+                and not set(update_dict.get("assignable_at_types") or []).issubset(
+                    set(current_role.assignable_at_types or [])
+                ),
             )
+        )
+        if widens_authority:
+            proposed_permissions = (
+                update_dict.get("permissions") if "permissions" in update_dict else current_permission_names
+            )
+            if update_dict.get("is_global") is True and not current_role.is_global:
+                await require_can_delegate_permissions(
+                    session,
+                    auth=auth,
+                    actor_user_id=UUID(auth_result["user_id"]),
+                    permission_names=proposed_permissions or [],
+                    entity_id=None,
+                )
+            else:
+                await _require_role_grant_containment(
+                    session,
+                    auth_result,
+                    current_role,
+                    proposed_permissions or [],
+                )
 
         was_auto_assigned = current_role.is_auto_assigned
 
@@ -441,12 +498,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         await _require_role_visibility(session, auth_result, current_role)
 
         # SEC-2/SEC-3: the actor must already hold each permission they're adding.
-        await require_can_delegate_permissions(
-            session,
-            auth=auth,
-            actor_user_id=UUID(auth_result["user_id"]),
-            permission_names=permissions,
-        )
+        await _require_role_grant_containment(session, auth_result, current_role, permissions)
 
         role = await auth.role_service.add_permissions_by_name(
             session,
@@ -525,6 +577,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             group = await auth.role_service.create_role_condition_group(
                 session,
@@ -560,6 +613,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             group = await auth.role_service.update_role_condition_group(
                 session,
@@ -599,6 +653,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             deleted = await auth.role_service.delete_role_condition_group(
                 session,
@@ -659,6 +714,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             cond = await auth.role_service.create_role_condition(
                 session,
@@ -700,6 +756,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             cond = await auth.role_service.update_role_condition(
                 session,
@@ -747,6 +804,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
+        await _require_role_grant_containment(session, auth_result, role)
         try:
             deleted = await auth.role_service.delete_role_condition(
                 session,

@@ -3,6 +3,7 @@ JWT token creation and verification utilities
 
 Uses PyJWT for JWT operations with configurable algorithm and expiration.
 """
+
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, cast
@@ -33,9 +34,10 @@ def create_access_token(
         str: Encoded JWT token
 
     Example:
+        >>> import os
         >>> token = create_access_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="your-secret-key-at-least-32-characters",
+        ...     secret_key=os.environ["SECRET_KEY"],
         ...     audience="my-app"
         ... )
         >>> # Token is valid for 15 minutes by default
@@ -53,14 +55,16 @@ def create_access_token(
     # Generate unique JWT ID for blacklist support
     jti = secrets.token_urlsafe(16)
 
-    to_encode.update({
-        "exp": expire,
-        "iat": issued_at,  # Issued at
-        "iat_ms": int(issued_at.timestamp() * 1000),
-        "type": "access",
-        "aud": audience,  # Audience claim for cross-application security
-        "jti": jti  # JWT ID for token revocation/blacklisting
-    })
+    to_encode.update(
+        {
+            "exp": expire,
+            "iat": issued_at,  # Issued at
+            "iat_ms": int(issued_at.timestamp() * 1000),
+            "type": "access",
+            "aud": audience,  # Audience claim for cross-application security
+            "jti": jti,  # JWT ID for token revocation/blacklisting
+        }
+    )
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
     return cast(str, encoded_jwt)
@@ -87,9 +91,10 @@ def create_refresh_token(
         str: Encoded JWT refresh token
 
     Example:
+        >>> import os
         >>> token = create_refresh_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="your-secret-key-at-least-32-characters",
+        ...     secret_key=os.environ["SECRET_KEY"],
         ...     audience="my-app"
         ... )
         >>> # Token is valid for 30 days by default
@@ -107,14 +112,16 @@ def create_refresh_token(
     # Generate unique JWT ID for each refresh token (prevents token collisions)
     jti = secrets.token_urlsafe(16)
 
-    to_encode.update({
-        "exp": expire,
-        "iat": issued_at,
-        "iat_ms": int(issued_at.timestamp() * 1000),
-        "type": "refresh",
-        "aud": audience,  # Audience claim for cross-application security
-        "jti": jti  # JWT ID ensures each token is unique
-    })
+    to_encode.update(
+        {
+            "exp": expire,
+            "iat": issued_at,
+            "iat_ms": int(issued_at.timestamp() * 1000),
+            "type": "refresh",
+            "aud": audience,  # Audience claim for cross-application security
+            "jti": jti,  # JWT ID ensures each token is unique
+        }
+    )
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
     return cast(str, encoded_jwt)
@@ -177,21 +184,15 @@ def verify_token(
             if token_type != expected_type:
                 raise TokenInvalidError(
                     message=f"Invalid token type: expected {expected_type}, got {token_type}",
-                    details={"expected_type": expected_type, "actual_type": token_type}
+                    details={"expected_type": expected_type, "actual_type": token_type},
                 )
 
         return cast(Dict[str, Any], payload)
 
     except jwt.ExpiredSignatureError:
-        raise TokenExpiredError(
-            message="Token has expired",
-            details={"token_expired": True}
-        )
+        raise TokenExpiredError(message="Token has expired", details={"token_expired": True})
     except jwt.PyJWTError as e:
-        raise TokenInvalidError(
-            message=f"Invalid token: {str(e)}",
-            details={"jwt_error": str(e)}
-        )
+        raise TokenInvalidError(message=f"Invalid token: {str(e)}", details={"jwt_error": str(e)})
 
 
 def decode_token_without_verification(token: str) -> Dict[str, Any]:
@@ -219,10 +220,7 @@ def decode_token_without_verification(token: str) -> Dict[str, Any]:
             jwt.decode(token, options={"verify_signature": False}),
         )
     except jwt.PyJWTError as e:
-        raise TokenInvalidError(
-            message=f"Cannot decode token: {str(e)}",
-            details={"jwt_error": str(e)}
-        )
+        raise TokenInvalidError(message=f"Cannot decode token: {str(e)}", details={"jwt_error": str(e)})
 
 
 def get_token_expiration(token: str) -> Optional[datetime]:
@@ -290,6 +288,7 @@ def create_token_pair(
     additional_claims: Optional[Dict[str, Any]] = None,
     audience: str = "outlabs-auth",
     azp: Optional[str] = None,
+    session_expires_at: Optional[datetime] = None,
 ) -> tuple[str, str]:
     """
     Create both access and refresh tokens for a user.
@@ -307,9 +306,10 @@ def create_token_pair(
         tuple[str, str]: (access_token, refresh_token)
 
     Example:
+        >>> import os
         >>> access, refresh = create_token_pair(
         ...     user_id="user_123",
-        ...     secret_key="your-secret-key-at-least-32-characters",
+        ...     secret_key=os.environ["SECRET_KEY"],
         ...     audience="my-app"
         ... )
         >>> # access token valid for 15 min, refresh for 30 days
@@ -333,16 +333,24 @@ def create_token_pair(
 
     # Refresh token only needs user ID — plus azp so stateless deployments
     # keep session provenance across rotation.
-    refresh_data = {"sub": user_id}
+    refresh_data: Dict[str, Any] = {"sub": user_id}
     if azp:
         refresh_data["azp"] = azp
+    refresh_expires_delta = timedelta(days=refresh_token_expire_days)
+    if session_expires_at is not None:
+        absolute_expiry = session_expires_at.astimezone(timezone.utc)
+        remaining = absolute_expiry - datetime.now(timezone.utc)
+        if remaining.total_seconds() <= 0:
+            raise ValueError("Absolute session lifetime has expired")
+        refresh_expires_delta = min(refresh_expires_delta, remaining)
+        refresh_data["session_exp"] = int(absolute_expiry.timestamp())
 
     # Create refresh token
     refresh_token = create_refresh_token(
         data=refresh_data,
         secret_key=secret_key,
         algorithm=algorithm,
-        expires_delta=timedelta(days=refresh_token_expire_days),
+        expires_delta=refresh_expires_delta,
         audience=audience,
     )
 

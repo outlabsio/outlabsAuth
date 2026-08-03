@@ -29,10 +29,16 @@ class DummyOAuthClient:
     async def get_authorization_url(
         self,
         redirect_url: str,
-        state: str,
-        scopes: list[str] | None,
+        state: str | None = None,
+        scope: list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+        extras_params=None,
     ) -> str:
-        self.calls.append((redirect_url, state, scopes))
+        assert state is not None
+        assert code_challenge
+        assert code_challenge_method == "S256"
+        self.calls.append((redirect_url, state, scope))
         return f"https://oauth.example/{self.name}?redirect_uri={redirect_url}&state={state}"
 
 
@@ -108,9 +114,7 @@ def test_oauth_associate_helpers_normalize_and_map_response():
 
     assert _normalize_expires_at(None) is None
     assert _normalize_expires_at("bad-value") is None
-    assert _normalize_expires_at(1_900_000_000) == datetime.fromtimestamp(
-        1_900_000_000, tz=timezone.utc
-    )
+    assert _normalize_expires_at(1_900_000_000) == datetime.fromtimestamp(1_900_000_000, tz=timezone.utc)
     assert _normalize_expires_at(naive_dt) == naive_dt.replace(tzinfo=timezone.utc)
     assert _normalize_expires_at(aware_dt) == aware_dt
 
@@ -550,6 +554,4 @@ async def test_oauth_associate_callback_redirects_when_success_url_configured(
     )
 
     assert response.status_code == 302
-    assert response.headers["location"] == (
-        "https://app.example.com/app/account?linked=github"
-    )
+    assert response.headers["location"] == ("https://app.example.com/app/account?linked=github")

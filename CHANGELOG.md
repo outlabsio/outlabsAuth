@@ -5,9 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a27] - 2026-08-03
 
-_Nothing yet._
+### Security
+
+- Enforce entity-aware delegation containment across invitations, membership
+  grants and replacements, role creation and authority-widening updates, ABAC
+  mutations, implicit auto-assigned roles, and entity-type permission
+  overrides. Invite-time grants are validated before user creation, entity
+  membership creation requires `membership:create_tree`, and only superusers
+  may invite superusers.
+- Add distributed IP-based password-login throttling with Redis fail-closed by
+  default, isolated in-process limiter namespaces, trusted ASGI peer address
+  handling, uniform invalid-credential responses, and no attempt-budget or
+  lock-timing disclosure.
+- Require PKCE S256 for OAuth authorization-code flows and validate OIDC ID
+  tokens against provider signing keys, algorithm, key ID, issuer, audience,
+  time claims, subject, and a constant-time nonce comparison. OAuth state is
+  consumed before token exchange and browser binding is stored separately from
+  the OIDC nonce.
+- Add a 90-day default absolute refresh-family lifetime and cap rotating access
+  and refresh tokens at the signed and persisted family deadline.
+- Reject known placeholder signing secrets even when they satisfy the length
+  requirement; runnable examples now require `SECRET_KEY` from the environment.
+- Validate and canonicalize IPv4/IPv6 API-key allowlists, including CIDR
+  networks, and fail closed for invalid stored rules or missing client IPs.
+
+### Changed
+
+- Split the public pre-authentication `/auth/config` response from the protected
+  `/auth/config/permissions` catalog, which requires `permission:read`.
+- Make `enable_invitations=False` consistently hide invite, accept-invite, and
+  resend-invite routes with HTTP 404.
+- Refresh the lockfile and add an explicit `werkzeug>=3.1.6` security floor to
+  notification and aggregate dependency graphs.
+- Expand release CI to audit the exact core, runtime-extra, development/test,
+  and stress dependency graphs, and to gate the complete PostgreSQL + Redis
+  suite plus both live example applications.
+- Replace obsolete security audits with one verified release-readiness report
+  and synchronize operator guidance for metrics exposure, rate limiting,
+  invitation controls, public config, CIDR rules, sessions, and secrets.
+
+### Fixed
+
+- Serialize request unit-of-work finalization so FastAPI dependency teardown,
+  including `GeneratorExit` and cancellation, cannot close a SQLAlchemy session
+  while response-start middleware is still committing or rolling back.
+- Preserve legacy OAuth browser-binding data while removing its former
+  overloading of the OIDC nonce field.
+
+### Database migrations
+
+- `20260802_0024` adds `oauth_states.browser_binding`, migrates the legacy
+  browser-binding value out of `nonce`, and clears `nonce` for fresh OIDC use.
+- `20260802_0025` adds nullable `refresh_tokens.family_expires_at` for absolute
+  refresh-family deadlines. Legacy families derive their deadline lazily from
+  family creation time and configured policy.
+- Apply through `outlabs-auth migrate` before directing traffic to this release.
+  The populated pre-release upgrade rehearsal, idempotent retry, and packaged
+  CLI migration path all pass.
+
+### Operational upgrade notes
+
+- Production and multi-worker deployments should provide reachable Redis for
+  distributed login throttling and other configured fail-closed controls.
+- Ensure the trusted proxy layer normalizes the ASGI peer address; OutlabsAuth
+  deliberately does not trust arbitrary forwarding headers.
+- Restrict `/metrics` with network policy or host authentication and validate
+  real OAuth issuer/audience/JWKS settings in the deployment environment.
 
 ## [0.1.0a26] - 2026-07-29
 

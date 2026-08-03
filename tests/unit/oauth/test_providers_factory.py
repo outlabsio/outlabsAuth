@@ -86,6 +86,12 @@ def test_oauth_provider_factories_build_clients_with_default_scopes(
     assert isinstance(client, DummyClient)
     assert captured["args"] == ("client-id", "client-secret")
     assert captured["kwargs"] == expected_kwargs
+    if factory_name == "get_google_client":
+        assert client.openid_configuration == {
+            "issuer": "https://accounts.google.com",
+            "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+            "id_token_signing_alg_values_supported": ["RS256"],
+        }
 
 
 @pytest.mark.unit
@@ -102,7 +108,7 @@ def test_oauth_provider_factories_pass_through_custom_google_scopes(
     monkeypatch.setattr(oauth_factories, "HTTPX_OAUTH_AVAILABLE", True)
     monkeypatch.setattr(oauth_factories, "GoogleOAuth2", DummyClient, raising=False)
 
-    oauth_factories.get_google_client(
+    client = oauth_factories.get_google_client(
         "client-id",
         "client-secret",
         scopes=["openid", "email"],
@@ -110,6 +116,27 @@ def test_oauth_provider_factories_pass_through_custom_google_scopes(
 
     assert captured["args"] == ("client-id", "client-secret")
     assert captured["kwargs"] == {"scopes": ["openid", "email"]}
+    assert client.openid_configuration["issuer"] == "https://accounts.google.com"
+
+
+@pytest.mark.unit
+def test_google_factory_does_not_require_id_token_without_openid_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class DummyClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(oauth_factories, "HTTPX_OAUTH_AVAILABLE", True)
+    monkeypatch.setattr(oauth_factories, "GoogleOAuth2", DummyClient, raising=False)
+
+    client = oauth_factories.get_google_client(
+        "client-id",
+        "client-secret",
+        scopes=["email", "profile"],
+    )
+
+    assert not hasattr(client, "openid_configuration")
 
 
 @pytest.mark.unit

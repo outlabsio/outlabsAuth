@@ -17,7 +17,7 @@ This document is intentionally short. It is not a full project plan. It is a wor
 
 Recorded so this backlog reflects reality after the June release train (this list, not the per-item sections below, is the current source of truth for what landed since 2026-04-22):
 
-- ✅ **Security hardening SEC-1..SEC-9** — audit `docs/SECURITY_AUDIT_2026-06-10.md`. Includes SEC-1 (refresh tokens can no longer authenticate) and SEC-9 (HS* signing secrets must be ≥32 chars, enforced at `AuthConfig` construction — breaking for short dev/test secrets).
+- ✅ **Security hardening SEC-1..SEC-9** — consolidated in `docs/SECURITY_AUDIT_2026-08-02.md`. Includes refresh-token type enforcement and the ≥32-character HS* signing-secret gate.
 - ✅ **DD-056 tenant isolation** on user-management routes; roles router aligned to the 404 anti-enumeration contract. See `docs/DESIGN_DECISIONS.md` (DD-056) and `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`.
 - ✅ **4-phase Redis / API-key performance overhaul** — shipped in v0.1.0a23 (2026-06-16): batched version reads (single `MGET`), pipelined per-request usage/rate-limit writes, batched invalidation fan-out (`bump_versions_and_publish` / `publish_user_permissions_invalidation_batch`), and circuit-breaker reconnect on the Redis client. Index-hygiene migration `20260611_0018`.
 - ✅ **doctor / bootstrap CLI exercised in real deployments** — first rolled out across the three production consumer services on the a23 release (was "landed but not yet exercised").

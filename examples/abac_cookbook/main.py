@@ -35,7 +35,11 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/abac_cookbook",
 )
-SECRET_KEY = os.getenv("SECRET_KEY", "abac-cookbook-secret-change-me")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        'SECRET_KEY is required; generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
 
 auth: Optional[OutlabsAuth] = None
 

@@ -263,4 +263,4 @@ semantics.
 4. **Reads and writes scoped together.**
 
 DD-056 is recorded as **Accepted** in `docs/DESIGN_DECISIONS.md` and implemented;
-`docs/SECURITY_AUDIT_2026-06-10.md` (SEC-4 row) is updated accordingly.
+`docs/SECURITY_AUDIT_2026-08-02.md` retains the verified tenant-isolation result.

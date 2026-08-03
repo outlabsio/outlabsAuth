@@ -238,9 +238,7 @@ async def test_roles_router_callback_permission_and_abac_paths(
             display_name="Actor Grant",
             permission_names=[permission.name],
         )
-        await auth_instance.role_service.assign_role_to_user(
-            session, actor.id, actor_grant_role.id
-        )
+        await auth_instance.role_service.assign_role_to_user(session, actor.id, actor_grant_role.id)
 
         async def _scoped_scope(*args, **kwargs):
             return {
@@ -449,6 +447,18 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
             is_global=False,
             scope_entity_id=team.id,
             permission_names=[permission.name],
+        )
+        actor_role = await auth_instance.role_service.create_role(
+            session,
+            name=f"success-actor-role-{_suffix()}",
+            display_name="Role Success Actor",
+            is_global=True,
+            permission_names=[permission.name],
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session,
+            actor.id,
+            actor_role.id,
         )
         delete_target = await auth_instance.role_service.create_role(
             session,

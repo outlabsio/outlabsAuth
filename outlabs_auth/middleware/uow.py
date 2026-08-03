@@ -26,7 +26,6 @@ from typing import Any, Awaitable, Callable
 
 from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS
 
-
 ASGIApp = Callable[[dict, Callable[[], Awaitable[dict]], Callable[[dict], Awaitable[None]]], Awaitable[None]]
 
 
@@ -50,13 +49,7 @@ class UnitOfWorkMiddleware:
                 if states:
                     commit = scope.get("method") in WRITE_METHODS
                     for state in states:
-                        if state.finalized:
-                            continue
-                        state.finalized = True
-                        if commit:
-                            await state.session.commit()
-                        else:
-                            await state.session.rollback()
+                        await state.finalize(commit=commit)
             await send(message)
 
         await self.app(scope, receive, send_after_finalizing_uow)

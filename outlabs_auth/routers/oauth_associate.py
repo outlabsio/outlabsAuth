@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.oauth.security import generate_nonce, generate_pkce_pair
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth import (
     _state_app,
@@ -28,7 +29,12 @@ from outlabs_auth.routers.oauth_state_store import (
     issue_oauth_state,
     oauth_callback_route_name,
 )
-from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
+from outlabs_auth.routers.oauth_utils import (
+    encrypt_provider_token,
+    get_oauth_user_info,
+    oauth_client_uses_oidc,
+    validate_oidc_nonce,
+)
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse, SocialAccountResponse
 
 
@@ -91,8 +97,6 @@ def get_oauth_associate_router(
     send the SPA Bearer token on redirect). When ``success_redirect_url`` is
     set, successful callbacks redirect to the SPA instead of returning JSON.
     """
-    from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
-
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
     get_current_user = auth.deps.require_auth(
@@ -102,16 +106,9 @@ def get_oauth_associate_router(
 
     callback_route_name = oauth_callback_route_name("oauth-associate", oauth_client.name, prefix)
 
-    if redirect_url is not None:
-        oauth2_authorize_callback = OAuth2AuthorizeCallback(
-            oauth_client,
-            redirect_url=redirect_url,
-        )
-    else:
-        oauth2_authorize_callback = OAuth2AuthorizeCallback(
-            oauth_client,
-            route_name=callback_route_name,
-        )
+    async def _no_injected_callback_state() -> None:
+        """HTTP callbacks always exchange their own authorization code."""
+        return None
 
     @router.get(
         "/authorize",
@@ -129,8 +126,7 @@ def get_oauth_associate_router(
             default=None,
             max_length=64,
             description=(
-                "Registered frontend profile key the linking flow should land "
-                "on (DD-059). A key, never a URL."
+                "Registered frontend profile key the linking flow should land " "on (DD-059). A key, never a URL."
             ),
         ),
     ) -> OAuthAuthorizeResponse:
@@ -146,6 +142,8 @@ def get_oauth_associate_router(
         if app_key:
             state_data["app"] = app_key
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
+        code_verifier, code_challenge = generate_pkce_pair()
+        oidc_nonce = generate_nonce() if oauth_client_uses_oidc(oauth_client) else None
         try:
             user_uuid = UUID(str(user_id))
         except Exception:
@@ -161,13 +159,18 @@ def get_oauth_associate_router(
             flow="associate",
             user_id=user_uuid,
             app=app_key,
+            code_verifier=code_verifier,
+            oidc_nonce=oidc_nonce,
             cookie_secure=cookie_secure,
         )
 
         authorization_url = await oauth_client.get_authorization_url(
             authorize_redirect_url,
-            state,
-            scopes,
+            state=state,
+            scope=scopes,
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
+            extras_params={"nonce": oidc_nonce} if oidc_nonce else None,
         )
 
         return OAuthAuthorizeResponse(authorization_url=authorization_url)
@@ -198,11 +201,19 @@ def get_oauth_associate_router(
         request: Request,
         response: Response,
         session: AsyncSession = Depends(auth.uow),
-        access_token_state: tuple[dict[str, Any], str] = Depends(
-            oauth2_authorize_callback
-        ),
+        code: Optional[str] = Query(default=None),
+        state: Optional[str] = Query(default=None),
+        error: Optional[str] = Query(default=None),
+        access_token_state: Optional[tuple[dict[str, Any], str]] = Depends(_no_injected_callback_state),
     ) -> Union[SocialAccountResponse, RedirectResponse]:
-        token, state = access_token_state
+        token: Optional[dict[str, Any]] = None
+        if access_token_state is not None:
+            token, state = access_token_state
+        elif error or not code or not state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth provider authorization failed",
+            )
 
         try:
             state_data = decode_state_token(state, state_secret)
@@ -229,7 +240,7 @@ def get_oauth_associate_router(
         )
         effective_success_url = profile_success_url or success_redirect_url
 
-        await consume_oauth_state(
+        state_record = await consume_oauth_state(
             session=session,
             request=request,
             response=response,
@@ -238,6 +249,33 @@ def get_oauth_associate_router(
             flow="associate",
             expected_user_id=user_uuid,
             app=state_app,
+        )
+
+        if redirect_url is not None:
+            callback_redirect_url = redirect_url
+        else:
+            callback_redirect_url = str(request.url_for(callback_route_name))
+
+        if token is None:
+            try:
+                token = cast(
+                    dict[str, Any],
+                    await oauth_client.get_access_token(
+                        code,
+                        callback_redirect_url,
+                        state_record.code_verifier,
+                    ),
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="OAuth authorization code exchange failed",
+                ) from exc
+
+        await validate_oidc_nonce(
+            oauth_client,
+            token,
+            state_record.nonce if access_token_state is None else None,
         )
 
         user_info = await get_oauth_user_info(oauth_client, token)
@@ -252,9 +290,7 @@ def get_oauth_associate_router(
         now = datetime.now(timezone.utc)
         token_expires_at = _normalize_expires_at(token.get("expires_at"))
         store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
-        provider_access_token = (
-            encrypt_provider_token(auth, token["access_token"]) if store_provider_tokens else None
-        )
+        provider_access_token = encrypt_provider_token(auth, token["access_token"]) if store_provider_tokens else None
         provider_refresh_token = (
             encrypt_provider_token(auth, token.get("refresh_token")) if store_provider_tokens else None
         )
@@ -288,9 +324,7 @@ def get_oauth_associate_router(
             await session.commit()
             if effective_success_url:
                 return RedirectResponse(
-                    url=_build_success_redirect(
-                        effective_success_url, provider=oauth_client.name
-                    ),
+                    url=_build_success_redirect(effective_success_url, provider=oauth_client.name),
                     status_code=status.HTTP_302_FOUND,
                 )
             return _to_social_account_response(linked_account)
@@ -302,10 +336,7 @@ def get_oauth_associate_router(
         existing_provider_result = await session.execute(existing_provider_stmt)
         existing_provider_account = existing_provider_result.scalar_one_or_none()
 
-        if (
-            existing_provider_account
-            and existing_provider_account.provider_user_id != user_info.provider_user_id
-        ):
+        if existing_provider_account and existing_provider_account.provider_user_id != user_info.provider_user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A different account for this provider is already linked",
@@ -346,9 +377,7 @@ def get_oauth_associate_router(
 
         if effective_success_url:
             return RedirectResponse(
-                url=_build_success_redirect(
-                    effective_success_url, provider=oauth_client.name
-                ),
+                url=_build_success_redirect(effective_success_url, provider=oauth_client.name),
                 status_code=status.HTTP_302_FOUND,
             )
         return _to_social_account_response(social_account)

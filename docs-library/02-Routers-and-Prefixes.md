@@ -130,6 +130,7 @@ app.include_router(get_config_router(auth, prefix="/v1/config"))
 | Endpoint | Router | Purpose |
 |----------|--------|---------|
 | `GET {base}/auth/config` | `get_auth_router` | Preset, feature flags, auth methods — **required for OutlabsAuth UI** |
+| `GET {base}/auth/config/permissions` | `get_auth_router` | Active permission catalog — bearer auth + `permission:read` |
 | `GET/PUT {base}/config/entity-types` | `get_config_router` | Mutable entity-type vocabulary (Enterprise settings) |
 
 ## When to mount (timing)

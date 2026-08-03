@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
+from outlabs_auth.routers.oauth_utils import (
+    encrypt_provider_token,
+    get_oauth_user_info,
+    oauth_client_uses_oidc,
+    validate_oidc_nonce,
+)
 
 
 class FallbackOAuthClient:
@@ -76,10 +81,31 @@ def test_encrypt_provider_token_handles_none_missing_cipher_and_cipher_success()
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "OAuth token encryption is not configured"
 
-    auth_with_cipher = SimpleNamespace(
-        oauth_token_cipher=SimpleNamespace(encrypt=lambda token: f"encrypted:{token}")
+    auth_with_cipher = SimpleNamespace(oauth_token_cipher=SimpleNamespace(encrypt=lambda token: f"encrypted:{token}"))
+    assert encrypt_provider_token(auth_with_cipher, "provider-token") == "encrypted:provider-token"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_oidc_nonce_requires_verified_matching_claim():
+    client = SimpleNamespace(
+        is_oidc=True,
+        validate_id_token=lambda token: {"sub": "provider-user", "nonce": "expected"},
     )
-    assert (
-        encrypt_provider_token(auth_with_cipher, "provider-token")
-        == "encrypted:provider-token"
+    assert oauth_client_uses_oidc(client) is True
+
+    await validate_oidc_nonce(
+        client,
+        {"id_token": "signed-provider-token"},
+        "expected",
     )
+
+    with pytest.raises(HTTPException, match="nonce"):
+        await validate_oidc_nonce(
+            client,
+            {"id_token": "signed-provider-token"},
+            "different",
+        )
+
+    with pytest.raises(HTTPException, match="required ID token"):
+        await validate_oidc_nonce(client, {}, "expected")
