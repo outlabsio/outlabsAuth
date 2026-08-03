@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a28] - 2026-08-03
+
+### Fixed
+
+- Preserve the session factory, services, authentication backends, and
+  dependency container prepared by `prime_fastapi_routing()` during async
+  startup. Mounted FastAPI routers now use the same Redis-connected API-key
+  service as direct host dependencies instead of retaining a stale,
+  never-connected rate-limit backend.
+
+### Database migrations
+
+- None.
+
+### Operational upgrade notes
+
+- Embedded FastAPI hosts that mount routers before startup should upgrade and
+  restart normally. No configuration or role changes are required.
+
 ## [0.1.0a27] - 2026-08-03
 
 ### Security

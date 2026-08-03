@@ -458,8 +458,12 @@ class OutlabsAuth:
             )
             self._engine = create_engine(db_config)
 
-        # Create session factory
-        self._session_factory = create_session_factory(self._engine)
+        # Preserve the factory created by ``prime_fastapi_routing()``. Router
+        # dependencies close over the services built during priming, so replacing
+        # the factory and services here would leave mounted routes attached to an
+        # uninitialized Redis client while the replacement services connect.
+        if self._session_factory is None:
+            self._session_factory = create_session_factory(self._engine)
 
         # Run migrations if auto_migrate is enabled
         if self.config.auto_migrate:
@@ -471,8 +475,11 @@ class OutlabsAuth:
             if self._owns_engine or self._observability_instrument_external_engine:
                 self.observability.instrument_sqlalchemy(self._engine)
 
-        # Initialize services
-        await self._init_services()
+        # Initialize services only when they were not already prepared for router
+        # mounting by ``prime_fastapi_routing()``. Keeping the same objects is a
+        # lifecycle contract: FastAPI dependencies capture them at mount time.
+        if self.auth_service is None:
+            await self._init_services()
 
         # Connect to Redis if available
         if self.redis_client:
@@ -480,11 +487,13 @@ class OutlabsAuth:
             if self.cache_service is not None:
                 await self.cache_service.start()
 
-        # Initialize authentication backends
-        self._init_backends()
+        # Preserve backends/dependencies prepared for router mounting. Router
+        # callables capture these objects when the factories run.
+        if not self._backends:
+            self._init_backends()
 
-        # Initialize dependency injection
-        self._init_deps()
+        if self._deps is None:
+            self._init_deps()
 
         if self.config.background_job_mode == "embedded":
             await self.start_background_jobs()
