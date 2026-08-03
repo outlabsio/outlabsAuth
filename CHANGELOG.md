@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Changed
+
+- Finalize the authoritative a27/a28 security remediation and consumer rollout
+  report, including published artifact evidence, current deployment gates, and
+  the separately reported managed-PostgreSQL CLI compatibility issue.
+
+### Database migrations
+
+- None.
+
 ## [0.1.0a28] - 2026-08-03
 
 ### Fixed
