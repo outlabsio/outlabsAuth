@@ -52,8 +52,13 @@ Leave the flag off when you do not need these metrics.
 1. On authenticated requests (and some login paths), the library schedules
    `activity_tracker.track_activity_detached(user_id)` — non-blocking.
 2. Redis Sets hold the current day / month / quarter memberships (O(1) add).
-3. A background sync (default every 30 minutes) writes counts into Postgres
-   `activity_metrics` for history and optionally updates `User.last_activity`.
+3. A maintenance sync writes counts into Postgres `activity_metrics` for
+   history and optionally updates `User.last_activity`.
+
+Production APIs default to `background_job_mode="disabled"`. One external
+maintenance owner should call `run_maintenance_once()` at the host-selected
+cadence. The 30-minute `activity_sync_interval` applies only to explicitly
+enabled embedded development loops.
 
 You rarely talk to Redis yourself for dashboards older than the Redis TTL —
 query `activity_metrics` for history; use tracker helpers for “right now.”
@@ -127,9 +132,8 @@ endpoint that calls the tracker or reads `activity_metrics`.
 
 ## Ops notes
 
-- Sync runs inside the auth process when tracking is enabled; multi-worker hosts
-  should expect concurrent syncs to be idempotent upserts, not a separate
-  required worker process.
+- Production sync runs through one external maintenance owner; enabling
+  tracking does not start a loop while `background_job_mode="disabled"`.
 - Prometheus / structured logs may emit activity-related signals when
   observability is on — see [Observability](./97-Observability.md) and
   [Metrics Reference](./98-Metrics-Reference.md).
@@ -141,5 +145,6 @@ endpoint that calls the tracker or reads `activity_metrics`.
 ## Related
 
 - [Configuration](./03-Configuration.md)
+- [Background Maintenance](./09-Background-Maintenance.md)
 - [JWT Tokens](./22-JWT-Tokens.md) — why refresh lifetime skews `last_login`
 - [Design decision DD-049](../docs/DESIGN_DECISIONS.md) — maintainer depth

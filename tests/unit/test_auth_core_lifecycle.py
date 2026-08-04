@@ -92,6 +92,31 @@ async def test_run_background_jobs_once_is_explicit_and_commits_owned_work(
     session.commit.assert_awaited_once_with()
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_maintenance_once_reports_configured_but_missing_redis_sync() -> None:
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
+        redis_enabled=True,
+        redis_url="redis://localhost:6379/0",
+        redis_key_prefix="test:maintenance",
+    )
+    auth.config.enable_token_cleanup = True
+    auth.config.store_refresh_tokens = True
+    auth.config.enable_activity_tracking = False
+    auth.run_background_jobs_once = AsyncMock(  # type: ignore[method-assign]
+        return_value={"token_cleanup": {"refresh_tokens": {"total": 0}}}
+    )
+
+    report = await auth.run_maintenance_once()
+
+    assert report.ok is False
+    assert report.expected_steps == ("token_cleanup", "api_key_usage_sync")
+    assert report.missing_steps == ("api_key_usage_sync",)
+    assert report.reported_errors == 0
+
+
 def _snapshot_api_key_model(
     key_id,
     *,
@@ -192,7 +217,7 @@ class _SnapshotRedis:
         self.counters[usage_key] = self.counters.get(usage_key, 0) + 1
         self.values[last_used_key] = last_used_value
         counts = {usage_key: self.counters[usage_key]}
-        for rate_key, _ttl in (rate_windows or []):
+        for rate_key, _ttl in rate_windows or []:
             self.counters[rate_key] = self.counters.get(rate_key, 0) + 1
             counts[rate_key] = self.counters[rate_key]
         return counts
