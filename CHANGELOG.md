@@ -12,6 +12,20 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 - Add the first agent-first remote administration CLI slice: non-secret target
   contexts, capability discovery, authenticated `whoami`, and paginated
   `users list|get` commands backed by the mounted HTTP API.
+- Add target-bound refreshable CLI login sessions plus registration, password
+  reset, invitation, magic-link, and access-code commands with safe secret
+  inputs.
+- Add typed remote administration for users, roles, permissions, entities,
+  memberships, personal API keys, sessions, audit search, and entity-type
+  configuration, including human-reference resolution and permission
+  explanation.
+- Add live machine-readable command discovery and a guarded, relative-path raw
+  API escape hatch for forward-compatible access to mounted endpoints.
+- Add target-bound declarative `plan`/`apply` for permissions, entities, roles,
+  and memberships with dependency ordering, pre-write drift checks,
+  destructive gates, and partial-failure reporting.
+- Add explicit one-time API-key secret sinks with preflight validation and
+  owner-only atomic file output.
 - Add a versioned global `--output json` contract with stable success/error
   envelopes, exit categories, request metadata, and safe parser failures.
 - Add namespaced `db` and `ops` command groups while preserving every

@@ -1,6 +1,6 @@
 # OutlabsAuth CLI Design
 
-**Status:** Implementing  
+**Status:** Implemented foundation; expanding resource-specific coverage
 **Contract version:** `outlabs-auth.cli/v1`
 
 The CLI is a first-class OutlabsAuth control surface. A complete deployment
@@ -74,9 +74,45 @@ passwords are never written to the context file.
 
 Bearer credentials default to `OUTLABS_AUTH_TOKEN`; API keys default to
 `OUTLABS_AUTH_API_KEY`. Coding agents should prefer a scoped API key when the
-host policy allows it. Future interactive login support may use an OS
-credential store; it must not put passwords or tokens on the process command
-line.
+host policy allows it.
+
+Interactive bearer sessions are stored separately under the platform state
+directory (or `OUTLABS_AUTH_CREDENTIALS`). The file uses owner-only
+permissions, its default directory is created owner-only, writes are atomic,
+and each session is bound to the exact profile, base URL, and API prefix. A
+context changed to another host cannot receive the old host's token. Expiring
+sessions refresh automatically; one unauthorized response triggers at most one
+refresh-and-retry.
+
+Passwords, reset tokens, invitation tokens, magic-link tokens, and access
+codes are accepted from environment variables, stdin, or hidden prompts—not
+as secret-valued command-line options.
+
+API-key creation and rotation require an explicit one-time secret sink:
+`--secret-file` writes mode `0600`, while `--show-secret` deliberately exposes
+the value to structured stdout. Without one of these choices, no key is
+created.
+
+## Agent discovery and forward compatibility
+
+`outlabs-auth --output json commands` describes the live Click command tree,
+including option flags, types, choices, defaults, required fields, and
+environment inputs. Agents should inspect a narrow path when possible, for
+example `commands roles create --shallow`.
+
+Purpose-built groups cover authentication, users, roles, permissions,
+entities, memberships, API keys, sessions, audit, and entity-type config. The
+guarded `api request` command is a forward-compatible escape hatch for mounted
+endpoints not yet represented by a typed command. It accepts only relative
+paths, bounded JSON input, and requires explicit confirmation for every raw
+write.
+
+## Declarative workflow
+
+`plan` and `apply` implement a two-phase state workflow for permissions,
+entities, roles, and memberships. Plans are target-bound, saved mode `0600`,
+dependency ordered, and include drift hashes. All preconditions are validated
+before the first write. Details: [`CLI_MANIFEST.md`](./CLI_MANIFEST.md).
 
 ## Compatibility
 

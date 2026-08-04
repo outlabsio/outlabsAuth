@@ -24,8 +24,28 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 - Destructive schema initialization/drop/downgrade requires explicit
   confirmation in unattended execution. Bootstrap passwords support stdin so
   they do not need to appear in process arguments.
-- The remaining remote resource groups, interactive credential storage,
-  declarative plan/apply, and permission explanation are follow-up slices.
+
+### UI-Optional CLI Control Plane
+
+- Password login, registration, reset, invitation, magic-link, and access-code
+  flows accept secrets only from environment variables, stdin, or hidden
+  prompts. Refreshable login sessions are stored atomically with owner-only
+  permissions and are bound to the exact target.
+- Typed remote lifecycle groups cover users, roles, permissions, entities,
+  memberships, personal API keys, sessions, cross-user audit search, and
+  entity-type configuration. Human references are resolved to exact IDs and
+  authority-changing operations require confirmation.
+- `permissions explain` shows exact/wildcard matches and the role, direct
+  grant, superuser, or server check responsible for a decision.
+- API-key creation and rotation require an explicit one-time secret sink; file
+  targets are checked before the server creates or rotates the key.
+- `commands` exposes the live Click tree as machine-readable option metadata.
+  Guarded `api request` covers newly mounted relative endpoints with bounded
+  JSON input and confirmation for raw writes.
+- Declarative `plan`/`apply` manage named permissions, entities, roles, and
+  memberships using target-bound, drift-checked, dependency-ordered plans.
+  Destructive and partially completed execution have distinct safety gates and
+  exit categories.
 
 ### User Lifecycle and Access Revocation
 

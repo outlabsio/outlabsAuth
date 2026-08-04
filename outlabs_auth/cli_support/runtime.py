@@ -93,7 +93,20 @@ def _command_from_args(args: Sequence[str]) -> str:
             continue
         # Only the first parsed word is safe to report before Click validates
         # the command. Later words may be option values containing secrets.
-        if value in {"context", "db", "ops"} and index + 1 < len(args):
+        safe_groups = {
+            "api",
+            "api-keys",
+            "auth",
+            "context",
+            "db",
+            "entities",
+            "memberships",
+            "ops",
+            "permissions",
+            "roles",
+            "users",
+        }
+        if value in safe_groups and index + 1 < len(args):
             subcommand = args[index + 1]
             if not subcommand.startswith("-"):
                 return f"{value}.{subcommand}"

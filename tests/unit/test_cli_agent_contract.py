@@ -3,13 +3,23 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
 from pathlib import Path
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
+import outlabs_auth.cli_support.api_commands as api_commands
+import outlabs_auth.cli_support.api_key_commands as api_key_commands
+import outlabs_auth.cli_support.auth_commands as auth_commands
+import outlabs_auth.cli_support.declarative_commands as declarative_commands
+import outlabs_auth.cli_support.entity_commands as entity_commands
+import outlabs_auth.cli_support.membership_commands as membership_commands
+import outlabs_auth.cli_support.permission_commands as permission_commands
 import outlabs_auth.cli_support.remote_commands as remote_commands
+import outlabs_auth.cli_support.role_commands as role_commands
+import outlabs_auth.cli_support.user_admin_commands as user_admin_commands
 from outlabs_auth.cli import _redact_database_url, main as cli_main
 from outlabs_auth.cli_support.client import RemoteClient, RemoteTarget, resolve_remote_target
 from outlabs_auth.cli_support.contexts import (
@@ -17,6 +27,13 @@ from outlabs_auth.cli_support.contexts import (
     ContextStore,
     normalize_api_prefix,
     normalize_base_url,
+)
+from outlabs_auth.cli_support.credentials import CredentialStore, StoredSession
+from outlabs_auth.cli_support.declarative import (
+    apply_plan,
+    build_plan,
+    validate_manifest,
+    validate_plan,
 )
 from outlabs_auth.cli_support.runtime import CliError, CliRuntime
 
@@ -37,6 +54,13 @@ def _target(**overrides) -> RemoteTarget:
     }
     values.update(overrides)
     return RemoteTarget(**values)
+
+
+def _patch_resource_client(monkeypatch: pytest.MonkeyPatch, module, handler) -> RemoteClient:
+    target = _target()
+    client = RemoteClient(target, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(module, "remote_client", lambda: (target, client))
+    return client
 
 
 def test_missing_database_url_honors_global_json_contract(monkeypatch: pytest.MonkeyPatch):
@@ -188,6 +212,57 @@ def test_context_store_round_trip_is_atomic_and_secret_free(tmp_path: Path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_credential_store_is_owner_only_and_target_bound(tmp_path: Path):
+    path = tmp_path / "state" / "credentials.json"
+    store = CredentialStore(path).load()
+    session = StoredSession(
+        profile="production",
+        base_url="https://api.example.test",
+        api_prefix="/v1",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=time.time() + 900,
+        created_at=time.time(),
+        email="admin@example.test",
+    )
+    store.put(session)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert (
+        CredentialStore(path)
+        .load()
+        .get(
+            "production",
+            base_url="https://api.example.test",
+            api_prefix="/v1",
+        )
+        == session
+    )
+
+    with pytest.raises(CliError) as raised:
+        CredentialStore(path).load().get(
+            "production",
+            base_url="https://attacker.example.test",
+            api_prefix="/v1",
+        )
+
+    assert raised.value.code == "CREDENTIAL_TARGET_MISMATCH"
+    assert "access-secret" not in str(raised.value.details)
+    assert "refresh-secret" not in str(raised.value.details)
+
+
+def test_credential_store_rejects_permissive_file_mode(tmp_path: Path):
+    path = tmp_path / "credentials.json"
+    path.write_text('{"version": 1, "sessions": {}}')
+    path.chmod(0o644)
+
+    with pytest.raises(CliError) as raised:
+        CredentialStore(path).load()
+
+    assert raised.value.code == "INSECURE_CREDENTIAL_STORE"
+
+
 def test_context_cli_add_and_current_use_json_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,6 +291,82 @@ def test_context_cli_add_and_current_use_json_contract(
     assert current.exit_code == 0
     assert _json_output(current)["result"]["profile"] == "local"
     assert _json_output(current)["result"]["api_prefix"] == "/v1"
+
+
+def test_auth_login_stores_session_without_disclosing_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_path = tmp_path / "config.json"
+    credentials_path = tmp_path / "credentials.json"
+    monkeypatch.setenv("OUTLABS_AUTH_CONFIG", str(config_path))
+    monkeypatch.setenv("OUTLABS_AUTH_CREDENTIALS", str(credentials_path))
+    ContextStore(config_path).add(
+        ContextProfile(name="local", base_url="http://127.0.0.1:8004", api_prefix="/v1"),
+        activate=True,
+        force=False,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/auth/login"
+        assert json.loads(request.content)["password"] == "human-password"
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "access-secret",
+                "refresh_token": "refresh-secret",
+                "token_type": "bearer",
+                "expires_in": 900,
+            },
+        )
+
+    monkeypatch.setattr(
+        auth_commands,
+        "RemoteClient",
+        lambda target: RemoteClient(
+            target,
+            transport=httpx.MockTransport(handler),
+            credential_store=CredentialStore(credentials_path).load(),
+        ),
+    )
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "auth", "login", "--email", "admin@example.test", "--password-stdin"],
+        input="human-password\n",
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["command"] == "auth.login"
+    assert "access-secret" not in result.output
+    assert "refresh-secret" not in result.output
+    assert "human-password" not in result.output
+    stored = CredentialStore(credentials_path).load().get("local")
+    assert stored is not None
+    assert stored.access_token == "access-secret"
+    assert stored.refresh_token == "refresh-secret"
+
+
+def test_auth_login_non_interactive_requires_safe_password_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setenv("OUTLABS_AUTH_CONFIG", str(config_path))
+    monkeypatch.delenv("OUTLABS_AUTH_PASSWORD", raising=False)
+    ContextStore(config_path).add(
+        ContextProfile(name="local", base_url="http://127.0.0.1:8004"),
+        activate=True,
+        force=False,
+    )
+
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "--non-interactive", "auth", "login", "--email", "admin@example.test"],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "LOGIN_PASSWORD_MISSING"
 
 
 def test_context_rejects_insecure_non_local_http():
@@ -358,6 +509,83 @@ def test_remote_api_error_maps_to_stable_auth_exit(monkeypatch: pytest.MonkeyPat
     assert raised.value.details["http_status"] == 403
 
 
+def test_remote_validation_error_never_echoes_submitted_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "type": "string_too_short",
+                        "loc": ["body", "password"],
+                        "msg": "String should have at least 8 characters",
+                        "input": "echoed-password",
+                    }
+                ]
+            },
+        )
+
+    with pytest.raises(CliError) as raised:
+        RemoteClient(_target(), transport=httpx.MockTransport(handler)).request(
+            "POST",
+            "/auth/login",
+            json_body={"password": "echoed-password"},
+        )
+
+    assert raised.value.code == "HTTP_422"
+    assert "echoed-password" not in str(raised.value.details)
+    assert raised.value.details["errors"][0]["loc"] == ["body", "password"]
+
+
+def test_stored_session_refreshes_and_retries_after_unauthorized(tmp_path: Path):
+    store = CredentialStore(tmp_path / "credentials.json").load()
+    store.put(
+        StoredSession(
+            profile="test",
+            base_url="https://auth.example.test",
+            api_prefix="/v1",
+            access_token="old-access",
+            refresh_token="old-refresh",
+            expires_at=time.time() + 600,
+            created_at=time.time(),
+        )
+    )
+    seen_authorization: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/auth/refresh":
+            assert json.loads(request.content)["refresh_token"] == "old-refresh"
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "token_type": "bearer",
+                    "expires_in": 900,
+                },
+            )
+        seen_authorization.append(request.headers["authorization"])
+        if request.headers["authorization"] == "Bearer old-access":
+            return httpx.Response(401, json={"error": "TOKEN_EXPIRED", "message": "Expired"})
+        return httpx.Response(200, json={"id": "user-1", "email": "admin@example.test"})
+
+    payload, meta = RemoteClient(
+        _target(),
+        transport=httpx.MockTransport(handler),
+        credential_store=store,
+    ).whoami()
+
+    assert payload["id"] == "user-1"
+    assert seen_authorization == ["Bearer old-access", "Bearer new-access"]
+    assert meta["auth_source"] == "stored_session"
+    refreshed = CredentialStore(store.path).load().get("test")
+    assert refreshed is not None
+    assert refreshed.access_token == "new-access"
+    assert refreshed.refresh_token == "new-refresh"
+
+
 def test_remote_transport_failure_is_retryable():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("offline", request=request)
@@ -450,6 +678,695 @@ def test_remote_user_reference_rejects_ambiguous_search(monkeypatch: pytest.Monk
 
     assert raised.value.code == "USER_REFERENCE_AMBIGUOUS"
     assert raised.value.exit_code == 5
+
+
+def test_raw_api_write_requires_confirmation_and_uses_bounded_json_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("OUTLABS_AUTH_TOKEN", "safe-token")
+    request_file = tmp_path / "request.json"
+    request_file.write_text('{"name": "operator"}')
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json={"id": "role-1", "name": "operator"})
+
+    monkeypatch.setattr(
+        api_commands,
+        "RemoteClient",
+        lambda target: RemoteClient(target, transport=httpx.MockTransport(handler)),
+    )
+    runner = CliRunner()
+    denied = runner.invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "--non-interactive",
+            "--base-url",
+            "https://auth.example.test",
+            "api",
+            "request",
+            "POST",
+            "/roles/",
+            "--from",
+            str(request_file),
+        ],
+    )
+    allowed = runner.invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "--non-interactive",
+            "--base-url",
+            "https://auth.example.test",
+            "api",
+            "request",
+            "POST",
+            "/roles/",
+            "--from",
+            str(request_file),
+            "--yes",
+        ],
+    )
+
+    assert denied.exit_code == 2
+    assert _json_output(denied)["error"]["code"] == "INTERACTION_REQUIRED"
+    assert allowed.exit_code == 0
+    assert _json_output(allowed)["command"] == "api.request"
+    assert seen == [{"name": "operator"}]
+
+
+def test_raw_api_rejects_absolute_url_before_transport(monkeypatch: pytest.MonkeyPatch):
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "--base-url",
+            "https://auth.example.test",
+            "api",
+            "request",
+            "GET",
+            "https://attacker.example.test/users",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "INVALID_API_PATH"
+
+
+def test_roles_create_builds_typed_request_and_json_contract(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/roles/"
+        body = json.loads(request.content)
+        assert body == {
+            "name": "operator",
+            "display_name": "Operator",
+            "permissions": ["user:read", "entity:read"],
+            "is_global": False,
+        }
+        return httpx.Response(201, json={"id": "role-1", **body, "status": "active"})
+
+    _patch_resource_client(monkeypatch, role_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "roles",
+            "create",
+            "--name",
+            "operator",
+            "--display-name",
+            "Operator",
+            "--permission",
+            "user:read",
+            "--permission",
+            "entity:read",
+            "--not-global",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["command"] == "roles.create"
+    assert payload["changed"] is True
+    assert payload["result"]["name"] == "operator"
+
+
+def test_permission_explain_identifies_wildcard_role_source(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/users/me":
+            return httpx.Response(
+                200,
+                json={"id": "user-1", "email": "admin@example.test", "is_superuser": False},
+            )
+        assert request.url.path == "/v1/users/user-1/permissions"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "permission": {"id": "permission-1", "name": "user:*", "display_name": "Manage users"},
+                    "source": "role",
+                    "source_id": "role-1",
+                    "source_name": "operator",
+                }
+            ],
+        )
+
+    _patch_resource_client(monkeypatch, permission_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "permissions", "explain", "user:read"],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["command"] == "permissions.explain"
+    assert payload["result"]["granted"] is True
+    assert payload["result"]["reason"] == "matching_role_or_direct_grant"
+    assert payload["result"]["matching_sources"][0]["source_name"] == "operator"
+
+
+def test_entities_move_resolves_both_names_before_mutation(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    moved: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            search = request.url.params["search"]
+            item = (
+                {"id": "00000000-0000-0000-0000-000000000001", "name": "sales", "slug": "sales"}
+                if search == "sales"
+                else {"id": "00000000-0000-0000-0000-000000000002", "name": "north", "slug": "north"}
+            )
+            return httpx.Response(
+                200,
+                json={"items": [item], "total": 1, "page": 1, "limit": 1000, "pages": 1},
+            )
+        assert request.url.path == "/v1/entities/00000000-0000-0000-0000-000000000001/move"
+        moved.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "00000000-0000-0000-0000-000000000001",
+                "name": "sales",
+                "parent_entity_id": "00000000-0000-0000-0000-000000000002",
+            },
+        )
+
+    _patch_resource_client(monkeypatch, entity_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "entities", "move", "sales", "--parent", "north", "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert moved == [{"new_parent_id": "00000000-0000-0000-0000-000000000002"}]
+    assert _json_output(result)["command"] == "entities.move"
+
+
+def test_membership_add_resolves_human_references(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    created: list[dict] = []
+
+    def page(item: dict) -> httpx.Response:
+        return httpx.Response(200, json={"items": [item], "total": 1, "page": 1, "limit": 100, "pages": 1})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/users/":
+            return page({"id": "user-1", "email": "alex@example.test"})
+        if request.url.path == "/v1/entities/":
+            return page({"id": "entity-1", "name": "sales", "slug": "sales"})
+        if request.url.path == "/v1/roles/":
+            return page({"id": "role-1", "name": "operator", "display_name": "Operator"})
+        assert request.url.path == "/v1/memberships/"
+        created.append(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={"id": "membership-1", **created[-1], "status": "active", "effective_status": "active"},
+        )
+
+    _patch_resource_client(monkeypatch, membership_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "memberships",
+            "add",
+            "--user",
+            "alex@example.test",
+            "--entity",
+            "sales",
+            "--role",
+            "operator",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert created == [{"user_id": "user-1", "entity_id": "entity-1", "role_ids": ["role-1"]}]
+    assert _json_output(result)["command"] == "memberships.add"
+
+
+def test_api_key_create_writes_one_time_secret_to_owner_only_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    secret_path = tmp_path / "secrets" / "agent.key"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/api-keys/"
+        body = json.loads(request.content)
+        assert body["scopes"] == ["user:read"]
+        return httpx.Response(
+            201,
+            json={
+                "id": "key-1",
+                "name": "coding-agent",
+                "prefix": "sk_live_abc",
+                "key_kind": "personal",
+                "status": "active",
+                "scopes": ["user:read"],
+                "rate_limit_per_minute": 60,
+                "api_key": "one-time-secret",
+            },
+        )
+
+    _patch_resource_client(monkeypatch, api_key_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "api-keys",
+            "create",
+            "--name",
+            "coding-agent",
+            "--scope",
+            "user:read",
+            "--secret-file",
+            str(secret_path),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert secret_path.read_text() == "one-time-secret\n"
+    assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+    assert "one-time-secret" not in result.output
+    payload = _json_output(result)
+    assert payload["command"] == "api-keys.create"
+    assert payload["result"]["secret_written_to"] == str(secret_path)
+
+
+def test_api_key_secret_sink_preflight_preserves_existing_directory_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    secret_directory = tmp_path / "shared"
+    secret_directory.mkdir(mode=0o755)
+    secret_path = secret_directory / "agent.key"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/api-keys/"
+        return httpx.Response(
+            201,
+            json={
+                "id": "key-1",
+                "name": "coding-agent",
+                "prefix": "sk_live_abc",
+                "key_kind": "personal",
+                "status": "active",
+                "scopes": ["user:read"],
+                "api_key": "one-time-secret",
+            },
+        )
+
+    _patch_resource_client(monkeypatch, api_key_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "api-keys",
+            "create",
+            "--name",
+            "coding-agent",
+            "--scope",
+            "user:read",
+            "--secret-file",
+            str(secret_path),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert stat.S_IMODE(secret_directory.stat().st_mode) == 0o755
+    assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+
+
+def test_api_key_secret_sink_is_validated_before_remote_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    called = False
+    secret_path = tmp_path / "existing.key"
+    secret_path.write_text("do-not-overwrite")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500)
+
+    _patch_resource_client(monkeypatch, api_key_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "api-keys",
+            "create",
+            "--name",
+            "coding-agent",
+            "--scope",
+            "user:read",
+            "--secret-file",
+            str(secret_path),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "SECRET_FILE_EXISTS"
+    assert called is False
+
+
+def test_api_key_create_refuses_to_call_api_without_secret_sink(monkeypatch: pytest.MonkeyPatch):
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "api-keys", "create", "--name", "agent", "--scope", "user:read", "--yes"],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "SECRET_SINK_REQUIRED"
+
+
+def test_user_password_reset_uses_stdin_without_secret_disclosure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    seen_passwords: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/users/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "user-1", "email": "alex@example.test"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        seen_passwords.append(json.loads(request.content)["new_password"])
+        return httpx.Response(204)
+
+    _patch_resource_client(monkeypatch, user_admin_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "users",
+            "reset-password",
+            "alex@example.test",
+            "--password-stdin",
+            "--yes",
+        ],
+        input="replacement-secret\n",
+    )
+
+    assert result.exit_code == 0
+    assert seen_passwords == ["replacement-secret"]
+    assert "replacement-secret" not in result.output
+    assert _json_output(result)["command"] == "users.reset-password"
+
+
+def test_command_schema_uses_public_root_path_and_omits_internal_sentinels():
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "commands", "roles", "create", "--shallow"],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["result"]["path"] == "outlabs-auth roles create"
+    assert "Sentinel" not in result.output
+
+
+def test_declarative_plan_and_apply_orders_permission_before_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    permissions: list[dict] = []
+    roles: list[dict] = []
+    writes: list[str] = []
+
+    def paginated(items: list[dict], request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": items,
+                "total": len(items),
+                "page": int(request.url.params["page"]),
+                "limit": int(request.url.params["limit"]),
+                "pages": 1 if items else 0,
+            },
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1/permissions/":
+            return paginated(permissions, request)
+        if request.method == "GET" and request.url.path == "/v1/roles/":
+            return paginated(roles, request)
+        body = json.loads(request.content)
+        if request.url.path == "/v1/permissions/":
+            writes.append("permission")
+            created = {"id": "permission-1", "status": "active", "is_active": True, **body}
+            permissions.append(created)
+            return httpx.Response(201, json=created)
+        writes.append("role")
+        created = {
+            "id": "role-1",
+            "status": "active",
+            "scope": "hierarchy",
+            "is_global": True,
+            **body,
+        }
+        roles.append(created)
+        return httpx.Response(201, json=created)
+
+    target = _target()
+    client = RemoteClient(target, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(declarative_commands, "remote_client", lambda: (target, client))
+    manifest_path = tmp_path / "state.json"
+    plan_path = tmp_path / "plan.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "api_version": "outlabs-auth.state/v1alpha1",
+                "kind": "OutlabsAuthState",
+                "spec": {
+                    "permissions": [{"name": "agent:read", "display_name": "Agent read"}],
+                    "roles": [
+                        {
+                            "name": "coding-agent",
+                            "display_name": "Coding agent",
+                            "permissions": ["agent:read"],
+                        }
+                    ],
+                },
+            }
+        )
+    )
+    runner = CliRunner()
+    planned = runner.invoke(
+        cli_main,
+        ["--output", "json", "plan", str(manifest_path), "--out", str(plan_path)],
+    )
+    applied = runner.invoke(
+        cli_main,
+        ["--output", "json", "apply", str(plan_path), "--yes"],
+    )
+
+    assert planned.exit_code == 0
+    planned_payload = _json_output(planned)
+    assert [item["resource"] for item in planned_payload["result"]["operations"]] == ["permissions", "roles"]
+    assert stat.S_IMODE(plan_path.stat().st_mode) == 0o600
+    assert applied.exit_code == 0
+    assert _json_output(applied)["result"]["applied"] == 2
+    assert writes == ["permission", "role"]
+
+
+def test_declarative_apply_detects_drift_before_any_write(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    role = {
+        "id": "role-1",
+        "name": "operator",
+        "display_name": "Operator",
+        "permissions": [],
+        "status": "active",
+        "scope": "hierarchy",
+        "is_global": True,
+    }
+    writes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            writes.append(request.method)
+            return httpx.Response(200, json={})
+        return httpx.Response(
+            200,
+            json={"items": [role], "total": 1, "page": 1, "limit": 100, "pages": 1},
+        )
+
+    target = _target()
+    client = RemoteClient(target, transport=httpx.MockTransport(handler))
+    manifest = {
+        "api_version": "outlabs-auth.state/v1alpha1",
+        "kind": "OutlabsAuthState",
+        "spec": {"roles": [{"name": "operator", "display_name": "Senior operator"}]},
+    }
+    plan = build_plan(client, target, manifest)
+    role["display_name"] = "Changed elsewhere"
+
+    with pytest.raises(CliError) as raised:
+        apply_plan(client, plan["operations"])
+
+    assert raised.value.code == "PLAN_DRIFT_DETECTED"
+    assert raised.value.exit_code == 5
+    assert writes == []
+
+
+def test_declarative_apply_resolves_new_entity_and_role_dependencies(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    entities: list[dict] = []
+    roles: list[dict] = []
+    users = [{"id": "user-1", "email": "alex@example.test"}]
+    request_bodies: list[tuple[str, dict]] = []
+
+    def page(items: list[dict], request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": items,
+                "total": len(items),
+                "page": int(request.url.params["page"]),
+                "limit": int(request.url.params["limit"]),
+                "pages": 1 if items else 0,
+            },
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            if request.url.path == "/v1/entities/":
+                return page(entities, request)
+            if request.url.path == "/v1/roles/":
+                return page(roles, request)
+            if request.url.path == "/v1/users/":
+                return page(users, request)
+            if request.url.path == "/v1/memberships/user/user-1":
+                return httpx.Response(200, json=[])
+        body = json.loads(request.content)
+        request_bodies.append((request.url.path, body))
+        if request.url.path == "/v1/entities/":
+            entity_id = f"entity-{len(entities) + 1}"
+            created = {"id": entity_id, "status": "active", **body}
+            entities.append(created)
+            return httpx.Response(201, json=created)
+        if request.url.path == "/v1/roles/":
+            created = {"id": "role-1", "status": "active", **body}
+            roles.append(created)
+            return httpx.Response(201, json=created)
+        return httpx.Response(201, json={"id": "membership-1", "status": "active", **body})
+
+    target = _target()
+    client = RemoteClient(target, transport=httpx.MockTransport(handler))
+    manifest = {
+        "api_version": "outlabs-auth.state/v1alpha1",
+        "kind": "OutlabsAuthState",
+        "spec": {
+            "entities": [
+                {
+                    "slug": "acme",
+                    "name": "acme",
+                    "display_name": "Acme",
+                    "entity_class": "structural",
+                    "entity_type": "organization",
+                },
+                {
+                    "slug": "engineering",
+                    "name": "engineering",
+                    "display_name": "Engineering",
+                    "entity_class": "structural",
+                    "entity_type": "department",
+                    "parent": "acme",
+                },
+            ],
+            "roles": [
+                {
+                    "name": "engineer",
+                    "display_name": "Engineer",
+                    "scope_entity": "engineering",
+                    "permissions": [],
+                }
+            ],
+            "memberships": [
+                {
+                    "user": "alex@example.test",
+                    "entity": "engineering",
+                    "roles": ["engineer"],
+                }
+            ],
+        },
+    }
+    plan = build_plan(client, target, manifest)
+    result = apply_plan(client, plan["operations"])
+
+    assert result["applied"] == 4
+    assert [path for path, _ in request_bodies] == [
+        "/v1/entities/",
+        "/v1/entities/",
+        "/v1/roles/",
+        "/v1/memberships/",
+    ]
+    assert request_bodies[1][1]["parent_entity_id"] == "entity-1"
+    assert request_bodies[2][1]["scope_entity_id"] == "entity-2"
+    assert request_bodies[3][1]["entity_id"] == "entity-2"
+    assert request_bodies[3][1]["role_ids"] == ["role-1"]
+
+
+def test_declarative_manifest_rejects_unknown_fields():
+    with pytest.raises(CliError) as raised:
+        validate_manifest(
+            {
+                "api_version": "outlabs-auth.state/v1alpha1",
+                "kind": "OutlabsAuthState",
+                "spec": {"roles": [{"name": "operator", "display_nmae": "typo"}]},
+            }
+        )
+
+    assert raised.value.code == "UNKNOWN_DECLARATIVE_FIELD"
+
+
+def test_saved_plan_is_bound_to_exact_target():
+    with pytest.raises(CliError) as raised:
+        validate_plan(
+            {
+                "plan_version": "outlabs-auth.plan/v1alpha1",
+                "target": {
+                    "profile": "test",
+                    "base_url": "https://different.example.test",
+                    "api_prefix": "/v1",
+                },
+                "operations": [],
+            },
+            _target(),
+        )
+
+    assert raised.value.code == "PLAN_TARGET_MISMATCH"
 
 
 def test_users_list_command_wires_filters_into_versioned_result(monkeypatch: pytest.MonkeyPatch):

@@ -117,6 +117,7 @@ Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 | `OUTLABS_AUTH_SCHEMA` | Schema for migrate / seed / doctor / bootstrap |
 | `OUTLABS_AUTH_BOOTSTRAP_*` | Optional admin email/password for `outlabs-auth bootstrap` |
 | `OUTLABS_AUTH_CONFIG` | Optional path to the non-secret remote-context JSON file |
+| `OUTLABS_AUTH_CREDENTIALS` | Optional path to the target-bound bearer-session store (mode `0600`) |
 | `OUTLABS_AUTH_PROFILE` | Remote context selected for this invocation |
 | `OUTLABS_AUTH_BASE_URL` | One-off remote base URL override |
 | `OUTLABS_AUTH_API_PREFIX` | One-off remote API-prefix override |
@@ -125,6 +126,9 @@ Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 | `OUTLABS_AUTH_TOKEN` | Default remote bearer credential; never stored in context config |
 | `OUTLABS_AUTH_API_KEY` | Default remote `X-API-Key` credential for scoped automation |
 | `OUTLABS_AUTH_OUTPUT` | Global output contract (`text` or versioned `json`) |
+| `OUTLABS_AUTH_NON_INTERACTIVE` | Disable prompts; confirmation then requires command-specific `--yes` |
+| `OUTLABS_AUTH_TIMEOUT` | Remote HTTP timeout in seconds |
+| `OUTLABS_AUTH_DEBUG` | Include tracebacks for unexpected CLI failures |
 
 ## Operator commands
 
@@ -150,10 +154,12 @@ Remote API setup and inspection:
 
 ```bash
 outlabs-auth context add production --base-url https://api.example.com --api-prefix /iam
-export OUTLABS_AUTH_TOKEN='short-lived-access-token'
 outlabs-auth capabilities
+outlabs-auth auth login --email admin@example.com
+outlabs-auth auth status
 outlabs-auth whoami
 outlabs-auth users list --all
+outlabs-auth permissions explain reports:read --user admin@example.com
 ```
 
 For scoped agent automation, add the context with `--credential-type api-key`
@@ -162,6 +168,19 @@ and provide `OUTLABS_AUTH_API_KEY` instead of a human bearer token.
 Use global `--output json --non-interactive` for coding agents and unattended
 automation. Unlike legacy command-specific `--format json`, the global form
 uses the versioned envelope documented in [`docs/CLI_DESIGN.md`](../docs/CLI_DESIGN.md).
+Agents can introspect exact flags and types with
+`outlabs-auth --output json commands PATH... --shallow`; new endpoints remain
+available through the guarded `api request` escape hatch.
+
+For repeatable resource changes, use the target-bound declarative workflow:
+
+```bash
+outlabs-auth --output json plan state.json --out state.plan.json
+outlabs-auth --output json --non-interactive apply state.plan.json --yes
+```
+
+Manifest shape, ordering, drift behavior, and destructive gates are documented
+in [`docs/CLI_MANIFEST.md`](../docs/CLI_MANIFEST.md).
 
 ## Redis
 

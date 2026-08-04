@@ -6,6 +6,9 @@ from typing import Any, Optional
 
 import click
 
+from outlabs_auth.cli_support.api_commands import api_group
+from outlabs_auth.cli_support.api_key_commands import api_keys_group
+from outlabs_auth.cli_support.auth_commands import auth_group
 from outlabs_auth.cli_support.client import RemoteClient, resolve_remote_target
 from outlabs_auth.cli_support.contexts import (
     ContextProfile,
@@ -13,7 +16,15 @@ from outlabs_auth.cli_support.contexts import (
     normalize_api_prefix,
     normalize_base_url,
 )
+from outlabs_auth.cli_support.declarative_commands import register_declarative_commands
+from outlabs_auth.cli_support.entity_commands import entities_group
+from outlabs_auth.cli_support.membership_commands import memberships_group
+from outlabs_auth.cli_support.operations_commands import register_operations_commands
+from outlabs_auth.cli_support.permission_commands import permissions_group
+from outlabs_auth.cli_support.role_commands import roles_group
 from outlabs_auth.cli_support.runtime import emit_result, get_runtime
+from outlabs_auth.cli_support.schema_commands import register_schema_commands
+from outlabs_auth.cli_support.user_admin_commands import register_user_admin_commands
 
 
 @click.group("context")
@@ -317,7 +328,18 @@ def users_get(reference: str):
 
 
 def register_remote_commands(root: click.Group) -> None:
+    register_user_admin_commands(users_group)
+    register_declarative_commands(root)
+    register_schema_commands(root)
+    register_operations_commands(root)
     root.add_command(context_group)
+    root.add_command(api_group)
+    root.add_command(api_keys_group)
+    root.add_command(auth_group)
     root.add_command(capabilities_command)
     root.add_command(whoami_command)
     root.add_command(users_group)
+    root.add_command(roles_group)
+    root.add_command(permissions_group)
+    root.add_command(entities_group)
+    root.add_command(memberships_group)
