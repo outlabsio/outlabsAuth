@@ -37,7 +37,9 @@ from outlabs_auth.schemas.permission import (
 )
 
 
-def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None) -> APIRouter:
+def get_permissions_router(
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
+) -> APIRouter:
     """
     Generate permissions management router.
 
@@ -100,7 +102,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
             # Convert to response schema
             items = [build_permission_response(perm) for perm in permissions]
 
-            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+            return PaginatedResponse(
+                items=items, total=total, page=page, limit=limit, pages=pages
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -130,7 +134,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
                 tags_count=len(data.tags),
             )
 
-        existing = await auth.permission_service.get_permission_by_name(session, data.name)
+        existing = await auth.permission_service.get_permission_by_name(
+            session, data.name
+        )
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -149,7 +155,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
             created_by_id=UUID(auth_result["user_id"]),
         )
 
-        permission = await auth.permission_service.get_permission_by_id(session, permission.id, load_tags=True)
+        permission = await auth.permission_service.get_permission_by_id(
+            session, permission.id, load_tags=True
+        )
         if not permission:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -175,7 +183,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         Optionally filter by entity context (for EnterpriseRBAC).
         """
         user_id = UUID(auth_result["user_id"])
-        return await auth.permission_service.get_user_permissions(session, user_id=user_id)
+        return await auth.permission_service.get_user_permissions(
+            session, user_id=user_id
+        )
 
     @router.post(
         "/check",
@@ -191,7 +201,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         """Check if a user has specific permissions."""
         user = await auth.user_service.get_user_by_id(session, UUID(data.user_id))
         if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
 
         entity_id: Optional[UUID] = None
         if data.entity_id:
@@ -218,7 +230,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         results = {permission: permission in granted for permission in data.permissions}
 
         has_all = all(results.values())
-        return PermissionCheckResponse(user_id=data.user_id, has_all_permissions=has_all, results=results)
+        return PermissionCheckResponse(
+            user_id=data.user_id, has_all_permissions=has_all, results=results
+        )
 
     @router.get(
         "/user/{user_id}",
@@ -235,9 +249,13 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         """Get all permissions for a user, optionally in a specific entity context."""
         user = await auth.user_service.get_user_by_id(session, user_id)
         if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
 
-        return await auth.permission_service.get_user_permissions(session, user_id=user_id)
+        return await auth.permission_service.get_user_permissions(
+            session, user_id=user_id
+        )
 
     @router.get(
         "/{permission_id}",
@@ -251,9 +269,13 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get permission details by ID."""
-        permission = await auth.permission_service.get_permission_by_id(session, permission_id, load_tags=True)
+        permission = await auth.permission_service.get_permission_by_id(
+            session, permission_id, load_tags=True
+        )
         if not permission:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
+            )
 
         return build_permission_response(permission)
 
@@ -281,7 +303,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
             changed_by_id=UUID(auth_result["user_id"]),
         )
 
-        permission = await auth.permission_service.get_permission_by_id(session, permission_id, load_tags=True)
+        permission = await auth.permission_service.get_permission_by_id(
+            session, permission_id, load_tags=True
+        )
         if not permission:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -316,10 +340,14 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         )
 
         if not deleted:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
+            )
 
         if auth.observability:
-            auth.observability.logger.info("permission_deleted", permission_id=str(permission_id))
+            auth.observability.logger.info(
+                "permission_deleted", permission_id=str(permission_id)
+            )
 
         return None  # 204 No Content
 
@@ -339,7 +367,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         groups = await session.execute(
-            select(ConditionGroup).where(cast(Any, ConditionGroup.permission_id) == permission_id)
+            select(ConditionGroup).where(
+                cast(Any, ConditionGroup.permission_id) == permission_id
+            )
         )
         return [
             ConditionGroupResponse(
@@ -463,7 +493,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
         auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         result = await session.execute(
-            select(PermissionCondition).where(cast(Any, PermissionCondition.permission_id) == permission_id)
+            select(PermissionCondition).where(
+                cast(Any, PermissionCondition.permission_id) == permission_id
+            )
         )
         conditions = result.scalars().all()
         return [
@@ -474,7 +506,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
                 value=c.value,
                 value_type=c.value_type,
                 description=c.description,
-                condition_group_id=str(c.condition_group_id) if c.condition_group_id else None,
+                condition_group_id=str(c.condition_group_id)
+                if c.condition_group_id
+                else None,
             )
             for c in conditions
         ]
@@ -515,7 +549,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
             value=cond.value,
             value_type=cond.value_type,
             description=cond.description,
-            condition_group_id=str(cond.condition_group_id) if cond.condition_group_id else None,
+            condition_group_id=str(cond.condition_group_id)
+            if cond.condition_group_id
+            else None,
         )
 
     @router.patch(
@@ -537,9 +573,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
                 permission_id,
                 condition_id,
                 fields_set=set(data.model_fields_set),
-                condition_group_id=(
-                    parse_uuid(data.condition_group_id) if "condition_group_id" in data.model_fields_set else None
-                ),
+                condition_group_id=parse_uuid(data.condition_group_id)
+                if "condition_group_id" in data.model_fields_set
+                else None,
                 attribute=data.attribute,
                 operator=data.operator,
                 value=data.value,
@@ -561,7 +597,9 @@ def get_permissions_router(auth: Any, prefix: str = "", tags: Optional[list[str 
             value=cond.value,
             value_type=cond.value_type,
             description=cond.description,
-            condition_group_id=str(cond.condition_group_id) if cond.condition_group_id else None,
+            condition_group_id=str(cond.condition_group_id)
+            if cond.condition_group_id
+            else None,
         )
 
     @router.delete(

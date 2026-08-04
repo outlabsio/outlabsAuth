@@ -16,11 +16,13 @@ from outlabs_auth.schemas.config import (
     EntityTypeConfigResponse,
     EntityTypeConfigUpdateRequest,
 )
-from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.services.config import ConfigService
+from outlabs_auth.routers.capabilities import mark_auth_surface
 
 
-def get_config_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None) -> APIRouter:
+def get_config_router(
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
+) -> APIRouter:
     """
     Generate configuration management router.
 
@@ -90,16 +92,19 @@ def get_config_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enu
 
         # Merge updates
         new_config = EntityTypeConfig(
-            allowed_root_types=(
-                data.allowed_root_types if data.allowed_root_types is not None else current.allowed_root_types
-            ),
-            default_child_types=(
-                data.default_child_types if data.default_child_types is not None else current.default_child_types
-            ),
+            allowed_root_types=data.allowed_root_types
+            if data.allowed_root_types is not None
+            else current.allowed_root_types,
+            default_child_types=data.default_child_types
+            if data.default_child_types is not None
+            else current.default_child_types,
         )
 
         # Validate at least one root type across all classes
-        if len(new_config.allowed_root_types.structural) == 0 and len(new_config.allowed_root_types.access_group) == 0:
+        if (
+            len(new_config.allowed_root_types.structural) == 0
+            and len(new_config.allowed_root_types.access_group) == 0
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one root entity type must be configured",
@@ -113,7 +118,9 @@ def get_config_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enu
             user_id = UUID(auth_result["user_id"])
 
         # Save
-        await config_service.set_entity_type_config(session, new_config, updated_by_id=user_id)
+        await config_service.set_entity_type_config(
+            session, new_config, updated_by_id=user_id
+        )
 
         if auth.observability:
             auth.observability.logger.info(
