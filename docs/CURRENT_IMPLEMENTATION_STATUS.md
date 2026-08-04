@@ -102,6 +102,26 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 - Bundled transactional mail providers now include Postmark and Resend in addition to SMTP/SendGrid/Mailgun.
 - Permission caching supports `cache_backend='memory'` for single-instance hosts without Redis (DD-057). Multi-instance hosts should keep `cache_backend='redis'` (default when `redis_url` is set).
 
+### Multi-Frontend Profiles and Audience Gates
+
+- DD-059 shipped in 0.1.0a25: one auth deployment can register several
+  first-party frontend profiles with per-flow routes, branding, redirect
+  policy, and optional accepted audiences.
+- A host-supplied resolver binds mail, challenge, OAuth, and session issuance
+  to one registered profile. Resolution failures fail closed where choosing a
+  wrong application would leak a token or redirect.
+- Access and refresh tokens carry optional `azp` session provenance. Every
+  bundled token-minting path enforces partitioned profile audiences, while an
+  empty `accepted_audiences` declaration preserves shared/SSO behavior.
+- `require_app(auth, ...)` composes with normal authentication for app-scoped
+  endpoint families and reads `azp` from the already-verified auth context.
+- The EnterpriseRBAC example includes a two-profile host recipe, and the route
+  contract helpers can check profile templates against sibling frontend route
+  trees without making those sibling repositories package dependencies.
+- This is shared-platform policy, not credential-domain isolation. Separate
+  products that need distinct issuers, keys, or user namespaces still need
+  separate deployments.
+
 ### User Audit and Membership History
 
 - User status changes, delete, restore, direct-role assignment, and direct-role revocation are recorded in typed `user_audit_events`.

@@ -155,13 +155,20 @@ class JWTStrategy:
                     logger.info("jwt_stale_password_change", extra={"user_id": user_id})
                     return None
                 if user and user.can_authenticate():
-                    return {
+                    auth_context = {
                         "user": user,
                         "user_id": str(user.id),
                         "source": "jwt",
                         "metadata": payload,
                         "jti": jti,  # Include JTI for logout
                     }
+                    azp = payload.get("azp")
+                    if isinstance(azp, str) and azp:
+                        # DD-059: expose verified session provenance to composed
+                        # dependencies so app gates do not decode the Bearer token
+                        # a second time.
+                        auth_context["azp"] = azp
+                    return auth_context
             elif user_service:
                 logger.warning("jwt_missing_db_session")
             else:

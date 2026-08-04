@@ -3736,7 +3736,7 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 ## DD-059: Multi-Frontend Support via App Profiles and a Host-Supplied Audience Resolver
 
 **Date**: 2026-07-29
-**Status**: Proposed, r2 (audit + design complete; revised same day after an independent second audit, maintained privately — reconciliation summary in [`MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md); implementation not started)
+**Status**: Accepted; shipped in 0.1.0a25 (four implementation slices), with the two-profile enterprise example and status-document reconciliation completed 2026-08-04
 **Deciders**: Maintainer
 **Context**: One FastAPI host can serve several frontends off a single outlabsAuth mount, and auth mail / redirects must land on the frontend the recipient's account belongs to. The library cannot express this: mail URL builders are `Callable[[str], str]` frozen at construction (`mail/composer.py`), `ComposedAuthMailService` holds one composer for all four sends, OAuth redirect URLs are router-constructor parameters, and the challenge seam's client-supplied `redirect_url` is an unvalidated pass-through. Live consequences across the audited production hosts: one shipped a host subclass of the mail service that re-queries per send for root-entity data the library had in hand and still ships wrong per-audience paths; a second *lost* the per-audience mail routing its legacy stack had (its portal base URL is configured but unread — portal invites land on the admin console, which then rejects those users); a third bypasses the composer entirely for its three origins. Full audit: [`docs/MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md).
 
@@ -3828,7 +3828,7 @@ Track questions that need decisions:
 | 2026-06-10 | **DD-056** | **Accepted (Tenant Isolation on User Routes; System-Wide Roles Grant Global Scope)** |
 | 2026-06-26 | **DD-057** | **Proposed (Cache Backend Abstraction — Redis-optional permission caching)** |
 | 2026-07-16 | **DD-058** | **Accepted (WhatsApp as Host-Owned Delivery Channel for Auth Challenges)** |
-| 2026-07-29 | **DD-059** | **Proposed (Multi-Frontend Support — Frontend Profiles + Audience Resolver); r2 same day after independent second audit (fail-closed, flow-wide profile, profile-bound OAuth state, azp provenance, Q-004)** |
+| 2026-07-29 | **DD-059** | **Accepted and shipped in 0.1.0a25 (Multi-Frontend Support — profiles, resolver, profile-bound challenges/OAuth, azp provenance, audience gates); Q-004 remains open** |
 
 ---
 
@@ -3866,5 +3866,5 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; create-time composition bypasses the mutation guards)
+**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; DD-059 status reconciled to accepted/shipped with the two-profile enterprise example completed — Q-004 remains open)
 **Next Review**: After testing all examples

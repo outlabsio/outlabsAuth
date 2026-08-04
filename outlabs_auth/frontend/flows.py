@@ -14,10 +14,11 @@ task-local, so nothing leaks across requests.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 
 from outlabs_auth.frontend.errors import (
     FrontendResolutionError,
@@ -297,10 +298,9 @@ def require_app(auth: Any, *allowed_apps: str) -> Callable[..., Any]:
     base_dependency = auth.deps.require_auth()
 
     async def _require_app(
-        request: Request,
         auth_context: Any = Depends(base_dependency),
     ) -> Any:
-        azp = _bearer_azp(request, auth.config)
+        azp = auth_context.get("azp") if isinstance(auth_context, Mapping) else None
         if azp not in allowed_apps:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -312,28 +312,3 @@ def require_app(auth: Any, *allowed_apps: str) -> Callable[..., Any]:
         return auth_context
 
     return _require_app
-
-
-def _bearer_azp(request: Any, config: Any) -> Optional[str]:
-    """Extract the verified ``azp`` claim from the request's Bearer token."""
-    from outlabs_auth.utils.jwt import verify_token
-
-    header = ""
-    headers = getattr(request, "headers", None)
-    if headers is not None:
-        header = headers.get("authorization") or headers.get("Authorization") or ""
-    if not header.lower().startswith("bearer "):
-        return None
-    token = header[7:].strip()
-    try:
-        payload = verify_token(
-            token,
-            config.secret_key,
-            config.algorithm,
-            expected_type="access",
-            audience=config.jwt_audience,
-        )
-    except Exception:
-        return None
-    azp = payload.get("azp")
-    return azp if isinstance(azp, str) and azp else None
