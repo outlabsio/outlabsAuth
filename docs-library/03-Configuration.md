@@ -171,8 +171,9 @@ uses the versioned envelope documented in [`docs/CLI_DESIGN.md`](../docs/CLI_DES
 Agents can introspect exact flags and types with
 `outlabs-auth --output json commands PATH... --shallow`; new endpoints remain
 available through the guarded `api request` escape hatch.
-See the [coding-agent operating guide](../docs/CLI_AGENT_GUIDE.md) for
-least-privilege integration keys, retry categories, and recovery behavior.
+See the [Command Line guide](./10-Command-Line.md) for complete human workflows,
+least-privilege agent identities, the versioned JSON contract, retry
+categories, and recovery behavior.
 
 For repeatable resource changes, use the target-bound declarative workflow:
 
@@ -182,7 +183,7 @@ outlabs-auth --output json --non-interactive apply state.plan.json --yes
 ```
 
 Manifest shape, ordering, drift behavior, and destructive gates are documented
-in [`docs/CLI_MANIFEST.md`](../docs/CLI_MANIFEST.md).
+in [Command Line — Declarative plan and apply](./10-Command-Line.md#declarative-plan-and-apply).
 
 ## Redis
 
@@ -206,4 +207,5 @@ Pass `observability_config=` (see `ObservabilityConfig` / presets) and call
 - [Deployment](./08-Deployment.md)
 - [Background Maintenance](./09-Background-Maintenance.md)
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md)
+- [Command Line](./10-Command-Line.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)

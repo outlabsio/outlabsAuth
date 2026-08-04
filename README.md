@@ -245,9 +245,10 @@ outlabs-auth --output json plan examples/cli/state.example.json --out state.plan
 outlabs-auth --output json --non-interactive apply state.plan.json --yes
 ```
 
-Design and compatibility contract: [`docs/CLI_DESIGN.md`](./docs/CLI_DESIGN.md).
-Coding-agent operating guide: [`docs/CLI_AGENT_GUIDE.md`](./docs/CLI_AGENT_GUIDE.md).
-Declarative manifest contract: [`docs/CLI_MANIFEST.md`](./docs/CLI_MANIFEST.md).
+Complete user guide: [Command Line](./docs-library/10-Command-Line.md).
+Maintainer contract: [`docs/CLI_DESIGN.md`](./docs/CLI_DESIGN.md).
+Agent reference: [`docs/CLI_AGENT_GUIDE.md`](./docs/CLI_AGENT_GUIDE.md).
+Manifest contract: [`docs/CLI_MANIFEST.md`](./docs/CLI_MANIFEST.md).
 Configuration and deployment: [Configuration](./docs-library/03-Configuration.md) and
 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
 

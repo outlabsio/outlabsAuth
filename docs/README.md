@@ -10,6 +10,7 @@ content source for a future public docs site.
 
 - **[Handbook home](../docs-library/)** — reading paths and full guide index
 - **[Getting Started](../docs-library/01-Getting-Started.md)** — install through first login
+- **[Command Line](../docs-library/10-Command-Line.md)** — operate the complete deployment without the optional UI
 - **[AUTH_UI.md](./AUTH_UI.md)** — [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) sister admin console
 - **[../examples/](../examples/)** — runnable SimpleRBAC / EnterpriseRBAC apps
 
@@ -28,6 +29,9 @@ This `docs/` tree is design specs and maintainer material.
 
 ### API & Integration
 - **API_DESIGN.md** - Library API design and developer experience
+- **CLI_DESIGN.md** - Stable command-line contract, exit categories, contexts, and compatibility
+- **CLI_AGENT_GUIDE.md** - Operating and recovery guidance for coding agents
+- **CLI_MANIFEST.md** - Declarative state and plan/apply contract
 - **API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md** - In-progress entity-scoped API key grant model, current backend status, lifecycle rules, and remaining design follow-ups
 - **TASKQ_AUTHENTICATED_CONTEXT_PLAN.md** - Implemented candidate for once-per-request API-key accounting and auth-owned two-phase authorization; joint TaskQ audit/release pending
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
