@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.response_builders import build_user_response_async
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.user import UserResponse
 
 
@@ -51,4 +52,4 @@ def get_self_service_users_router(
         user_id = UUID(auth_result["user_id"])
         return await auth.permission_service.get_user_permissions(session, user_id=user_id)
 
-    return router
+    return mark_auth_surface(router, "self_service_users")

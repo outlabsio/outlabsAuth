@@ -24,6 +24,7 @@ from outlabs_auth.response_builders import (
     build_user_response_async,
     build_user_responses,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.membership_history import (
     MembershipHistoryEventResponse,
@@ -2095,4 +2096,4 @@ def get_users_router(
             obs.log_500_error(e, target_user_id=str(user_id))
             raise
 
-    return router
+    return mark_auth_surface(router, "users")

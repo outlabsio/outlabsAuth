@@ -292,3 +292,7 @@ class AuthConfigResponse(BaseModel):
         default_factory=lambda: {"password": True, "magic_link": False, "access_code": False},
         description="Public human-auth methods currently enabled by this auth router.",
     )
+    mounted_surfaces: List[str] = Field(
+        default_factory=list,
+        description="Stable names of OutlabsAuth router surfaces actually mounted by this host.",
+    )

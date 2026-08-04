@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
     EntityMoveRequest,
@@ -419,4 +420,4 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             pages=pages,
         )
 
-    return router
+    return mark_auth_surface(router, "entities")

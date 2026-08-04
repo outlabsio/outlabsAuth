@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 
@@ -82,12 +83,8 @@ def get_audit_router(
         subject_user_id: Optional[UUID] = Query(None, description="Filter by subject user"),
         actor_user_id: Optional[UUID] = Query(None, description="Filter by actor user"),
         entity_id: Optional[UUID] = Query(None, description="Filter by related entity"),
-        occurred_from: Optional[datetime] = Query(
-            None, description="Inclusive lower bound for occurred_at"
-        ),
-        occurred_to: Optional[datetime] = Query(
-            None, description="Inclusive upper bound for occurred_at"
-        ),
+        occurred_from: Optional[datetime] = Query(None, description="Inclusive lower bound for occurred_at"),
+        occurred_to: Optional[datetime] = Query(None, description="Inclusive upper bound for occurred_at"),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -116,10 +113,7 @@ def get_audit_router(
                 if not auth.config.enable_entity_hierarchy:
                     scope["is_global"] = True
                 if not scope.get("is_global"):
-                    entity_ids = [
-                        UUID(str(entity_id_value))
-                        for entity_id_value in (scope.get("entity_ids") or [])
-                    ]
+                    entity_ids = [UUID(str(entity_id_value)) for entity_id_value in (scope.get("entity_ids") or [])]
                     root_entity_ids = entity_ids
 
             if not getattr(auth, "user_audit_service", None):
@@ -140,13 +134,11 @@ def get_audit_router(
             )
             items = [_serialize_user_audit_event(event) for event in events]
             pages = (total + limit - 1) // limit if total > 0 else 0
-            return PaginatedResponse(
-                items=items, total=total, page=page, limit=limit, pages=pages
-            )
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
         except HTTPException:
             raise
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit)
             raise
 
-    return router
+    return mark_auth_surface(router, "audit")

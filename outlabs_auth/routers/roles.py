@@ -30,6 +30,7 @@ from outlabs_auth.schemas.abac import (
     parse_uuid,
 )
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.role import (
     RoleCreateRequest,
@@ -821,4 +822,4 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
             raise HTTPException(status_code=404, detail="Condition not found")
         return None
 
-    return router
+    return mark_auth_surface(router, "roles")

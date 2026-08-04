@@ -24,6 +24,7 @@ from outlabs_auth.routers.oauth import (
     resolve_frontend_targets,
     validate_frontend_app,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.routers.oauth_state_store import (
     consume_oauth_state,
     issue_oauth_state,
@@ -382,4 +383,4 @@ def get_oauth_associate_router(
             )
         return _to_social_account_response(social_account)
 
-    return router
+    return mark_auth_surface(router, "oauth_associate")

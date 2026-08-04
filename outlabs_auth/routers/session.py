@@ -11,6 +11,7 @@ from outlabs_auth.observability import (
     ObservabilityContext,
     get_observability_dependency,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.auth import (
     LoginRequest,
     LoginResponse,
@@ -133,4 +134,4 @@ def get_session_router(
 
         return None
 
-    return router
+    return mark_auth_surface(router, "session")

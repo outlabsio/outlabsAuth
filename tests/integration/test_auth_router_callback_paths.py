@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.core.exceptions import (
@@ -173,8 +173,11 @@ async def test_auth_router_callback_happy_paths(
             name=f"config:{_suffix()}",
             display_name="Config Permission",
         )
-        config_response = await get_config()
+        app = FastAPI()
+        app.include_router(auth_router)
+        config_response = await get_config(SimpleNamespace(app=app))
         assert config_response.preset == "EnterpriseRBAC"
+        assert config_response.mounted_surfaces == ["auth"]
         assert not hasattr(config_response, "available_permissions")
         permission_catalog = await get_permission_catalog(
             session=session,

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.routers._authz_utils import require_can_delegate_roles
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.membership import (
     EntityMemberResponse,
     MembershipCreateRequest,
@@ -333,4 +334,4 @@ def get_memberships_router(
         )
         return None
 
-    return router
+    return mark_auth_surface(router, "memberships")

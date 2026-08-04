@@ -31,6 +31,7 @@ Imported from `outlabs_auth.routers` unless noted.
 | Factory | Typical prefix | Role |
 |---------|----------------|------|
 | `get_auth_router` | `/v1/auth` | Login, register, refresh, logout, password reset, invites, magic link / access code (when enabled), **`GET /config`** for admin UIs |
+| `get_capabilities_router` | `/v1/auth` (minimal) | Public `GET /config` discovery without login/register/password flows |
 | `get_users_router` | `/v1/users` | Admin user management |
 | `get_self_service_users_router` | host-chosen | Authenticated self-service user profile routes |
 | `get_session_router` | `/v1/auth` (minimal) | Login / refresh / logout only — **not** session inventory |
@@ -58,6 +59,36 @@ OAuth factories live on the oauth modules (not always re-exported from
 | `get_oauth_associate_router` | `outlabs_auth.routers.oauth_associate` | Link provider to existing account |
 
 Host examples may also mount app-owned routers (e.g. team directory) next to these.
+
+## Discover and test what is really mounted
+
+`GET {base}/auth/config` returns both configuration-driven `features` and
+route-driven `mounted_surfaces`. These answer different questions: a feature
+flag says the preset supports a behavior, while a surface name proves that the
+host included the corresponding packaged router.
+
+For a minimal embedded host, mount capability discovery separately:
+
+```python
+from outlabs_auth.routers import get_capabilities_router, get_session_router
+
+app.include_router(get_capabilities_router(auth, prefix="/v1/auth"))
+app.include_router(get_session_router(auth, prefix="/v1/auth"))
+```
+
+Do not mount `get_capabilities_router` and `get_auth_router` at the same prefix;
+both own `GET /config`. Make expected surfaces an executable host test:
+
+```python
+from outlabs_auth.routers import assert_auth_surfaces
+
+assert_auth_surfaces(app, {"capabilities", "session"})
+```
+
+The stable surface names are `auth`, `capabilities`, `session`,
+`self_service_users`, `users`, `roles`, `permissions`, `api_keys`,
+`api_key_admin`, `integration_principals`, `entities`, `memberships`, `config`,
+`audit`, `oauth`, and `oauth_associate`.
 
 ## What should I mount?
 
@@ -129,7 +160,7 @@ app.include_router(get_config_router(auth, prefix="/v1/config"))
 
 | Endpoint | Router | Purpose |
 |----------|--------|---------|
-| `GET {base}/auth/config` | `get_auth_router` | Preset, feature flags, auth methods — **required for OutlabsAuth UI** |
+| `GET {base}/auth/config` | `get_auth_router` or `get_capabilities_router` | Preset, feature flags, auth methods, mounted surfaces — **required for OutlabsAuth UI** |
 | `GET {base}/auth/config/permissions` | `get_auth_router` | Active permission catalog — bearer auth + `permission:read` |
 | `GET/PUT {base}/config/entity-types` | `get_config_router` | Mutable entity-type vocabulary (Enterprise settings) |
 

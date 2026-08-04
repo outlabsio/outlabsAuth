@@ -186,6 +186,21 @@ outlabs-auth users get admin@example.com
 outlabs-auth permissions explain reports:read --user admin@example.com
 ```
 
+`capabilities` reports both configured feature flags and the stable names of
+the OutlabsAuth router surfaces actually mounted by the host. Feature flags do
+not prove that a route exists; automation should check `mounted_surfaces`
+before selecting a remote command. Hosts can make that contract executable:
+
+```python
+from outlabs_auth.routers import assert_auth_surfaces
+
+assert_auth_surfaces(app, {"auth", "users", "roles", "permissions"})
+```
+
+An embedded API that does not expose the full login/register router can mount
+`get_capabilities_router(auth, prefix="/auth")` alongside only the small
+surfaces it needs.
+
 The CLI also has typed lifecycle commands for self-service accounts, users,
 roles, permissions and ABAC policy, entities, memberships, API keys,
 integration principals/system keys, sessions, audit events, and entity-type
@@ -284,7 +299,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a30
+**Current Library Version**: 0.1.0a31
 
 **Publication Status**: Approved immutable release source for PyPI publication.
 

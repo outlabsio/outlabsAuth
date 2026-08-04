@@ -8,6 +8,12 @@ from outlabs_auth.routers.api_keys import get_api_keys_router
 from outlabs_auth.routers.api_key_admin import get_api_key_admin_router
 from outlabs_auth.routers.audit import get_audit_router
 from outlabs_auth.routers.auth import get_auth_router
+from outlabs_auth.routers.capabilities import (
+    assert_auth_surfaces,
+    discover_mounted_auth_surfaces,
+    get_capabilities_router,
+    missing_auth_surfaces,
+)
 from outlabs_auth.routers.config import get_config_router
 from outlabs_auth.routers.entities import get_entities_router
 from outlabs_auth.routers.integration_principals import get_integration_principals_router
@@ -22,6 +28,10 @@ from outlabs_auth.routers.users import get_users_router
 
 __all__ = [
     "get_auth_router",
+    "get_capabilities_router",
+    "discover_mounted_auth_surfaces",
+    "missing_auth_surfaces",
+    "assert_auth_surfaces",
     "get_session_router",
     "get_users_router",
     "get_self_service_users_router",

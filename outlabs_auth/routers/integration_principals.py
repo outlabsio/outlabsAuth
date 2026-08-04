@@ -18,6 +18,7 @@ from outlabs_auth.routers._api_key_response import (
     build_api_key_response,
     build_api_key_responses,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateResponse,
     ApiKeyResponse,
@@ -676,7 +677,7 @@ def get_integration_principals_router(
         api_key_response = await build_api_key_response(auth, session, api_key)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
-    return router
+    return mark_auth_surface(router, "integration_principals")
 
 
 def _get_platform_global_integration_principals_router(
@@ -1019,4 +1020,4 @@ def _get_platform_global_integration_principals_router(
         api_key_response = await build_api_key_response(auth, session, api_key)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
-    return router
+    return mark_auth_surface(router, "integration_principals")

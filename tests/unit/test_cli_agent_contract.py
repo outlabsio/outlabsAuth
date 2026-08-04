@@ -443,11 +443,19 @@ def test_remote_capabilities_does_not_require_token(monkeypatch: pytest.MonkeyPa
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "https://auth.example.test/v1/auth/config"
         assert "authorization" not in request.headers
-        return httpx.Response(200, json={"preset": "SimpleRBAC", "features": {"api_keys": True}})
+        return httpx.Response(
+            200,
+            json={
+                "preset": "SimpleRBAC",
+                "features": {"api_keys": True},
+                "mounted_surfaces": ["capabilities", "users"],
+            },
+        )
 
     result, meta = RemoteClient(_target(), transport=httpx.MockTransport(handler)).capabilities()
 
     assert result["preset"] == "SimpleRBAC"
+    assert result["mounted_surfaces"] == ["capabilities", "users"]
     assert meta["http_status"] == 200
 
 
