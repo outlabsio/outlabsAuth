@@ -100,12 +100,15 @@ including option flags, types, choices, defaults, required fields, and
 environment inputs. Agents should inspect a narrow path when possible, for
 example `commands roles create --shallow`.
 
-Purpose-built groups cover authentication, users, roles, permissions,
-entities, memberships, API keys, sessions, audit, and entity-type config. The
-guarded `api request` command is a forward-compatible escape hatch for mounted
-endpoints not yet represented by a typed command. It accepts only relative
-paths, bounded JSON input, and requires explicit confirmation for every raw
-write.
+Purpose-built groups cover authentication, self-service accounts, users and
+access reports, roles, permissions, ABAC policy, entities, memberships,
+personal and entity-wide API-key operations, integration principals/system
+keys, sessions, audit, and entity-type config. The guarded `api request`
+command is a forward-compatible escape hatch for mounted endpoints not yet
+represented by a typed command. It accepts only relative paths, bounded JSON
+input, and requires explicit confirmation for every raw write.
+
+Agent workflow and recovery guidance: [`CLI_AGENT_GUIDE.md`](./CLI_AGENT_GUIDE.md).
 
 ## Declarative workflow
 

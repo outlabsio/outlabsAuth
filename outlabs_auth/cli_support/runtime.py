@@ -94,16 +94,23 @@ def _command_from_args(args: Sequence[str]) -> str:
         # Only the first parsed word is safe to report before Click validates
         # the command. Later words may be option values containing secrets.
         safe_groups = {
+            "account",
             "api",
             "api-keys",
+            "audit",
             "auth",
+            "commands",
+            "config",
             "context",
             "db",
             "entities",
+            "integration-keys",
+            "integration-principals",
             "memberships",
             "ops",
             "permissions",
             "roles",
+            "sessions",
             "users",
         }
         if value in safe_groups and index + 1 < len(args):

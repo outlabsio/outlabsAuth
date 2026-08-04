@@ -63,7 +63,23 @@ def _resolve_api_key(client: RemoteClient, reference: str) -> tuple[dict[str, An
     return matches[0], meta
 
 
-def _key_text(key: dict[str, Any]) -> str:
+def _resolve_admin_api_key(
+    client: RemoteClient,
+    entity_id: str,
+    reference: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    base_path = f"/admin/entities/{entity_id}/api-keys"
+    return client.resolve_resource(
+        reference,
+        resource_name="entity_api_key",
+        detail_path=f"{base_path}/{{id}}",
+        list_path=base_path,
+        exact_fields=("name",),
+        max_limit=100,
+    )
+
+
+def api_key_text(key: dict[str, Any]) -> str:
     return detail_text(
         key,
         (
@@ -82,7 +98,7 @@ def _key_text(key: dict[str, Any]) -> str:
     )
 
 
-def _require_secret_sink(show_secret: bool, secret_file: Optional[str]) -> None:
+def require_secret_sink(show_secret: bool, secret_file: Optional[str]) -> None:
     if show_secret == bool(secret_file):
         raise CliError(
             code="SECRET_SINK_REQUIRED",
@@ -92,7 +108,7 @@ def _require_secret_sink(show_secret: bool, secret_file: Optional[str]) -> None:
         )
 
 
-def _consume_created_key(
+def consume_created_key(
     result: Any,
     *,
     show_secret: bool,
@@ -109,13 +125,13 @@ def _consume_created_key(
     safe = dict(result)
     warnings = ["This API key is shown only once; store it in an approved secret manager."]
     if show_secret:
-        text = f"{_key_text(safe)}\nAPI key: {secret}\nWARNING: this value cannot be retrieved again."
+        text = f"{api_key_text(safe)}\nAPI key: {secret}\nWARNING: this value cannot be retrieved again."
     else:
         assert secret_file is not None
         written = write_secret_file(secret_file, secret, force=force_secret_file)
         safe.pop("api_key", None)
         safe["secret_written_to"] = str(written)
-        text = f"{_key_text(safe)}\nOne-time key written to {written} with owner-only permissions."
+        text = f"{api_key_text(safe)}\nOne-time key written to {written} with owner-only permissions."
     return safe, text, warnings
 
 
@@ -150,7 +166,7 @@ def api_keys_get(reference: str):
 
     target, client = remote_client()
     result, meta = _resolve_api_key(client, reference)
-    emit_remote_result("api-keys.get", result, target=target, meta=meta, text=_key_text(result))
+    emit_remote_result("api-keys.get", result, target=target, meta=meta, text=api_key_text(result))
 
 
 @api_keys_group.command("grantable-scopes")
@@ -211,7 +227,7 @@ def api_keys_create(
 ):
     """Create a key only when an explicit one-time secret destination exists."""
 
-    _require_secret_sink(show_secret, secret_file)
+    require_secret_sink(show_secret, secret_file)
     if secret_file:
         validate_secret_file_target(secret_file, force=force_secret_file)
     target, client = remote_client()
@@ -240,7 +256,7 @@ def api_keys_create(
             "inherit_from_tree": inherit_tree,
         },
     )
-    safe, text, warnings = _consume_created_key(
+    safe, text, warnings = consume_created_key(
         result,
         show_secret=show_secret,
         secret_file=secret_file,
@@ -304,7 +320,7 @@ def api_keys_update(
         result,
         target=target,
         meta=meta | {"resolution": resolution.get("resolution")},
-        text=_key_text(result),
+        text=api_key_text(result),
         changed=True,
     )
 
@@ -324,14 +340,14 @@ def api_keys_rotate(
 ):
     """Rotate a key and send the new one-time secret to an explicit sink."""
 
-    _require_secret_sink(show_secret, secret_file)
+    require_secret_sink(show_secret, secret_file)
     if secret_file:
         validate_secret_file_target(secret_file, force=force_secret_file)
     target, client = remote_client()
     key, resolution = _resolve_api_key(client, reference)
     require_confirmation(prompt=f"Rotate and revoke API key '{key.get('name')}' ({key.get('id')})?", yes=yes)
     result, meta = client.request("POST", f"/api-keys/{key['id']}/rotate")
-    safe, text, warnings = _consume_created_key(
+    safe, text, warnings = consume_created_key(
         result,
         show_secret=show_secret,
         secret_file=secret_file,
@@ -363,6 +379,120 @@ def api_keys_revoke(reference: str, yes: bool):
         {"id": key["id"], "name": key.get("name"), "revoked": True},
         target=target,
         meta=meta | {"resolution": resolution.get("resolution")},
+        text=f"Revoked API key {key.get('name')} ({key['id']}).",
+        changed=True,
+    )
+
+
+@api_keys_group.command("inventory")
+@click.option("--entity", "entity_reference", required=True, help="Entity UUID, slug, or name.")
+@click.option("--owner", "owner_reference", default=None, help="Owner user UUID/email.")
+@click.option("--status", type=click.Choice(["active", "suspended", "revoked", "expired"]), default=None)
+@click.option("--kind", "key_kind", type=click.Choice(["personal", "system_integration"]), default=None)
+@click.option("--search", default=None)
+@click.option("--page", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option("--limit", type=click.IntRange(min=1, max=100), default=20, show_default=True)
+@click.option("--all", "all_pages", is_flag=True)
+def api_keys_inventory(
+    entity_reference: str,
+    owner_reference: Optional[str],
+    status: Optional[str],
+    key_kind: Optional[str],
+    search: Optional[str],
+    page: int,
+    limit: int,
+    all_pages: bool,
+):
+    """Inventory all redacted keys anchored to an entity for incident response."""
+
+    target, client = remote_client()
+    entity, entity_resolution = resolve_entity(client, entity_reference)
+    owner_id = None
+    owner_resolution = None
+    if owner_reference:
+        owner, owner_resolution = client.resolve_user(owner_reference)
+        owner_id = owner["id"]
+    result, meta = client.paginate(
+        f"/admin/entities/{entity['id']}/api-keys",
+        page=page,
+        limit=limit,
+        max_limit=100,
+        all_pages=all_pages,
+        params={"owner_id": owner_id, "status": status, "key_kind": key_kind, "search": search},
+    )
+    items = [item for item in result["items"] if isinstance(item, dict)]
+    emit_remote_result(
+        "api-keys.inventory",
+        result,
+        target=target,
+        meta=meta
+        | {
+            "entity_resolution": entity_resolution.get("resolution"),
+            "owner_resolution": owner_resolution.get("resolution") if owner_resolution else None,
+        },
+        text=records_text(
+            items,
+            (
+                ("NAME", "name"),
+                ("KIND", "key_kind"),
+                ("OWNER", "owner_id"),
+                ("STATUS", "status"),
+                ("PREFIX", "prefix"),
+                ("ID", "id"),
+            ),
+        ),
+    )
+
+
+@api_keys_group.command("admin-get")
+@click.argument("reference")
+@click.option("--entity", "entity_reference", required=True, help="Entity UUID, slug, or name.")
+def api_keys_admin_get(reference: str, entity_reference: str):
+    """Inspect one entity-anchored key by UUID or unique name."""
+
+    target, client = remote_client()
+    entity, entity_resolution = resolve_entity(client, entity_reference)
+    key, key_resolution = _resolve_admin_api_key(client, str(entity["id"]), reference)
+    emit_remote_result(
+        "api-keys.admin-get",
+        key,
+        target=target,
+        meta=key_resolution
+        | {
+            "entity_resolution": entity_resolution.get("resolution"),
+            "key_resolution": key_resolution.get("resolution"),
+        },
+        text=api_key_text(key),
+    )
+
+
+@api_keys_group.command("admin-revoke")
+@click.argument("reference")
+@click.option("--entity", "entity_reference", required=True, help="Entity UUID, slug, or name.")
+@click.option("--yes", is_flag=True)
+def api_keys_admin_revoke(reference: str, entity_reference: str, yes: bool):
+    """Revoke any entity-anchored key as an incident-response action."""
+
+    target, client = remote_client()
+    entity, entity_resolution = resolve_entity(client, entity_reference)
+    key, key_resolution = _resolve_admin_api_key(client, str(entity["id"]), reference)
+    require_confirmation(
+        prompt=(
+            f"Revoke {key.get('key_kind')} API key '{key.get('name')}' ({key['id']}) "
+            f"anchored to entity {entity.get('slug') or entity['id']}?"
+        ),
+        yes=yes,
+    )
+    _, meta = client.request("DELETE", f"/admin/entities/{entity['id']}/api-keys/{key['id']}")
+    emit_remote_result(
+        "api-keys.admin-revoke",
+        {"id": key["id"], "name": key.get("name"), "revoked": True},
+        target=target,
+        meta=meta
+        | {
+            "entity_resolution": entity_resolution.get("resolution"),
+            "key_resolution": key_resolution.get("resolution"),
+        },
         text=f"Revoked API key {key.get('name')} ({key['id']}).",
         changed=True,
     )

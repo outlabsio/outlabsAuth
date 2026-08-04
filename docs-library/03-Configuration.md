@@ -171,6 +171,8 @@ uses the versioned envelope documented in [`docs/CLI_DESIGN.md`](../docs/CLI_DES
 Agents can introspect exact flags and types with
 `outlabs-auth --output json commands PATH... --shallow`; new endpoints remain
 available through the guarded `api request` escape hatch.
+See the [coding-agent operating guide](../docs/CLI_AGENT_GUIDE.md) for
+least-privilege integration keys, retry categories, and recovery behavior.
 
 For repeatable resource changes, use the target-bound declarative workflow:
 

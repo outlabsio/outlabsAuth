@@ -18,7 +18,7 @@ from outlabs_auth.cli_support.resource_common import (
 from outlabs_auth.cli_support.runtime import require_confirmation
 
 
-def _resolve_role(client: RemoteClient, reference: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def resolve_role(client: RemoteClient, reference: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return client.resolve_resource(
         reference,
         resource_name="role",
@@ -97,7 +97,7 @@ def roles_get(reference: str):
     """Get a role by UUID, exact name, or unambiguous search."""
 
     target, client = remote_client()
-    role, meta = _resolve_role(client, reference)
+    role, meta = resolve_role(client, reference)
     emit_remote_result("roles.get", role, target=target, meta=meta, text=_role_text(role))
 
 
@@ -200,7 +200,7 @@ def roles_update(
     )
     require_nonempty_payload(payload)
     target, client = remote_client()
-    role, resolution = _resolve_role(client, reference)
+    role, resolution = resolve_role(client, reference)
     result, meta = client.request("PATCH", f"/roles/{role['id']}", json_body=payload)
     emit_remote_result(
         "roles.update",
@@ -219,7 +219,7 @@ def roles_delete(reference: str, yes: bool):
     """Archive a role after resolving and displaying its exact identity."""
 
     target, client = remote_client()
-    role, resolution = _resolve_role(client, reference)
+    role, resolution = resolve_role(client, reference)
     require_confirmation(prompt=f"Archive role '{role.get('name')}' ({role.get('id')})?", yes=yes)
     _, meta = client.request("DELETE", f"/roles/{role['id']}")
     emit_remote_result(
@@ -240,7 +240,7 @@ def _change_role_permissions(
     yes: bool,
 ) -> None:
     target, client = remote_client()
-    role, resolution = _resolve_role(client, reference)
+    role, resolution = resolve_role(client, reference)
     if not remove:
         require_confirmation(
             prompt=f"Grant {', '.join(permissions)} to role '{role.get('name')}'?",

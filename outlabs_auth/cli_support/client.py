@@ -464,6 +464,8 @@ class RemoteClient:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Resolve UUID, exact canonical name, or one unambiguous search result."""
 
+        resource_label = resource_name.replace("_", " ")
+        resource_code = resource_name.replace("-", "_").replace(" ", "_").upper()
         try:
             resource_id = str(UUID(reference))
         except ValueError:
@@ -472,7 +474,7 @@ class RemoteClient:
             payload, meta = self.request("GET", detail_path.format(id=resource_id))
             if not isinstance(payload, dict):
                 raise _protocol_error(
-                    f"The {resource_name} endpoint returned an invalid response.",
+                    f"The {resource_label} endpoint returned an invalid response.",
                     self._target_details() | meta,
                 )
             meta["resolution"] = {"input": reference, "kind": "id", "id": resource_id}
@@ -498,14 +500,14 @@ class RemoteClient:
             matches = candidates
         if not matches:
             raise CliError(
-                code=f"{resource_name.upper()}_NOT_FOUND",
-                message=f"No {resource_name} matched '{reference}'.",
+                code=f"{resource_code}_NOT_FOUND",
+                message=f"No {resource_label} matched '{reference}'.",
                 exit_code=EXIT_OPERATION_FAILED,
             )
         if len(matches) > 1:
             raise CliError(
-                code=f"{resource_name.upper()}_REFERENCE_AMBIGUOUS",
-                message=f"{resource_name.title()} reference '{reference}' matched more than one result.",
+                code=f"{resource_code}_REFERENCE_AMBIGUOUS",
+                message=f"{resource_label.title()} reference '{reference}' matched more than one result.",
                 exit_code=EXIT_CONFLICT,
                 details={
                     "matches": [
@@ -516,7 +518,7 @@ class RemoteClient:
                         for item in matches[:10]
                     ]
                 },
-                hint=f"Use the exact canonical name or {resource_name} UUID.",
+                hint=f"Use the exact canonical name or {resource_label} UUID.",
             )
         result = matches[0]
         meta["resolution"] = {

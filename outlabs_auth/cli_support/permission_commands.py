@@ -18,7 +18,7 @@ from outlabs_auth.cli_support.resource_common import (
 from outlabs_auth.cli_support.runtime import CliError, EXIT_OPERATION_FAILED, require_confirmation
 
 
-def _resolve_permission(client: RemoteClient, reference: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def resolve_permission(client: RemoteClient, reference: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return client.resolve_resource(
         reference,
         resource_name="permission",
@@ -108,7 +108,7 @@ def permissions_get(reference: str):
     """Get a permission by UUID or exact canonical name."""
 
     target, client = remote_client()
-    permission, meta = _resolve_permission(client, reference)
+    permission, meta = resolve_permission(client, reference)
     emit_remote_result(
         "permissions.get",
         permission,
@@ -196,7 +196,7 @@ def permissions_update(
     )
     require_nonempty_payload(payload)
     target, client = remote_client()
-    permission, resolution = _resolve_permission(client, reference)
+    permission, resolution = resolve_permission(client, reference)
     result, meta = client.request("PATCH", f"/permissions/{permission['id']}", json_body=payload)
     emit_remote_result(
         "permissions.update",
@@ -215,7 +215,7 @@ def permissions_delete(reference: str, yes: bool):
     """Archive a non-system permission after exact resolution."""
 
     target, client = remote_client()
-    permission, resolution = _resolve_permission(client, reference)
+    permission, resolution = resolve_permission(client, reference)
     require_confirmation(
         prompt=f"Archive permission '{permission.get('name')}' ({permission.get('id')})?",
         yes=yes,

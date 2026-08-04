@@ -186,8 +186,9 @@ outlabs-auth users get admin@example.com
 outlabs-auth permissions explain reports:read --user admin@example.com
 ```
 
-The CLI also has typed lifecycle commands for users, roles, permissions,
-entities, memberships, API keys, sessions, audit events, and entity-type
+The CLI also has typed lifecycle commands for self-service accounts, users,
+roles, permissions and ABAC policy, entities, memberships, API keys,
+integration principals/system keys, sessions, audit events, and entity-type
 configuration. References accept UUIDs or unambiguous human identifiers such
 as email, role name, entity slug, and API-key name.
 
@@ -199,6 +200,7 @@ outlabs-auth roles create \
 outlabs-auth memberships add \
   --user analyst@example.com --entity engineering \
   --role report-reader --yes
+outlabs-auth users access-report analyst@example.com
 ```
 
 For unattended agents, configure a least-privilege API key instead of a human
@@ -244,6 +246,7 @@ outlabs-auth --output json --non-interactive apply state.plan.json --yes
 ```
 
 Design and compatibility contract: [`docs/CLI_DESIGN.md`](./docs/CLI_DESIGN.md).
+Coding-agent operating guide: [`docs/CLI_AGENT_GUIDE.md`](./docs/CLI_AGENT_GUIDE.md).
 Declarative manifest contract: [`docs/CLI_MANIFEST.md`](./docs/CLI_MANIFEST.md).
 Configuration and deployment: [Configuration](./docs-library/03-Configuration.md) and
 [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).

@@ -55,7 +55,7 @@ def _parameter_schema(parameter: click.Parameter) -> dict[str, Any]:
 def _command_schema(command: click.Command, path: str, *, recursive: bool) -> dict[str, Any]:
     result: dict[str, Any] = {
         "path": path,
-        "name": command.name,
+        "name": "outlabs-auth" if path == "outlabs-auth" else command.name,
         "help": command.help,
         "short_help": command.short_help,
         "deprecated": bool(command.deprecated),

@@ -10,16 +10,20 @@ import httpx
 import pytest
 from click.testing import CliRunner
 
+import outlabs_auth.cli_support.abac_commands as abac_commands
+import outlabs_auth.cli_support.account_commands as account_commands
 import outlabs_auth.cli_support.api_commands as api_commands
 import outlabs_auth.cli_support.api_key_commands as api_key_commands
 import outlabs_auth.cli_support.auth_commands as auth_commands
 import outlabs_auth.cli_support.declarative_commands as declarative_commands
 import outlabs_auth.cli_support.entity_commands as entity_commands
+import outlabs_auth.cli_support.integration_commands as integration_commands
 import outlabs_auth.cli_support.membership_commands as membership_commands
 import outlabs_auth.cli_support.permission_commands as permission_commands
 import outlabs_auth.cli_support.remote_commands as remote_commands
 import outlabs_auth.cli_support.role_commands as role_commands
 import outlabs_auth.cli_support.user_admin_commands as user_admin_commands
+import outlabs_auth.cli_support.user_inspection_commands as user_inspection_commands
 from outlabs_auth.cli import _redact_database_url, main as cli_main
 from outlabs_auth.cli_support.client import RemoteClient, RemoteTarget, resolve_remote_target
 from outlabs_auth.cli_support.contexts import (
@@ -1063,6 +1067,391 @@ def test_api_key_create_refuses_to_call_api_without_secret_sink(monkeypatch: pyt
     assert _json_output(result)["error"]["code"] == "SECRET_SINK_REQUIRED"
 
 
+def test_api_key_entity_inventory_resolves_entity_and_owner(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def page(item: dict) -> httpx.Response:
+        return httpx.Response(200, json={"items": [item], "total": 1, "page": 1, "limit": 100, "pages": 1})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/entities/":
+            return page({"id": "entity-1", "name": "engineering", "slug": "engineering"})
+        if request.url.path == "/v1/users/":
+            return page({"id": "user-1", "email": "owner@example.test"})
+        assert request.url.path == "/v1/admin/entities/entity-1/api-keys"
+        assert request.url.params["owner_id"] == "user-1"
+        assert request.url.params["key_kind"] == "personal"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": "key-1",
+                        "name": "automation",
+                        "key_kind": "personal",
+                        "owner_id": "user-1",
+                        "status": "active",
+                        "prefix": "sk_live_abc",
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "limit": 20,
+                "pages": 1,
+            },
+        )
+
+    _patch_resource_client(monkeypatch, api_key_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "api-keys",
+            "inventory",
+            "--entity",
+            "engineering",
+            "--owner",
+            "owner@example.test",
+            "--kind",
+            "personal",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["command"] == "api-keys.inventory"
+    assert payload["result"]["items"][0]["id"] == "key-1"
+
+
+def test_integration_principal_requires_explicit_entity_or_platform_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Unexpected remote request: {request.method} {request.url}")
+
+    _patch_resource_client(monkeypatch, integration_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "integration-principals", "list"],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "INTEGRATION_SCOPE_REQUIRED"
+
+
+def test_integration_principal_create_resolves_roles_and_platform_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    submitted: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/roles/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "role-1", "name": "deploy-bot", "display_name": "Deploy bot"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        assert request.url.path == "/v1/system/integration-principals"
+        submitted.append(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={
+                "id": "principal-1",
+                "name": "release-agent",
+                "status": "active",
+                "scope_kind": "platform_global",
+                "anchor_entity_id": None,
+                "inherit_from_tree": False,
+                "allowed_scopes": ["deployments:write"],
+                "effective_allowed_scopes": ["deployments:write"],
+                "role_ids": ["role-1"],
+            },
+        )
+
+    _patch_resource_client(monkeypatch, integration_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "integration-principals",
+            "create",
+            "--platform",
+            "--name",
+            "release-agent",
+            "--allowed-scope",
+            "deployments:write",
+            "--role",
+            "deploy-bot",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert submitted == [
+        {
+            "name": "release-agent",
+            "allowed_scopes": ["deployments:write"],
+            "role_ids": ["role-1"],
+        }
+    ]
+    payload = _json_output(result)
+    assert payload["command"] == "integration-principals.create"
+    assert payload["meta"]["scope"]["kind"] == "platform_global"
+
+
+def test_integration_principal_entity_scope_resolves_slug(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/entities/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "entity-1", "name": "engineering", "slug": "engineering"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        assert request.url.path == "/v1/entities/entity-1/integration-principals"
+        return httpx.Response(
+            200,
+            json={"items": [], "total": 0, "page": 1, "limit": 20, "pages": 0},
+        )
+
+    _patch_resource_client(monkeypatch, integration_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "integration-principals",
+            "list",
+            "--entity",
+            "engineering",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["meta"]["scope"] == {"kind": "entity", "entity_id": "entity-1"}
+
+
+def test_integration_key_create_writes_secret_without_disclosure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    secret_path = tmp_path / "release-agent.key"
+    submitted: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.path == "/v1/system/integration-principals"
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "principal-1", "name": "release-agent"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        assert request.url.path == "/v1/system/integration-principals/principal-1/api-keys"
+        submitted.append(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={
+                "id": "key-1",
+                "name": "production-deploy",
+                "prefix": "sk_live_release",
+                "key_kind": "system_integration",
+                "status": "active",
+                "scopes": ["deployments:write"],
+                "api_key": "system-key-secret",
+            },
+        )
+
+    _patch_resource_client(monkeypatch, integration_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "integration-keys",
+            "create",
+            "release-agent",
+            "--platform",
+            "--name",
+            "production-deploy",
+            "--scope",
+            "deployments:write",
+            "--secret-file",
+            str(secret_path),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert submitted == [{"name": "production-deploy", "scopes": ["deployments:write"]}]
+    assert secret_path.read_text() == "system-key-secret\n"
+    assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+    assert "system-key-secret" not in result.output
+    payload = _json_output(result)
+    assert payload["command"] == "integration-keys.create"
+    assert "api_key" not in payload["result"]
+
+
+def test_role_abac_condition_create_preserves_typed_json_value(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    submitted: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/roles/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "role-1", "name": "operator", "display_name": "Operator"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        assert request.url.path == "/v1/roles/role-1/conditions"
+        submitted.append(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={
+                "id": "condition-1",
+                "attribute": "subject.department",
+                "operator": "in",
+                "value": '["engineering", "operations"]',
+                "value_type": "list",
+                "condition_group_id": None,
+            },
+        )
+
+    _patch_resource_client(monkeypatch, abac_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "roles",
+            "conditions",
+            "create",
+            "operator",
+            "--attribute",
+            "subject.department",
+            "--operator",
+            "in",
+            "--value-json",
+            '["engineering", "operations"]',
+            "--value-type",
+            "list",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert submitted == [
+        {
+            "attribute": "subject.department",
+            "operator": "in",
+            "value": ["engineering", "operations"],
+            "value_type": "list",
+        }
+    ]
+    assert _json_output(result)["command"] == "roles.conditions.create"
+
+
+def test_permission_abac_condition_group_create_resolves_permission(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/permissions/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "permission-1", "name": "reports:read"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 1000,
+                    "pages": 1,
+                },
+            )
+        assert request.url.path == "/v1/permissions/permission-1/condition-groups"
+        assert json.loads(request.content) == {"operator": "OR", "description": "Office or VPN"}
+        return httpx.Response(
+            201,
+            json={
+                "id": "group-1",
+                "operator": "OR",
+                "description": "Office or VPN",
+                "permission_id": "permission-1",
+                "role_id": None,
+            },
+        )
+
+    _patch_resource_client(monkeypatch, abac_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "permissions",
+            "condition-groups",
+            "create",
+            "reports:read",
+            "--operator",
+            "OR",
+            "--description",
+            "Office or VPN",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _json_output(result)["command"] == "permissions.condition-groups.create"
+
+
+def test_abac_value_json_validation_fails_before_remote_request():
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "roles",
+            "conditions",
+            "create",
+            "operator",
+            "--attribute",
+            "subject.department",
+            "--operator",
+            "in",
+            "--value-json",
+            "[broken",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert _json_output(result)["error"]["code"] == "INVALID_ABAC_VALUE_JSON"
+
+
 def test_user_password_reset_uses_stdin_without_secret_disclosure(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
     seen_passwords: list[str] = []
@@ -1103,6 +1492,110 @@ def test_user_password_reset_uses_stdin_without_secret_disclosure(monkeypatch: p
     assert _json_output(result)["command"] == "users.reset-password"
 
 
+def test_account_change_password_reads_two_stdin_lines_without_disclosure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    submitted: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/users/me/change-password"
+        submitted.append(json.loads(request.content))
+        return httpx.Response(204)
+
+    _patch_resource_client(monkeypatch, account_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        [
+            "--output",
+            "json",
+            "account",
+            "change-password",
+            "--current-password-stdin",
+            "--new-password-stdin",
+        ],
+        input="current-secret\nreplacement-secret\n",
+    )
+
+    assert result.exit_code == 0
+    assert submitted == [{"current_password": "current-secret", "new_password": "replacement-secret"}]
+    assert "current-secret" not in result.output
+    assert "replacement-secret" not in result.output
+    assert _json_output(result)["command"] == "account.change-password"
+
+
+def test_account_update_can_explicitly_clear_phone(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/users/me"
+        assert json.loads(request.content) == {"phone": None}
+        return httpx.Response(
+            200,
+            json={
+                "id": "user-1",
+                "email": "alex@example.test",
+                "status": "active",
+                "phone": None,
+                "email_verified": True,
+                "phone_verified": False,
+                "is_superuser": False,
+            },
+        )
+
+    _patch_resource_client(monkeypatch, account_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "account", "update", "--clear-phone"],
+    )
+
+    assert result.exit_code == 0
+    assert _json_output(result)["result"]["phone"] is None
+
+
+def test_user_access_report_collects_redacted_authority_surfaces(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/users/":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [{"id": "user-1", "email": "alex@example.test"}],
+                    "total": 1,
+                    "page": 1,
+                    "limit": 100,
+                    "pages": 1,
+                },
+            )
+        responses = {
+            "/v1/memberships/user/user-1": [{"id": "membership-1", "entity_id": "entity-1"}],
+            "/v1/users/user-1/role-memberships": [{"id": "role-membership-1", "role_id": "role-1"}],
+            "/v1/users/user-1/permissions": [
+                {"permission": {"id": "permission-1", "name": "reports:read"}, "source": "role"}
+            ],
+            "/v1/users/user-1/api-keys": [
+                {"id": "key-1", "name": "agent", "prefix": "sk_live_abc", "status": "active"}
+            ],
+            "/v1/users/user-1/sessions": [{"id": "session-1", "device_name": "CLI"}],
+        }
+        assert request.url.path in responses
+        return httpx.Response(200, json=responses[request.url.path])
+
+    _patch_resource_client(monkeypatch, user_inspection_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "users", "access-report", "alex@example.test"],
+    )
+
+    assert result.exit_code == 0
+    payload = _json_output(result)
+    assert payload["command"] == "users.access-report"
+    assert payload["result"]["effective_permissions"][0]["permission"]["name"] == "reports:read"
+    assert payload["result"]["personal_api_keys"][0]["prefix"] == "sk_live_abc"
+    assert "api_key" not in payload["result"]["personal_api_keys"][0]
+
+
 def test_command_schema_uses_public_root_path_and_omits_internal_sentinels():
     result = CliRunner().invoke(
         cli_main,
@@ -1113,6 +1606,14 @@ def test_command_schema_uses_public_root_path_and_omits_internal_sentinels():
     payload = _json_output(result)
     assert payload["result"]["path"] == "outlabs-auth roles create"
     assert "Sentinel" not in result.output
+
+    root_result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "commands", "--shallow"],
+    )
+    root_payload = _json_output(root_result)
+    assert root_payload["result"]["path"] == "outlabs-auth"
+    assert root_payload["result"]["name"] == "outlabs-auth"
 
 
 def test_declarative_plan_and_apply_orders_permission_before_role(

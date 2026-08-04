@@ -19,6 +19,10 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   memberships, personal API keys, sessions, audit search, and entity-type
   configuration, including human-reference resolution and permission
   explanation.
+- Add self-service account/profile/password/phone/social-account commands,
+  typed ABAC condition management, non-human integration principals and system
+  keys, entity-wide API-key incident response, consolidated user access
+  reports, and user lifecycle timelines.
 - Add live machine-readable command discovery and a guarded, relative-path raw
   API escape hatch for forward-compatible access to mounted endpoints.
 - Add target-bound declarative `plan`/`apply` for permissions, entities, roles,
@@ -26,6 +30,9 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   destructive gates, and partial-failure reporting.
 - Add explicit one-time API-key secret sinks with preflight validation and
   owner-only atomic file output.
+- Add a coding-agent guide covering discovery, least-privilege credentials,
+  plan/apply, retry categories, partial-failure recovery, and the guarded raw
+  API fallback.
 - Add a versioned global `--output json` contract with stable success/error
   envelopes, exit categories, request metadata, and safe parser failures.
 - Add namespaced `db` and `ops` command groups while preserving every
