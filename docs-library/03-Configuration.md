@@ -116,6 +116,15 @@ Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 | `DATABASE_URL` | Postgres URL for `outlabs-auth` CLI |
 | `OUTLABS_AUTH_SCHEMA` | Schema for migrate / seed / doctor / bootstrap |
 | `OUTLABS_AUTH_BOOTSTRAP_*` | Optional admin email/password for `outlabs-auth bootstrap` |
+| `OUTLABS_AUTH_CONFIG` | Optional path to the non-secret remote-context JSON file |
+| `OUTLABS_AUTH_PROFILE` | Remote context selected for this invocation |
+| `OUTLABS_AUTH_BASE_URL` | One-off remote base URL override |
+| `OUTLABS_AUTH_API_PREFIX` | One-off remote API-prefix override |
+| `OUTLABS_AUTH_CREDENTIAL_TYPE` | One-off remote transport override (`bearer` or `api-key`) |
+| `OUTLABS_AUTH_CREDENTIAL_ENV` | One-off name of the environment variable holding the credential |
+| `OUTLABS_AUTH_TOKEN` | Default remote bearer credential; never stored in context config |
+| `OUTLABS_AUTH_API_KEY` | Default remote `X-API-Key` credential for scoped automation |
+| `OUTLABS_AUTH_OUTPUT` | Global output contract (`text` or versioned `json`) |
 
 ## Operator commands
 
@@ -132,6 +141,27 @@ outlabs-auth current          # current Alembic revision
 
 `doctor` and `bootstrap` support `--format text|json`. Exit codes: `0` healthy,
 `1` check/plan failure, `2` missing `DATABASE_URL`.
+
+The same local commands are grouped under `outlabs-auth db`; diagnostics and
+maintenance are grouped under `outlabs-auth ops`. Existing top-level command
+names remain supported.
+
+Remote API setup and inspection:
+
+```bash
+outlabs-auth context add production --base-url https://api.example.com --api-prefix /iam
+export OUTLABS_AUTH_TOKEN='short-lived-access-token'
+outlabs-auth capabilities
+outlabs-auth whoami
+outlabs-auth users list --all
+```
+
+For scoped agent automation, add the context with `--credential-type api-key`
+and provide `OUTLABS_AUTH_API_KEY` instead of a human bearer token.
+
+Use global `--output json --non-interactive` for coding agents and unattended
+automation. Unlike legacy command-specific `--format json`, the global form
+uses the versioned envelope documented in [`docs/CLI_DESIGN.md`](../docs/CLI_DESIGN.md).
 
 ## Redis
 

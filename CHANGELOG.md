@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Added
+
+- Add the first agent-first remote administration CLI slice: non-secret target
+  contexts, capability discovery, authenticated `whoami`, and paginated
+  `users list|get` commands backed by the mounted HTTP API.
+- Add a versioned global `--output json` contract with stable success/error
+  envelopes, exit categories, request metadata, and safe parser failures.
+- Add namespaced `db` and `ops` command groups while preserving every
+  published top-level operator command as a compatible spelling.
+- Report the installed library and API contract versions from public
+  `/auth/config` capability discovery.
+
+### Changed
+
+- Harden existing operator commands with global structured output, schema
+  validation without tracebacks, query-secret redaction, stdin password input,
+  and explicit confirmation/dry-run behavior for destructive schema actions.
+- Fix `run-maintenance` to import `SimpleRBAC` from its actual preset module.
+
+### Database migrations
+
+- None.
+
 ## [0.1.0a29] - 2026-08-04
 
 ### Added

@@ -80,14 +80,12 @@ async def _table_count(schema: str, table_name: str) -> int:
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    """
+                text("""
                     SELECT COUNT(*)
                     FROM information_schema.tables
                     WHERE table_schema = :schema_name
                       AND table_name = :table_name
-                    """
-                ),
+                    """),
                 {"schema_name": schema, "table_name": table_name},
             )
             return int(result.scalar_one())
@@ -110,15 +108,13 @@ async def _column_names(schema: str, table_name: str) -> list[str]:
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    """
+                text("""
                     SELECT column_name
                     FROM information_schema.columns
                     WHERE table_schema = :schema_name
                       AND table_name = :table_name
                     ORDER BY ordinal_position
-                    """
-                ),
+                    """),
                 {"schema_name": schema, "table_name": table_name},
             )
             return [str(row[0]) for row in result]
@@ -224,7 +220,14 @@ def test_packaged_cli_migrate_reconciles_legacy_bootstrap_schema(tmp_path):
         asyncio.run(_drop_schema(schema))
 
         subprocess.run(
-            [str(python_bin), "-m", "outlabs_auth.cli", "init-db", "--force"],
+            [
+                str(python_bin),
+                "-m",
+                "outlabs_auth.cli",
+                "init-db",
+                "--force",
+                "--yes",
+            ],
             cwd=tmp_path,
             check=True,
             env=cmd_env,

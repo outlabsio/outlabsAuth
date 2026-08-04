@@ -24,8 +24,9 @@ export OUTLABS_AUTH_SCHEMA=outlabs_auth
 outlabs-auth doctor
 outlabs-auth migrate
 outlabs-auth seed-system
-outlabs-auth bootstrap-admin --email admin@example.com --password '…'
-# or: outlabs-auth bootstrap --admin-email … --admin-password …
+printf '%s\n' "$INITIAL_ADMIN_PASSWORD" | \
+  outlabs-auth bootstrap-admin --email admin@example.com --password-stdin
+# or use OUTLABS_AUTH_BOOTSTRAP_PASSWORD with outlabs-auth bootstrap
 ```
 
 Details: [Configuration](./03-Configuration.md), [Getting Started](./01-Getting-Started.md).

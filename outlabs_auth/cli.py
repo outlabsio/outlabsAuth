@@ -8,16 +8,18 @@ caller-owned connection when invoking Alembic.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import re
 import sys
 import time
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 import click
@@ -32,6 +34,18 @@ from outlabs_auth.bootstrap import (
     build_bootstrap_config,
     seed_system_records,
 )
+from outlabs_auth.cli_support import (
+    AgentFriendlyGroup,
+    CliError,
+    CliRuntime,
+    emit_progress,
+    emit_result,
+    effective_output,
+    get_runtime,
+    require_confirmation,
+)
+from outlabs_auth.cli_support.remote_commands import register_remote_commands
+from outlabs_auth.cli_support.runtime import EXIT_USAGE
 from outlabs_auth.maintenance import MaintenanceReport
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -560,19 +574,32 @@ def get_database_url() -> str:
     """Get database URL from environment."""
     url = os.environ.get("DATABASE_URL")
     if not url:
-        click.echo("Error: DATABASE_URL environment variable not set", err=True)
-        click.echo(
-            "Example: postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth",
-            err=True,
+        raise CliError(
+            code="DATABASE_URL_MISSING",
+            message="DATABASE_URL environment variable not set.",
+            exit_code=EXIT_USAGE,
+            hint=(
+                "Export a postgresql+asyncpg:// URL for the target database. "
+                "Database URLs are intentionally not accepted as command-line flags because they may contain secrets."
+            ),
         )
-        sys.exit(1)
 
     return normalize_database_url(url)
 
 
 def get_target_schema_from_env() -> Optional[str]:
     """Get optional auth schema from environment."""
-    return _validate_schema_name(os.environ.get("OUTLABS_AUTH_SCHEMA"))
+    runtime = get_runtime()
+    value = runtime.schema if runtime.schema is not None else os.environ.get("OUTLABS_AUTH_SCHEMA")
+    try:
+        return _validate_schema_name(value)
+    except ValueError as exc:
+        raise CliError(
+            code="INVALID_SCHEMA",
+            message=str(exc),
+            exit_code=EXIT_USAGE,
+            details={"schema": value},
+        ) from exc
 
 
 # ============================================================================
@@ -608,10 +635,25 @@ def _redact_database_url(url: str) -> str:
         parsed = urlparse(url)
     except ValueError:
         return "<unparseable URL>"
-    if not parsed.password:
-        return url
-    redacted_netloc = parsed.netloc.replace(f":{parsed.password}@", ":****@", 1)
-    return urlunparse(parsed._replace(netloc=redacted_netloc))
+    redacted_netloc = parsed.netloc
+    if parsed.password:
+        redacted_netloc = redacted_netloc.replace(f":{parsed.password}@", ":****@", 1)
+
+    sensitive_query_names = {
+        "access_token",
+        "api_key",
+        "credential",
+        "key",
+        "pass",
+        "password",
+        "secret",
+        "token",
+    }
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    redacted_query = urlencode(
+        [(name, "****" if name.lower() in sensitive_query_names else value) for name, value in query]
+    )
+    return urlunparse(parsed._replace(netloc=redacted_netloc, query=redacted_query))
 
 
 async def _check_connectivity(database_url: str) -> DoctorCheck:
@@ -1295,25 +1337,101 @@ def _format_bootstrap_json(
     return json.dumps(payload, indent=2)
 
 
-@click.group()
+@click.group(cls=AgentFriendlyGroup)
 @click.version_option(version=__version__, prog_name="outlabs-auth")
-def main():
-    """OutlabsAuth CLI - migrations, bootstrap, and inspection."""
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    envvar="OUTLABS_AUTH_OUTPUT",
+    help="Global output contract. JSON uses the versioned CLI envelope.",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    envvar="OUTLABS_AUTH_NON_INTERACTIVE",
+    help="Never prompt; fail with a structured interaction-required error.",
+)
+@click.option("--profile", envvar="OUTLABS_AUTH_PROFILE", help="Remote context profile to use.")
+@click.option("--base-url", envvar="OUTLABS_AUTH_BASE_URL", help="One-off remote API base URL.")
+@click.option("--api-prefix", envvar="OUTLABS_AUTH_API_PREFIX", help="Override the remote API prefix.")
+@click.option(
+    "--credential-type",
+    type=click.Choice(["bearer", "api-key"]),
+    default=None,
+    envvar="OUTLABS_AUTH_CREDENTIAL_TYPE",
+    help="Override the remote credential transport.",
+)
+@click.option(
+    "--credential-env",
+    default=None,
+    envvar="OUTLABS_AUTH_CREDENTIAL_ENV",
+    help="Override the environment variable containing the remote credential.",
+)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0.1, max=300.0),
+    default=10.0,
+    show_default=True,
+    envvar="OUTLABS_AUTH_TIMEOUT",
+    help="Remote request timeout in seconds.",
+)
+@click.option("--schema", envvar="OUTLABS_AUTH_SCHEMA", help="Target schema for local database commands.")
+@click.option("--debug", is_flag=True, envvar="OUTLABS_AUTH_DEBUG", help="Show tracebacks for unexpected failures.")
+@click.pass_context
+def main(
+    ctx: click.Context,
+    output: str,
+    non_interactive: bool,
+    profile: Optional[str],
+    base_url: Optional[str],
+    api_prefix: Optional[str],
+    credential_type: Optional[str],
+    credential_env: Optional[str],
+    timeout: float,
+    schema: Optional[str],
+    debug: bool,
+):
+    """Operate OutlabsAuth locally or administer a mounted remote API."""
+
+    ctx.obj = CliRuntime(
+        output=output,
+        non_interactive=non_interactive,
+        debug=debug,
+        profile=profile,
+        base_url=base_url,
+        api_prefix=api_prefix,
+        credential_type=credential_type.replace("-", "_") if credential_type else None,
+        credential_env=credential_env,
+        timeout=timeout,
+        schema=schema,
+    )
+
+
+register_remote_commands(main)
 
 
 @main.command()
 @click.option("--revision", default="head", help="Target revision (default: head)")
 def migrate(revision: str):
     """Run database migrations to specified revision."""
-    click.echo(f"Running migrations to {revision}...")
+    url = get_database_url()
+    schema = get_target_schema_from_env()
+    emit_progress(f"Running migrations to {revision}...")
     asyncio.run(
         run_migrations(
-            get_database_url(),
+            url,
             revision=revision,
-            schema=get_target_schema_from_env(),
+            schema=schema,
         )
     )
-    click.echo("Done!")
+    emit_result(
+        "db.migrate",
+        {"revision": revision, "schema": schema or "public"},
+        changed=True,
+        text="Done!",
+    )
 
 
 async def _run_maintenance_once(
@@ -1323,7 +1441,7 @@ async def _run_maintenance_once(
     redis_url: str | None,
     redis_key_prefix: str | None,
 ) -> MaintenanceReport:
-    from outlabs_auth.core.auth import SimpleRBAC
+    from outlabs_auth.presets.simple import SimpleRBAC
 
     auth = SimpleRBAC(
         database_url=normalize_database_url(database_url),
@@ -1353,11 +1471,23 @@ def run_maintenance_command():
     redis_url = os.environ.get("REDIS_URL")
     redis_key_prefix = os.environ.get("OUTLABS_AUTH_REDIS_KEY_PREFIX")
     if not database_url:
-        raise click.UsageError("DATABASE_URL environment variable not set")
+        raise CliError(
+            code="DATABASE_URL_MISSING",
+            message="DATABASE_URL environment variable not set.",
+            exit_code=EXIT_USAGE,
+        )
     if not secret_key:
-        raise click.UsageError("SECRET_KEY environment variable not set")
+        raise CliError(
+            code="SECRET_KEY_MISSING",
+            message="SECRET_KEY environment variable is not set.",
+            exit_code=EXIT_USAGE,
+        )
     if redis_url and not redis_key_prefix:
-        raise click.UsageError("OUTLABS_AUTH_REDIS_KEY_PREFIX is required when REDIS_URL is configured")
+        raise CliError(
+            code="REDIS_KEY_PREFIX_MISSING",
+            message="OUTLABS_AUTH_REDIS_KEY_PREFIX is required when REDIS_URL is configured.",
+            exit_code=EXIT_USAGE,
+        )
 
     report = asyncio.run(
         _run_maintenance_once(
@@ -1367,7 +1497,12 @@ def run_maintenance_command():
             redis_key_prefix=redis_key_prefix,
         )
     )
-    click.echo(json.dumps(report.model_dump(mode="json"), default=str, sort_keys=True))
+    result = report.model_dump(mode="json")
+    emit_result(
+        "ops.run-maintenance",
+        result,
+        text=json.dumps(result, default=str, sort_keys=True),
+    )
     if not report.ok:
         raise click.exceptions.Exit(1)
 
@@ -1376,18 +1511,27 @@ def run_maintenance_command():
 @click.option("--revision", default="head", show_default=True, help="Alembic revision to stamp")
 def adopt_existing_schema_command(revision: str):
     """Stamp a fully bootstrapped legacy auth schema into Alembic history."""
-    click.echo(f"Checking for legacy auth schema adoption at revision {revision}...")
+    url = get_database_url()
+    schema = get_target_schema_from_env()
+    emit_progress(f"Checking for legacy auth schema adoption at revision {revision}...")
     adopted = asyncio.run(
         adopt_existing_schema(
-            get_database_url(),
-            schema=get_target_schema_from_env(),
+            url,
+            schema=schema,
             revision=revision,
         )
     )
-    if adopted:
-        click.echo("Stamped existing auth schema into Alembic history.")
-    else:
-        click.echo("No legacy auth schema adoption was needed.")
+    text_output = (
+        "Stamped existing auth schema into Alembic history."
+        if adopted
+        else "No legacy auth schema adoption was needed."
+    )
+    emit_result(
+        "db.adopt-existing-schema",
+        {"adopted": adopted, "revision": revision, "schema": schema or "public"},
+        changed=adopted,
+        text=text_output,
+    )
 
 
 @main.command("seed-system")
@@ -1406,17 +1550,30 @@ def adopt_existing_schema_command(revision: str):
 )
 def seed_system(permissions: bool, seed_config: bool):
     """Seed library-owned permissions and default config into the target DB/schema."""
-    click.echo("Seeding OutlabsAuth system records...")
+    url = get_database_url()
+    schema = get_target_schema_from_env()
+    emit_progress("Seeding OutlabsAuth system records...")
     created, existing, config_seeded = asyncio.run(
         seed_system_state(
-            get_database_url(),
-            schema=get_target_schema_from_env(),
+            url,
+            schema=schema,
             include_permissions=permissions,
             include_config=seed_config,
         )
     )
-    click.echo(
-        "Permissions created: " f"{created} | existing: {existing} | config seeded: {'yes' if config_seeded else 'no'}"
+    emit_result(
+        "db.seed-system",
+        {
+            "permissions_created": created,
+            "permissions_existing": existing,
+            "config_seeded": config_seeded,
+            "schema": schema or "public",
+        },
+        changed=created > 0 or config_seeded,
+        text=(
+            "Permissions created: "
+            f"{created} | existing: {existing} | config seeded: {'yes' if config_seeded else 'no'}"
+        ),
     )
 
 
@@ -1425,9 +1582,10 @@ def seed_system(permissions: bool, seed_config: bool):
 @click.option(
     "--password",
     envvar="OUTLABS_AUTH_BOOTSTRAP_PASSWORD",
-    required=True,
-    help="Admin password.",
+    default=None,
+    help="Admin password. Prefer the environment or --password-stdin to avoid process-list exposure.",
 )
+@click.option("--password-stdin", is_flag=True, help="Read the admin password from one line on stdin.")
 @click.option(
     "--first-name",
     envvar="OUTLABS_AUTH_BOOTSTRAP_FIRST_NAME",
@@ -1449,17 +1607,39 @@ def seed_system(permissions: bool, seed_config: bool):
 )
 def bootstrap_admin(
     email: str,
-    password: str,
+    password: Optional[str],
+    password_stdin: bool,
     first_name: str,
     last_name: str,
     root_entity_id: Optional[str],
 ):
     """Create the initial superuser if the auth system has no users yet."""
-    click.echo("Bootstrapping OutlabsAuth admin user...")
+    if password_stdin and password:
+        raise CliError(
+            code="CONFLICTING_SECRET_INPUT",
+            message="Use either --password-stdin or the password environment/option, not both.",
+            exit_code=EXIT_USAGE,
+        )
+    if password_stdin:
+        password = sys.stdin.readline().rstrip("\r\n")
+    if not password:
+        runtime = get_runtime()
+        if runtime.non_interactive or not sys.stdin.isatty():
+            raise CliError(
+                code="ADMIN_PASSWORD_MISSING",
+                message="An admin password is required.",
+                exit_code=EXIT_USAGE,
+                hint="Set OUTLABS_AUTH_BOOTSTRAP_PASSWORD or pass --password-stdin.",
+            )
+        password = click.prompt("Admin password", hide_input=True, confirmation_prompt=True)
+
+    url = get_database_url()
+    schema = get_target_schema_from_env()
+    emit_progress("Bootstrapping OutlabsAuth admin user...")
     status_value, user_id, normalized_email = asyncio.run(
         bootstrap_admin_user(
-            get_database_url(),
-            schema=get_target_schema_from_env(),
+            url,
+            schema=schema,
             email=email,
             password=password,
             first_name=first_name or None,
@@ -1467,21 +1647,34 @@ def bootstrap_admin(
             root_entity_id=root_entity_id,
         )
     )
-    if status_value == "created":
-        click.echo(f"Created bootstrap admin {normalized_email} ({user_id})")
-    else:
-        click.echo(f"Bootstrap admin already exists: {normalized_email} ({user_id})")
+    text_output = (
+        f"Created bootstrap admin {normalized_email} ({user_id})"
+        if status_value == "created"
+        else f"Bootstrap admin already exists: {normalized_email} ({user_id})"
+    )
+    emit_result(
+        "db.bootstrap-admin",
+        {"status": status_value, "user_id": user_id, "email": normalized_email},
+        changed=status_value == "created",
+        text=text_output,
+    )
 
 
 @main.command("init-db")
 @click.option("--force", is_flag=True, help="Drop existing target schema/tables first")
-def init_db(force: bool):
+@click.option("--yes", is_flag=True, help="Confirm destructive --force behavior without prompting.")
+def init_db(force: bool, yes: bool):
     """Create all database tables directly from models (development only)."""
     from outlabs_auth.models.sql import ALL_MODELS  # noqa: F401
 
     url = get_database_url()
     schema = get_target_schema_from_env()
     schema_name = schema or "public"
+    if force:
+        require_confirmation(
+            prompt=f"Drop and recreate schema '{schema_name}' before initializing?",
+            yes=yes,
+        )
 
     async def create_tables():
         target_schema = _validate_schema_name(schema)
@@ -1493,11 +1686,11 @@ def init_db(force: bool):
             async with engine.begin() as conn:
                 if force:
                     if target_schema:
-                        click.echo(f'Dropping schema "{target_schema}"...')
+                        emit_progress(f'Dropping schema "{target_schema}"...')
                         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{target_schema}" CASCADE'))
                         await conn.execute(text(f'CREATE SCHEMA "{target_schema}"'))
                     else:
-                        click.echo("Dropping existing public schema...")
+                        emit_progress("Dropping existing public schema...")
                         await conn.execute(text("DROP SCHEMA public CASCADE"))
                         await conn.execute(text("CREATE SCHEMA public"))
                         await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres"))
@@ -1516,15 +1709,25 @@ def init_db(force: bool):
             await engine.dispose()
 
     count = asyncio.run(create_tables())
-    click.echo(f"Created {count} tables in schema {schema_name}.")
+    emit_result(
+        "db.init",
+        {"schema": schema_name, "table_count": count, "recreated": force},
+        changed=True,
+        text=f"Created {count} tables in schema {schema_name}.",
+    )
 
 
 @main.command("drop-db")
-@click.confirmation_option(prompt="Are you sure you want to drop the target schema/tables?")
-def drop_db():
+@click.option("--yes", is_flag=True, help="Confirm the destructive operation without prompting.")
+def drop_db(yes: bool):
     """Drop all database tables in the target schema (development only)."""
     url = get_database_url()
     schema = get_target_schema_from_env()
+    schema_name = schema or "public"
+    require_confirmation(
+        prompt=f"Drop and recreate schema '{schema_name}'?",
+        yes=yes,
+    )
 
     async def drop_tables():
         engine = create_async_engine(normalize_database_url(url), echo=False)
@@ -1541,19 +1744,34 @@ def drop_db():
         finally:
             await engine.dispose()
 
-    click.echo("Dropping target schema/tables...")
+    emit_progress("Dropping target schema/tables...")
     asyncio.run(drop_tables())
-    click.echo("Done!")
+    emit_result(
+        "db.drop",
+        {"schema": schema_name, "recreated_empty": True},
+        changed=True,
+        text="Done!",
+    )
 
 
 @main.command()
 def current():
     """Show current migration revision for the target DB/schema."""
-    asyncio.run(
-        show_current_revision(
-            get_database_url(),
-            schema=get_target_schema_from_env(),
+    url = get_database_url()
+    schema = get_target_schema_from_env()
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        asyncio.run(
+            show_current_revision(
+                url,
+                schema=schema,
+            )
         )
+    output = captured.getvalue().strip()
+    emit_result(
+        "db.current",
+        {"schema": schema or "public", "alembic_output": output},
+        text=output or "No current revision reported.",
     )
 
 
@@ -1564,7 +1782,15 @@ def history(verbose: bool):
     from alembic import command
 
     alembic_cfg = _load_alembic_config()
-    command.history(alembic_cfg, verbose=verbose)
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        command.history(alembic_cfg, verbose=verbose)
+    output = captured.getvalue().strip()
+    emit_result(
+        "db.history",
+        {"verbose": verbose, "alembic_output": output},
+        text=output or "No migration history reported.",
+    )
 
 
 @main.command()
@@ -1576,9 +1802,22 @@ def revision(message: str, autogenerate: bool):
 
     alembic_cfg = _load_alembic_config(require_local=True)
 
-    click.echo(f"Creating migration: {message}")
-    command.revision(alembic_cfg, message=message, autogenerate=autogenerate)
-    click.echo("Done!")
+    emit_progress(f"Creating migration: {message}")
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        created = command.revision(alembic_cfg, message=message, autogenerate=autogenerate)
+    output = captured.getvalue().strip()
+    revision_ids: list[str] = []
+    for item in created if isinstance(created, list) else [created]:
+        revision_id = getattr(item, "revision", None)
+        if revision_id:
+            revision_ids.append(str(revision_id))
+    emit_result(
+        "db.revision",
+        {"message": message, "autogenerate": autogenerate, "revisions": revision_ids, "output": output},
+        changed=True,
+        text=f"{output}\nDone!" if output else "Done!",
+    )
 
 
 @main.command()
@@ -1587,22 +1826,51 @@ def heads():
     from alembic import command
 
     alembic_cfg = _load_alembic_config()
-    command.heads(alembic_cfg)
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        command.heads(alembic_cfg)
+    output = captured.getvalue().strip()
+    emit_result(
+        "db.heads",
+        {"alembic_output": output},
+        text=output or "No migration heads reported.",
+    )
 
 
 @main.command()
 @click.option("--revision", "-r", default="-1", help="Revision to downgrade to")
-def downgrade(revision: str):
+@click.option("--yes", is_flag=True, help="Confirm the destructive migration without prompting.")
+@click.option("--dry-run", is_flag=True, help="Show the requested downgrade without applying it.")
+def downgrade(revision: str, yes: bool, dry_run: bool):
     """Downgrade to a previous revision."""
-    click.echo(f"Downgrading to {revision}...")
+    schema = get_target_schema_from_env()
+    if dry_run:
+        emit_result(
+            "db.downgrade",
+            {"revision": revision, "schema": schema or "public", "dry_run": True},
+            changed=False,
+            text=f"Dry run: would downgrade schema {schema or 'public'} to {revision}.",
+        )
+        return
+    require_confirmation(
+        prompt=f"Downgrade schema '{schema or 'public'}' to revision '{revision}'?",
+        yes=yes,
+    )
+    url = get_database_url()
+    emit_progress(f"Downgrading to {revision}...")
     asyncio.run(
         downgrade_migrations(
-            get_database_url(),
+            url,
             revision=revision,
-            schema=get_target_schema_from_env(),
+            schema=schema,
         )
     )
-    click.echo("Done!")
+    emit_result(
+        "db.downgrade",
+        {"revision": revision, "schema": schema or "public", "dry_run": False},
+        changed=True,
+        text="Done!",
+    )
 
 
 @main.command()
@@ -1632,12 +1900,23 @@ def tables():
 
     tables_list = asyncio.run(list_tables())
     if not tables_list:
-        click.echo(f"No tables found in schema {schema}.")
+        emit_result(
+            "db.tables",
+            {"schema": schema, "tables": []},
+            text=f"No tables found in schema {schema}.",
+        )
         return
 
-    click.echo(f"\nDatabase tables in schema {schema} ({len(tables_list)} total):\n")
-    for table, columns in tables_list:
-        click.echo(f"  {table} ({columns} columns)")
+    lines = [f"Database tables in schema {schema} ({len(tables_list)} total):", ""]
+    lines.extend(f"  {table} ({columns} columns)" for table, columns in tables_list)
+    emit_result(
+        "db.tables",
+        {
+            "schema": schema,
+            "tables": [{"name": table, "column_count": columns} for table, columns in tables_list],
+        },
+        text="\n".join(lines),
+    )
 
 
 @main.command()
@@ -1651,17 +1930,17 @@ def tables():
 )
 def doctor(output_format: str):
     """Diagnose the target DB/schema for bootstrap and migration issues (read-only)."""
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        click.echo("Error: DATABASE_URL environment variable not set", err=True)
-        sys.exit(2)
-
-    normalized = normalize_database_url(url)
+    normalized = get_database_url()
     schema = get_target_schema_from_env()
     checks = asyncio.run(run_doctor(normalized, schema))
 
     if output_format == "json":
         click.echo(_format_doctor_json(checks, normalized, schema))
+    elif effective_output() == "json":
+        emit_result(
+            "ops.doctor",
+            json.loads(_format_doctor_json(checks, normalized, schema)),
+        )
     else:
         click.echo(_format_doctor_text(checks, normalized, schema))
 
@@ -1680,8 +1959,9 @@ def doctor(output_format: str):
     "--admin-password",
     envvar="OUTLABS_AUTH_BOOTSTRAP_PASSWORD",
     default=None,
-    help="Admin password. Required whenever --admin-email is set.",
+    help="Admin password. Prefer the environment or --admin-password-stdin.",
 )
+@click.option("--admin-password-stdin", is_flag=True, help="Read the admin password from one line on stdin.")
 @click.option(
     "--admin-first-name",
     envvar="OUTLABS_AUTH_BOOTSTRAP_FIRST_NAME",
@@ -1717,6 +1997,7 @@ def doctor(output_format: str):
 def bootstrap(
     admin_email: Optional[str],
     admin_password: Optional[str],
+    admin_password_stdin: bool,
     admin_first_name: Optional[str],
     admin_last_name: Optional[str],
     skip_seed: bool,
@@ -1724,19 +2005,26 @@ def bootstrap(
     output_format: str,
 ):
     """First-boot orchestrator: classify, migrate, seed, and optionally create admin (idempotent)."""
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        click.echo("Error: DATABASE_URL environment variable not set", err=True)
-        sys.exit(2)
-
-    if admin_email and not admin_password:
-        click.echo(
-            "Error: --admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required " "when --admin-email is set",
-            err=True,
+    if admin_password_stdin and admin_password:
+        raise CliError(
+            code="CONFLICTING_SECRET_INPUT",
+            message="Use either --admin-password-stdin or the password environment/option, not both.",
+            exit_code=EXIT_USAGE,
         )
-        sys.exit(2)
+    if admin_password_stdin:
+        admin_password = sys.stdin.readline().rstrip("\r\n")
+    if admin_email and not admin_password:
+        runtime = get_runtime()
+        if runtime.non_interactive or not sys.stdin.isatty():
+            raise CliError(
+                code="ADMIN_PASSWORD_MISSING",
+                message="An admin password is required whenever an admin email is set.",
+                exit_code=EXIT_USAGE,
+                hint="Set OUTLABS_AUTH_BOOTSTRAP_PASSWORD or pass --admin-password-stdin.",
+            )
+        admin_password = click.prompt("Admin password", hide_input=True, confirmation_prompt=True)
 
-    normalized = normalize_database_url(url)
+    normalized = get_database_url()
     schema = get_target_schema_from_env()
     result = asyncio.run(
         run_bootstrap(
@@ -1753,10 +2041,45 @@ def bootstrap(
 
     if output_format == "json":
         click.echo(_format_bootstrap_json(result, normalized, schema))
+    elif effective_output() == "json":
+        emit_result(
+            "ops.bootstrap",
+            json.loads(_format_bootstrap_json(result, normalized, schema)),
+            changed=bool(result.executed) and result.success,
+        )
     else:
         click.echo(_format_bootstrap_text(result, normalized, schema))
 
     sys.exit(0 if result.success else 1)
+
+
+@main.group("db")
+def db_group():
+    """Run local schema lifecycle and inspection commands."""
+
+
+db_group.add_command(migrate)
+db_group.add_command(adopt_existing_schema_command, "adopt-existing-schema")
+db_group.add_command(seed_system, "seed-system")
+db_group.add_command(bootstrap_admin, "bootstrap-admin")
+db_group.add_command(init_db, "init")
+db_group.add_command(drop_db, "drop")
+db_group.add_command(current)
+db_group.add_command(history)
+db_group.add_command(revision)
+db_group.add_command(heads)
+db_group.add_command(downgrade)
+db_group.add_command(tables)
+db_group.add_command(bootstrap)
+
+
+@main.group("ops")
+def ops_group():
+    """Run diagnostics and deterministic maintenance operations."""
+
+
+ops_group.add_command(doctor)
+ops_group.add_command(run_maintenance_command, "maintenance")
 
 
 if __name__ == "__main__":

@@ -143,7 +143,13 @@ bun run dev
 
 Sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
 
-## CLI Bootstrap
+## CLI Operations and Administration
+
+The CLI has two operating planes: local database lifecycle commands and
+authenticated administration through a mounted OutlabsAuth API. The optional
+admin UI is not required for CLI workflows.
+
+### Local database lifecycle
 
 ```bash
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
@@ -151,10 +157,55 @@ export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
 
 outlabs-auth migrate
 outlabs-auth seed-system
-outlabs-auth bootstrap-admin --email admin@example.com --password 'ChangeMe_now1!'
+printf '%s\n' "$INITIAL_ADMIN_PASSWORD" | \
+  outlabs-auth bootstrap-admin --email admin@example.com --password-stdin
 ```
 
-Useful operators: `outlabs-auth doctor` (read-only preflight), `outlabs-auth bootstrap` (idempotent first-boot). See [Configuration](./docs-library/03-Configuration.md) and [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
+Useful operators: `outlabs-auth doctor` (read-only preflight) and
+`outlabs-auth bootstrap` (idempotent first-boot). Namespaced forms such as
+`outlabs-auth db migrate` and `outlabs-auth ops doctor` are also available;
+the original spellings remain supported.
+
+### Remote administration
+
+Contexts contain target metadata only. Tokens remain in the named environment
+variable and are never written to the context file.
+
+```bash
+outlabs-auth context add local \
+  --base-url http://127.0.0.1:8004 \
+  --api-prefix /v1
+
+export OUTLABS_AUTH_TOKEN='short-lived-access-token'
+
+outlabs-auth capabilities
+outlabs-auth whoami
+outlabs-auth users list --status active --all
+outlabs-auth users get admin@example.com
+```
+
+For unattended agents, configure a least-privilege API key instead of a human
+session when host policy permits it:
+
+```bash
+outlabs-auth context add production \
+  --base-url https://api.example.com \
+  --api-prefix /iam \
+  --credential-type api-key
+export OUTLABS_AUTH_API_KEY='scoped-key-value'
+```
+
+Coding agents and scripts should select the versioned JSON contract globally:
+
+```bash
+outlabs-auth --output json --non-interactive users list --all
+```
+
+Successes and failures both emit one JSON document on stdout with stable error
+codes and exit categories. Design and compatibility contract:
+[`docs/CLI_DESIGN.md`](./docs/CLI_DESIGN.md). Configuration and deployment:
+[Configuration](./docs-library/03-Configuration.md) and
+[`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
 
 ## Production Snapshot
 

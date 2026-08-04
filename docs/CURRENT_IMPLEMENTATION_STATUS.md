@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-07-29
+**Updated**: 2026-08-04
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -8,6 +8,24 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
 
 ## Completed Slices
+
+### Agent-First CLI Foundation
+
+- Local database lifecycle commands remain available under their published
+  top-level names and through the new `db` namespace; diagnostics and
+  deterministic maintenance are also grouped under `ops`.
+- Global `--output json` uses the versioned `outlabs-auth.cli/v1` envelope for
+  successes, domain failures, parser failures, and missing configuration.
+- Remote contexts store base URL, API prefix, optional application key, and a
+  credential environment-variable name; no token value is persisted.
+- Remote capability discovery, `whoami`, and read-only user list/get are
+  implemented through the mounted HTTP API. User lookup accepts UUID, exact
+  email, or an unambiguous search reference.
+- Destructive schema initialization/drop/downgrade requires explicit
+  confirmation in unattended execution. Bootstrap passwords support stdin so
+  they do not need to appear in process arguments.
+- The remaining remote resource groups, interactive credential storage,
+  declarative plan/apply, and permission explanation are follow-up slices.
 
 ### User Lifecycle and Access Revocation
 
