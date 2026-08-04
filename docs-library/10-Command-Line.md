@@ -269,6 +269,7 @@ outlabs-auth doctor
 outlabs-auth migrate
 outlabs-auth seed-system
 outlabs-auth bootstrap-admin --email admin@example.com
+outlabs-auth ops maintenance
 ```
 
 `doctor` is read-only. `bootstrap` is an idempotent first-boot orchestrator that
@@ -277,6 +278,9 @@ the initial admin. It aborts on unsafe drift instead of guessing.
 
 For production, run migrations once in a prestart or release job before
 starting multiple workers. See [Deployment](./08-Deployment.md).
+Run `ops maintenance` from exactly one external scheduler per database and
+environment; the complete ownership and failure contract is in
+[Background Maintenance](./09-Background-Maintenance.md).
 
 ## Coding-agent and automation contract
 

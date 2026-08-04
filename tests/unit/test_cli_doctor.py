@@ -96,6 +96,29 @@ def test_run_maintenance_exits_nonzero_for_partial_failure(monkeypatch: pytest.M
     assert payload["missing_steps"] == ["api_key_usage_sync"]
 
 
+def test_run_maintenance_json_failure_uses_agent_error_contract(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://runtime@example.test/auth")
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-do-not-use-in-production-1234567890")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.example.test/0")
+    monkeypatch.setenv("OUTLABS_AUTH_REDIS_KEY_PREFIX", "test:maintenance")
+    run_once = AsyncMock(
+        return_value=MaintenanceReport.from_results(
+            {"token_cleanup": {"refresh_tokens": {"total": 0}}},
+            expected_steps=("token_cleanup", "api_key_usage_sync"),
+        )
+    )
+    monkeypatch.setattr(cli_module, "_run_maintenance_once", run_once)
+
+    result = CliRunner().invoke(cli_main, ["--output", "json", "run-maintenance"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "MAINTENANCE_INCOMPLETE"
+    assert payload["error"]["details"]["missing_steps"] == ["api_key_usage_sync"]
+    assert payload["error"]["retryable"] is False
+
+
 def test_redact_database_url_preserves_url_without_password():
     url = "postgresql+asyncpg://reader@localhost:5432/mydb"
     assert _redact_database_url(url) == url

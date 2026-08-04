@@ -1498,13 +1498,22 @@ def run_maintenance_command():
         )
     )
     result = report.model_dump(mode="json")
+    if not report.ok:
+        if get_runtime().output == "json":
+            raise CliError(
+                code="MAINTENANCE_INCOMPLETE",
+                message="Maintenance completed with missing or error-bearing steps.",
+                details=result,
+                hint="Inspect missing_steps, error_steps, and reported_errors before retrying.",
+            )
+        click.echo(json.dumps(result, default=str, sort_keys=True))
+        raise SystemExit(1)
+
     emit_result(
         "ops.run-maintenance",
         result,
         text=json.dumps(result, default=str, sort_keys=True),
     )
-    if not report.ok:
-        raise click.exceptions.Exit(1)
 
 
 @main.command("adopt-existing-schema")
