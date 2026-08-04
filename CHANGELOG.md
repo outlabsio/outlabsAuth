@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a30] - 2026-08-04
 
 ### Added
 
@@ -50,6 +50,17 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 ### Database migrations
 
 - None.
+
+### Operational upgrade notes
+
+- Existing top-level database and operator commands remain supported; the new
+  `db` and `ops` groups provide clearer namespaced spellings for new automation.
+- Remote administration commands require the host application to mount the
+  corresponding OutlabsAuth routers and a target-scoped credential with the
+  least privileges needed for the requested operation.
+- Coding agents and other automation should use global `--output json`, inspect
+  capability discovery before acting, and treat partial-failure details as the
+  source of truth for safe retries.
 
 ## [0.1.0a29] - 2026-08-04
 

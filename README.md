@@ -284,7 +284,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a29
+**Current Library Version**: 0.1.0a30
 
 **Publication Status**: Approved immutable release source for PyPI publication.
 
