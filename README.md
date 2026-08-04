@@ -143,7 +143,13 @@ bun run dev
 
 Sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
 
-## CLI Bootstrap
+## CLI Operations and Administration
+
+The CLI has two operating planes: local database lifecycle commands and
+authenticated administration through a mounted OutlabsAuth API. The optional
+admin UI is not required for CLI workflows.
+
+### Local database lifecycle
 
 ```bash
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
@@ -151,10 +157,100 @@ export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
 
 outlabs-auth migrate
 outlabs-auth seed-system
-outlabs-auth bootstrap-admin --email admin@example.com --password 'ChangeMe_now1!'
+printf '%s\n' "$INITIAL_ADMIN_PASSWORD" | \
+  outlabs-auth bootstrap-admin --email admin@example.com --password-stdin
 ```
 
-Useful operators: `outlabs-auth doctor` (read-only preflight), `outlabs-auth bootstrap` (idempotent first-boot). See [Configuration](./docs-library/03-Configuration.md) and [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
+Useful operators: `outlabs-auth doctor` (read-only preflight) and
+`outlabs-auth bootstrap` (idempotent first-boot). Namespaced forms such as
+`outlabs-auth db migrate` and `outlabs-auth ops doctor` are also available;
+the original spellings remain supported.
+
+### Remote administration
+
+Contexts contain target metadata only. Tokens are never written to the context
+file. Human logins use a separate, target-bound owner-only session store;
+unattended automation can keep using a named environment variable.
+
+```bash
+outlabs-auth context add local \
+  --base-url http://127.0.0.1:8004 \
+  --api-prefix /v1
+
+outlabs-auth capabilities
+outlabs-auth auth login --email admin@example.com  # hidden password prompt
+outlabs-auth auth status
+outlabs-auth whoami
+outlabs-auth users list --status active --all
+outlabs-auth users get admin@example.com
+outlabs-auth permissions explain reports:read --user admin@example.com
+```
+
+The CLI also has typed lifecycle commands for self-service accounts, users,
+roles, permissions and ABAC policy, entities, memberships, API keys,
+integration principals/system keys, sessions, audit events, and entity-type
+configuration. References accept UUIDs or unambiguous human identifiers such
+as email, role name, entity slug, and API-key name.
+
+```bash
+outlabs-auth permissions create --name reports:read --display-name "Read reports"
+outlabs-auth roles create \
+  --name report-reader --display-name "Report reader" \
+  --permission reports:read
+outlabs-auth memberships add \
+  --user analyst@example.com --entity engineering \
+  --role report-reader --yes
+outlabs-auth users access-report analyst@example.com
+```
+
+For unattended agents, configure a least-privilege API key instead of a human
+session when host policy permits it:
+
+```bash
+outlabs-auth context add production \
+  --base-url https://api.example.com \
+  --api-prefix /iam \
+  --credential-type api-key
+export OUTLABS_AUTH_API_KEY='scoped-key-value'
+```
+
+To create a least-privilege key while signed in as a human, declare where its
+one-time secret must go. The CLI validates the destination before creating the
+key and writes it with mode `0600`:
+
+```bash
+outlabs-auth api-keys grantable-scopes --entity engineering
+outlabs-auth api-keys create \
+  --name coding-agent --scope user:read --scope permission:read \
+  --entity engineering --secret-file ./coding-agent.key --yes
+```
+
+Coding agents and scripts should select the versioned JSON contract globally:
+
+```bash
+outlabs-auth --output json --non-interactive users list --all
+outlabs-auth --output json commands memberships add --shallow
+```
+
+Successes and failures both emit one JSON document on stdout with stable error
+codes and exit categories. `commands` exposes the live command/option schema,
+while guarded `api request` provides a bounded relative-path escape hatch for
+new mounted endpoints.
+
+For repeatable administration, review and save a target-bound plan before any
+write:
+
+```bash
+outlabs-auth --output json plan examples/cli/state.example.json --out state.plan.json
+outlabs-auth --output json --non-interactive apply state.plan.json --yes
+```
+
+Complete user guide: [Command Line](./docs-library/10-Command-Line.md).
+Maintainer contract: [`docs/CLI_DESIGN.md`](./docs/CLI_DESIGN.md).
+Agent reference: [`docs/CLI_AGENT_GUIDE.md`](./docs/CLI_AGENT_GUIDE.md).
+Manifest contract: [`docs/CLI_MANIFEST.md`](./docs/CLI_MANIFEST.md).
+Configuration and deployment: [Configuration](./docs-library/03-Configuration.md) and
+[`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md).
 
 ## Production Snapshot
 
@@ -188,7 +284,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a29
+**Current Library Version**: 0.1.0a30
 
 **Publication Status**: Approved immutable release source for PyPI publication.
 

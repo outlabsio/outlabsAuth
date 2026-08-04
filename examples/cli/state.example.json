@@ -1,0 +1,47 @@
+{
+  "api_version": "outlabs-auth.state/v1alpha1",
+  "kind": "OutlabsAuthState",
+  "spec": {
+    "permissions": [
+      {
+        "name": "reports:read",
+        "display_name": "Read reports",
+        "description": "View generated reports"
+      }
+    ],
+    "entities": [
+      {
+        "slug": "acme",
+        "name": "acme",
+        "display_name": "Acme",
+        "entity_class": "structural",
+        "entity_type": "organization"
+      },
+      {
+        "slug": "engineering",
+        "name": "engineering",
+        "display_name": "Engineering",
+        "entity_class": "structural",
+        "entity_type": "department",
+        "parent": "acme"
+      }
+    ],
+    "roles": [
+      {
+        "name": "report-reader",
+        "display_name": "Report reader",
+        "permissions": ["reports:read"],
+        "scope_entity": "engineering",
+        "scope": "hierarchy"
+      }
+    ],
+    "memberships": [
+      {
+        "user": "operator@example.com",
+        "entity": "engineering",
+        "roles": ["report-reader"],
+        "status": "active"
+      }
+    ]
+  }
+}

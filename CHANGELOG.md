@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a30] - 2026-08-04
+
+### Added
+
+- Add the first agent-first remote administration CLI slice: non-secret target
+  contexts, capability discovery, authenticated `whoami`, and paginated
+  `users list|get` commands backed by the mounted HTTP API.
+- Add target-bound refreshable CLI login sessions plus registration, password
+  reset, invitation, magic-link, and access-code commands with safe secret
+  inputs.
+- Add typed remote administration for users, roles, permissions, entities,
+  memberships, personal API keys, sessions, audit search, and entity-type
+  configuration, including human-reference resolution and permission
+  explanation.
+- Add self-service account/profile/password/phone/social-account commands,
+  typed ABAC condition management, non-human integration principals and system
+  keys, entity-wide API-key incident response, consolidated user access
+  reports, and user lifecycle timelines.
+- Add live machine-readable command discovery and a guarded, relative-path raw
+  API escape hatch for forward-compatible access to mounted endpoints.
+- Add target-bound declarative `plan`/`apply` for permissions, entities, roles,
+  and memberships with dependency ordering, pre-write drift checks,
+  destructive gates, and partial-failure reporting.
+- Add explicit one-time API-key secret sinks with preflight validation and
+  owner-only atomic file output.
+- Add a coding-agent guide covering discovery, least-privilege credentials,
+  plan/apply, retry categories, partial-failure recovery, and the guarded raw
+  API fallback.
+- Add a versioned global `--output json` contract with stable success/error
+  envelopes, exit categories, request metadata, and safe parser failures.
+- Add namespaced `db` and `ops` command groups while preserving every
+  published top-level operator command as a compatible spelling.
+- Report the installed library and API contract versions from public
+  `/auth/config` capability discovery.
+
+### Changed
+
+- Harden existing operator commands with global structured output, schema
+  validation without tracebacks, query-secret redaction, stdin password input,
+  and explicit confirmation/dry-run behavior for destructive schema actions.
+- Fix `run-maintenance` to import `SimpleRBAC` from its actual preset module.
+
+### Database migrations
+
+- None.
+
+### Operational upgrade notes
+
+- Existing top-level database and operator commands remain supported; the new
+  `db` and `ops` groups provide clearer namespaced spellings for new automation.
+- Remote administration commands require the host application to mount the
+  corresponding OutlabsAuth routers and a target-scoped credential with the
+  least privileges needed for the requested operation.
+- Coding agents and other automation should use global `--output json`, inspect
+  capability discovery before acting, and treat partial-failure details as the
+  source of truth for safe retries.
+
 ## [0.1.0a29] - 2026-08-04
 
 ### Added

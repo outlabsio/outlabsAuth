@@ -278,6 +278,11 @@ class AuthConfigResponse(BaseModel):
     Used by admin UIs to conditionally show/hide features.
     """
 
+    library_version: str = Field(..., description="Installed outlabs-auth package version.")
+    api_contract_version: str = Field(
+        default="outlabs-auth.api/v1",
+        description="Versioned compatibility contract for first-party API clients.",
+    )
     preset: str = Field(..., description="Preset name: 'SimpleRBAC' or 'EnterpriseRBAC'")
     features: Dict[str, bool] = Field(
         ...,

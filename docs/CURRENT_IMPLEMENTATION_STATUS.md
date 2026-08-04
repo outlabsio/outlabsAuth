@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-07-29
+**Updated**: 2026-08-04
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -8,6 +8,49 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
 
 ## Completed Slices
+
+### Agent-First CLI Foundation
+
+- Local database lifecycle commands remain available under their published
+  top-level names and through the new `db` namespace; diagnostics and
+  deterministic maintenance are also grouped under `ops`.
+- Global `--output json` uses the versioned `outlabs-auth.cli/v1` envelope for
+  successes, domain failures, parser failures, and missing configuration.
+- Remote contexts store base URL, API prefix, optional application key, and a
+  credential environment-variable name; no token value is persisted.
+- Remote capability discovery, `whoami`, and read-only user list/get are
+  implemented through the mounted HTTP API. User lookup accepts UUID, exact
+  email, or an unambiguous search reference.
+- Destructive schema initialization/drop/downgrade requires explicit
+  confirmation in unattended execution. Bootstrap passwords support stdin so
+  they do not need to appear in process arguments.
+
+### UI-Optional CLI Control Plane
+
+- Password login, registration, reset, invitation, magic-link, and access-code
+  flows accept secrets only from environment variables, stdin, or hidden
+  prompts. Refreshable login sessions are stored atomically with owner-only
+  permissions and are bound to the exact target.
+- Typed remote lifecycle groups cover self-service accounts, users, roles,
+  permissions and ABAC policy, entities, memberships, personal and
+  entity-inventory API keys, integration principals/system keys, sessions,
+  cross-user audit search, and entity-type configuration. Human references are
+  resolved to exact IDs and authority-changing operations require
+  confirmation.
+- User access reports consolidate memberships, direct roles, permission
+  sources, personal keys, and sessions; user timelines combine audit and
+  membership history for CLI incident response.
+- `permissions explain` shows exact/wildcard matches and the role, direct
+  grant, superuser, or server check responsible for a decision.
+- API-key creation and rotation require an explicit one-time secret sink; file
+  targets are checked before the server creates or rotates the key.
+- `commands` exposes the live Click tree as machine-readable option metadata.
+  Guarded `api request` covers newly mounted relative endpoints with bounded
+  JSON input and confirmation for raw writes.
+- Declarative `plan`/`apply` manage named permissions, entities, roles, and
+  memberships using target-bound, drift-checked, dependency-ordered plans.
+  Destructive and partially completed execution have distinct safety gates and
+  exit categories.
 
 ### User Lifecycle and Access Revocation
 

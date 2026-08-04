@@ -8,6 +8,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC, SimpleRBAC
+from outlabs_auth._version import __version__
 from outlabs_auth.fastapi import register_exception_handlers
 from outlabs_auth.models.sql.enums import EntityClass, RoleScope
 from outlabs_auth.routers import get_auth_router, get_memberships_router, get_users_router
@@ -153,6 +154,8 @@ async def test_auth_config_returns_expected_features_and_permissions(
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["library_version"] == __version__
+    assert payload["api_contract_version"] == "outlabs-auth.api/v1"
     assert payload["preset"] == "EnterpriseRBAC"
     assert payload["features"]["entity_hierarchy"] is True
     assert payload["features"]["tree_permissions"] is True

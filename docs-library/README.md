@@ -32,8 +32,9 @@ that as a docs bug).
 3. [Choosing Simple vs Enterprise](./07-Choosing-a-Preset.md) — pick a preset
 4. Run an [example](../examples/) that matches your preset
 5. Optionally plug in [OutlabsAuth UI](../docs/AUTH_UI.md)
-6. Before production: [Deployment](./08-Deployment.md)
-7. Give recurring cleanup and sync one [external maintenance owner](./09-Background-Maintenance.md)
+6. Operate without a UI: [Command Line](./10-Command-Line.md)
+7. Before production: [Deployment](./08-Deployment.md)
+8. Give recurring cleanup and sync one [external maintenance owner](./09-Background-Maintenance.md)
 
 ### Adding features to an existing integration?
 
@@ -41,6 +42,8 @@ that as a docs bug).
 |------------|------|
 | Mount the right HTTP APIs | [Routers & prefixes](./02-Routers-and-Prefixes.md) |
 | Tune DB / Redis / cache / flags | [Configuration](./03-Configuration.md) |
+| Operate the deployment without a UI | [Command Line](./10-Command-Line.md) |
+| Drive administration with a coding agent | [Command Line — automation contract](./10-Command-Line.md#coding-agent-and-automation-contract) |
 | Add Google (or other) social login | [OAuth & social login](./04-OAuth-and-Social-Login.md) |
 | Let users see / revoke devices | [Sessions & audit](./05-Sessions-and-Audit.md) |
 | Magic links, OTPs, WhatsApp/SMS | [Passwordless & messaging](./06-Passwordless-and-Messaging.md) |
@@ -79,6 +82,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 |-------|---------|
 | [02 — Routers & Prefixes](./02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount and how prefixes work |
 | [03 — Configuration](./03-Configuration.md) | Secrets, schema, Redis, in-process cache, CLI, production defaults |
+| [10 — Command Line](./10-Command-Line.md) | Complete UI-optional administration for people, scripts, and coding agents |
 | [08 — Deployment](./08-Deployment.md) | Production checklist (migrate once, Redis, workers) |
 
 ### Auth features
@@ -138,7 +142,7 @@ folder 1:1. Suggested nav:
 | Nav section | Handbook sources |
 |-------------|------------------|
 | **Get started** | `00`, `01`, `07`, `08`, `09` |
-| **Build** | `02`, `03` |
+| **Build** | `02`, `03`, `10` |
 | **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `26`, `48` |
 | **Enterprise** | `13`, `51`, `54` |
 | **Integrations** | `50`, `AUTH_UI.md` (or a short UI page copied from `docs/`) |

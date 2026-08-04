@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth._version import __version__
 from outlabs_auth.core.exceptions import (
     OutlabsAuthException,
     PermissionDeniedError,
@@ -142,6 +143,7 @@ def get_auth_router(
         }
 
         return AuthConfigResponse(
+            library_version=__version__,
             preset=preset_name,
             features=features,
             auth_methods=auth_methods,
