@@ -15,6 +15,7 @@
 5. **Redis** — for shared permission cache, counters, rate limits, token blacklist; or `cache_backend="memory"` on a **single** process only
 6. **Mount prefix** — stable (`/v1`, `/iam`, …) and match OutlabsAuth UI `authApiPrefix`
 7. **Observability** — embedded mode + host `/metrics` registry ([97](./97-Observability.md))
+8. **Maintenance owner** — `background_job_mode="disabled"` in every API replica; one external scheduler/worker runs the one-shot cycle ([09](./09-Background-Maintenance.md))
 
 ```bash
 export DATABASE_URL=postgresql+asyncpg://...
@@ -40,6 +41,7 @@ Details: [Configuration](./03-Configuration.md), [Getting Started](./01-Getting-
 | Memory cache | Only for single-process hosts |
 | Refresh revoke / sessions | `store_refresh_tokens=True` (default) |
 | Immediate access kill | `enable_token_blacklist=True` + Redis |
+| Background maintenance | Disabled in every API process; one explicit external owner per database/environment |
 
 ---
 
@@ -55,6 +57,7 @@ healthy, `1` check failure, `2` missing `DATABASE_URL`.
 - [Configuration](./03-Configuration.md)
 - [Getting Started](./01-Getting-Started.md)
 - [Observability](./97-Observability.md)
+- [Background Maintenance](./09-Background-Maintenance.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)
 - [`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md)
 - [`docs/SECURITY.md`](../docs/SECURITY.md)

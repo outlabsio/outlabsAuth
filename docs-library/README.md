@@ -33,6 +33,7 @@ that as a docs bug).
 4. Run an [example](../examples/) that matches your preset
 5. Optionally plug in [OutlabsAuth UI](../docs/AUTH_UI.md)
 6. Before production: [Deployment](./08-Deployment.md)
+7. Give periodic work one explicit owner: [Background Maintenance](./09-Background-Maintenance.md)
 
 ### Adding features to an existing integration?
 
@@ -40,6 +41,7 @@ that as a docs bug).
 |------------|------|
 | Mount the right HTTP APIs | [Routers & prefixes](./02-Routers-and-Prefixes.md) |
 | Tune DB / Redis / cache / flags | [Configuration](./03-Configuration.md) |
+| Run cleanup and sync outside the API | [Background maintenance](./09-Background-Maintenance.md) |
 | Add Google (or other) social login | [OAuth & social login](./04-OAuth-and-Social-Login.md) |
 | Let users see / revoke devices | [Sessions & audit](./05-Sessions-and-Audit.md) |
 | Magic links, OTPs, WhatsApp/SMS | [Passwordless & messaging](./06-Passwordless-and-Messaging.md) |
@@ -68,6 +70,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [01 — Getting Started](./01-Getting-Started.md) | Install → migrate → mount → login → optional admin UI |
 | [07 — Choosing a Preset](./07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
 | [08 — Deployment](./08-Deployment.md) | Production migrate, Redis, multi-worker checklist |
+| [09 — Background Maintenance](./09-Background-Maintenance.md) | External scheduler/worker contract, retries, activation, and rollback |
 | [13 — Core Authorization Concepts](./13-Core-Authorization-Concepts.md) | Users, roles, permissions, entities, tree access |
 
 ### Build & configure
@@ -77,6 +80,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [02 — Routers & Prefixes](./02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount and how prefixes work |
 | [03 — Configuration](./03-Configuration.md) | Secrets, schema, Redis, in-process cache, CLI, production defaults |
 | [08 — Deployment](./08-Deployment.md) | Production checklist (migrate once, Redis, workers) |
+| [09 — Background Maintenance](./09-Background-Maintenance.md) | Safely schedule cleanup and sync work outside FastAPI |
 
 ### Auth features
 
@@ -134,7 +138,7 @@ folder 1:1. Suggested nav:
 
 | Nav section | Handbook sources |
 |-------------|------------------|
-| **Get started** | `00`, `01`, `07`, `08` |
+| **Get started** | `00`, `01`, `07`, `08`, `09` |
 | **Build** | `02`, `03` |
 | **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `26`, `48` |
 | **Enterprise** | `13`, `51`, `54` |

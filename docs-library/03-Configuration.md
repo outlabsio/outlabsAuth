@@ -36,6 +36,7 @@ auth = EnterpriseRBAC(
 | `auto_migrate` | `False` in multi-worker runtime; migrate via CLI in prestart |
 | `redis_url` | Enables counters, rate limits, and shared permission caching |
 | `cache_backend` | `redis` (multi-instance), `memory` (single-process, no Redis), or `none` |
+| `background_job_mode` | `"disabled"` in production API processes; use one external maintenance owner |
 | Mount prefix | App-owned, e.g. `/iam` or `/v1` — keep consistent with OutlabsAuth UI `authApiPrefix` |
 
 ### Permission cache backends
@@ -101,6 +102,18 @@ Passwordless and messaging walkthrough:
 ABAC: [26 — ABAC](./26-ABAC.md).  
 Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 
+## Background maintenance
+
+`background_job_mode` accepts `"disabled"` (the default) or `"embedded"`.
+Production API processes should remain disabled and let one explicit scheduler
+or worker call `run_background_jobs_once()`. Embedded mode is a convenience for
+single-process development only.
+
+Queue and scheduler names such as TaskQ, Celery, or Cron are not library modes.
+They are host-owned integrations around the scheduler-agnostic one-shot entry
+point. See [Background Maintenance](./09-Background-Maintenance.md) for the CLI
+and programmatic patterns, retry semantics, staged activation, and rollback.
+
 ## CLI environment
 
 | Variable | Purpose |
@@ -117,6 +130,7 @@ outlabs-auth seed-system      # system permissions / seed data
 outlabs-auth bootstrap-admin  # create an initial admin
 outlabs-auth doctor           # read-only preflight (safe on prod)
 outlabs-auth bootstrap        # migrate → seed → optional admin (aborts on drift)
+outlabs-auth run-maintenance  # run one external-scheduler maintenance cycle
 outlabs-auth tables           # list auth tables
 outlabs-auth current          # current Alembic revision
 ```
@@ -144,5 +158,6 @@ Pass `observability_config=` (see `ObservabilityConfig` / presets) and call
 
 - [Getting Started](./01-Getting-Started.md)
 - [Deployment](./08-Deployment.md)
+- [Background Maintenance](./09-Background-Maintenance.md)
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)

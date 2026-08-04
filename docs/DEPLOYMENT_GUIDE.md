@@ -1075,30 +1075,28 @@ Providing `redis_url` enables Redis by default. That moves the usage counter to 
 
 **Configuration**:
 ```python
-# Enable Redis counters for API keys
+# API/web process: enable Redis counters, but do not start a scheduler per replica.
 auth = EnterpriseRBAC(
     database_url=DATABASE_URL,
     secret_key=SECRET_KEY,
     redis_url="redis://redis:6379",  # Enables Redis counters + permission cache
     redis_key_prefix="myapp:production",
+    background_job_mode="disabled",
 )
-
-# Start background sync task
-@app.on_event("startup")
-async def startup():
-    from outlabs_auth.workers import start_api_key_sync_worker
-
-    app.state.api_key_usage_sync = await start_api_key_sync_worker(
-        auth.api_key_service,
-        auth.config,
-        session_factory=auth.session_factory,
-        interval_seconds=300,
-    )
-
-@app.on_event("shutdown")
-async def shutdown():
-    await app.state.api_key_usage_sync.stop()
 ```
+
+Run the deterministic one-shot entry point from exactly one external scheduler
+or worker. For the standard CLI integration, provide credentials through its
+environment and invoke `outlabs-auth run-maintenance`; do not place secrets in
+schedule payloads. Hosts with custom feature/service wiring should call
+`await auth.run_background_jobs_once()` from their worker using the same auth
+factory as the API.
+
+Do not call `start_api_key_sync_worker()` from FastAPI startup in production.
+Every API replica would otherwise own a loop. The scheduler may live beside the
+API, while the executor can be a locally supervised worker or a separate
+deployment as operational needs dictate. See the implementer guide:
+[Background Maintenance](../docs-library/09-Background-Maintenance.md).
 
 **How It Works**:
 ```
@@ -1730,6 +1728,9 @@ LIMIT 10;
 - [ ] `outlabs-auth doctor` green; `current` == `heads`
 - [ ] `OUTLABS_AUTH_SCHEMA` set if isolating auth tables
 - [ ] `redis_key_prefix` set and unique per app+environment (if Redis is on)
+- [ ] `background_job_mode="disabled"` in every production API replica
+- [ ] Exactly one external maintenance owner configured, initially paused, with
+      overlap forbidden and independent scheduler/worker monitoring
 - [ ] Before first enabling Redis: audited `rate_limit_per_minute` on every row
       in `api_keys` (the limiter is a silent no-op without Redis — see
       [Background Sync for API Keys](#background-sync-for-api-keys-v14---dd-033))

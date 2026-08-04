@@ -37,6 +37,7 @@ with `python3 scripts/port_handbook.py` from that project.
 | [Choosing a Preset](./docs-library/07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
 | [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
 | [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
+| [Background Maintenance](./docs-library/09-Background-Maintenance.md) | External scheduler/worker setup, retries, activation, and rollback |
 | [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
 | [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
 | [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |
@@ -171,6 +172,7 @@ auth = EnterpriseRBAC(
 
 - Prefer a **direct** Postgres URL over transaction-pooler endpoints for auth-heavy apps
 - Migrate in a **single-process** prestart step; then start workers
+- Keep background jobs **disabled in API replicas**; run one external maintenance owner
 - Mount under an app-owned prefix such as `/iam`
 - Point OutlabsAuth UI `authApiPrefix` at that same prefix
 
