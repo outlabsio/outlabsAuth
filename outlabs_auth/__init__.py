@@ -84,6 +84,7 @@ from outlabs_auth.integrations import (
     HostUserProjection,
 )
 from outlabs_auth.middleware import ResourceContextMiddleware
+from outlabs_auth.maintenance import MaintenanceReport
 
 # Model groups for convenience
 from outlabs_auth.models.sql import (
@@ -197,6 +198,7 @@ __all__ = [
     "AuthDeps",
     "create_auth_deps",
     "ResourceContextMiddleware",
+    "MaintenanceReport",
     "register_exception_handlers",
     "register_outlabs_exception_handler",
     "HostQueryService",

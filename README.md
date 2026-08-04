@@ -37,6 +37,7 @@ with `python3 scripts/port_handbook.py` from that project.
 | [Choosing a Preset](./docs-library/07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
 | [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
 | [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
+| [Background Maintenance](./docs-library/09-Background-Maintenance.md) | Typed one-shot cleanup/sync, external ownership, activation, and rollback |
 | [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
 | [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
 | [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |
@@ -166,6 +167,7 @@ auth = EnterpriseRBAC(
     secret_key="replace-me-with-a-long-secret",
     auto_migrate=False,
     redis_url="redis://cache-host:6379/0",
+    background_job_mode="disabled",
 )
 ```
 
@@ -173,6 +175,7 @@ auth = EnterpriseRBAC(
 - Migrate in a **single-process** prestart step; then start workers
 - Mount under an app-owned prefix such as `/iam`
 - Point OutlabsAuth UI `authApiPrefix` at that same prefix
+- Run one external `auth.run_maintenance_once()` owner; never one loop per API replica
 
 ```bash
 export DATABASE_URL='postgresql+asyncpg://user:password@db-host/app?ssl=require'
@@ -185,7 +188,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a28
+**Current Library Version**: 0.1.0a29
 
 **Publication Status**: Approved immutable release source for PyPI publication.
 

@@ -5,10 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a29] - 2026-08-04
+
+### Added
+
+- Add the immutable `MaintenanceReport` and
+  `OutlabsAuth.run_maintenance_once()` production integration surface. Reports
+  distinguish expected, completed, missing, and error-bearing steps so an
+  unavailable configured Redis sync cannot appear as an empty success.
 
 ### Changed
 
+- Make `outlabs-auth run-maintenance` emit the typed report and exit non-zero
+  when a configured step is missing or reports errors. The existing
+  `run_background_jobs_once()` raw dictionary remains backward compatible.
+- Add a canonical background-maintenance handbook guide and align deployment,
+  configuration, activity-tracking, API-design, and architecture guidance with
+  one external owner per database/environment.
 - Finalize the authoritative a27/a28 security remediation and consumer rollout
   report, including published artifact evidence, current deployment gates, and
   the separately reported managed-PostgreSQL CLI compatibility issue.

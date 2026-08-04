@@ -33,6 +33,7 @@ that as a docs bug).
 4. Run an [example](../examples/) that matches your preset
 5. Optionally plug in [OutlabsAuth UI](../docs/AUTH_UI.md)
 6. Before production: [Deployment](./08-Deployment.md)
+7. Give recurring cleanup and sync one [external maintenance owner](./09-Background-Maintenance.md)
 
 ### Adding features to an existing integration?
 
@@ -48,6 +49,7 @@ that as a docs bug).
 | Assign users to entities | [Entity memberships](./54-Entity-Memberships.md) |
 | Add attribute conditions (ABAC) | [ABAC](./26-ABAC.md) |
 | Issue API keys from the host app | [API key host integration](./50-API-Key-Host-Integration.md) |
+| Run token/activity/API-key maintenance | [Background maintenance](./09-Background-Maintenance.md) |
 | Understand roles / entities | [Core authorization concepts](./13-Core-Authorization-Concepts.md) |
 | Define roles & permission catalog | [Roles & permissions](./25-Roles-and-Permissions.md) |
 
@@ -68,6 +70,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [01 — Getting Started](./01-Getting-Started.md) | Install → migrate → mount → login → optional admin UI |
 | [07 — Choosing a Preset](./07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
 | [08 — Deployment](./08-Deployment.md) | Production migrate, Redis, multi-worker checklist |
+| [09 — Background Maintenance](./09-Background-Maintenance.md) | One-shot maintenance reports, scheduler ownership, activation, and rollback |
 | [13 — Core Authorization Concepts](./13-Core-Authorization-Concepts.md) | Users, roles, permissions, entities, tree access |
 
 ### Build & configure
@@ -134,7 +137,7 @@ folder 1:1. Suggested nav:
 
 | Nav section | Handbook sources |
 |-------------|------------------|
-| **Get started** | `00`, `01`, `07`, `08` |
+| **Get started** | `00`, `01`, `07`, `08`, `09` |
 | **Build** | `02`, `03` |
 | **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `26`, `48` |
 | **Enterprise** | `13`, `51`, `54` |

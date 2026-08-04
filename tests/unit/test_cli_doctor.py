@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
+import outlabs_auth.cli as cli_module
 from outlabs_auth.cli import (
     ALEMBIC_VERSION_TABLE,
     DOCTOR_CHECK_NAMES,
@@ -23,8 +25,8 @@ from outlabs_auth.cli import (
     run_doctor,
     run_migrations,
 )
+from outlabs_auth.maintenance import MaintenanceReport
 from tests.conftest import TEST_DATABASE_URL
-
 
 # ----------------------------------------------------------------------------
 # Pure-function unit tests
@@ -49,6 +51,49 @@ def test_run_maintenance_requires_explicit_runtime_configuration(monkeypatch: py
 
     assert result.exit_code == 2
     assert "DATABASE_URL environment variable not set" in result.output
+
+
+def test_run_maintenance_emits_typed_success_report(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://runtime@example.test/auth")
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-do-not-use-in-production-1234567890")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("OUTLABS_AUTH_REDIS_KEY_PREFIX", raising=False)
+    run_once = AsyncMock(
+        return_value=MaintenanceReport.from_results(
+            {"token_cleanup": {"refresh_tokens": {"total": 1}}},
+            expected_steps=("token_cleanup",),
+        )
+    )
+    monkeypatch.setattr(cli_module, "_run_maintenance_once", run_once)
+
+    result = CliRunner().invoke(cli_main, ["run-maintenance"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["completed_steps"] == ["token_cleanup"]
+    assert payload["reported_errors"] == 0
+
+
+def test_run_maintenance_exits_nonzero_for_partial_failure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://runtime@example.test/auth")
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-do-not-use-in-production-1234567890")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.example.test/0")
+    monkeypatch.setenv("OUTLABS_AUTH_REDIS_KEY_PREFIX", "test:maintenance")
+    run_once = AsyncMock(
+        return_value=MaintenanceReport.from_results(
+            {"token_cleanup": {"refresh_tokens": {"total": 0}}},
+            expected_steps=("token_cleanup", "api_key_usage_sync"),
+        )
+    )
+    monkeypatch.setattr(cli_module, "_run_maintenance_once", run_once)
+
+    result = CliRunner().invoke(cli_main, ["run-maintenance"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["missing_steps"] == ["api_key_usage_sync"]
 
 
 def test_redact_database_url_preserves_url_without_password():

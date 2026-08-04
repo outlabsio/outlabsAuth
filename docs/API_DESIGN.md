@@ -1101,6 +1101,9 @@ auth = SimpleRBAC(
 - Mount the library under an app-owned prefix such as `/iam`.
 - `background_job_mode` defaults to `"disabled"`; only set `"embedded"` for
   single-process development.
+- Run one external `await auth.run_maintenance_once()` owner in production and
+  require its typed `MaintenanceReport.ok`; the raw
+  `run_background_jobs_once()` mapping remains a compatibility surface.
 
 ---
 

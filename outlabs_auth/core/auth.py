@@ -21,6 +21,7 @@ from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS, UnitOfWorkState
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.fastapi import ExceptionHandlerMode
+from outlabs_auth.maintenance import MaintenanceReport
 from outlabs_auth.utils.ip import ip_matches_rules
 
 logger = logging.getLogger("outlabs_auth")
@@ -1255,7 +1256,9 @@ class OutlabsAuth:
 
         This is the preferred production integration point for Cron, a worker
         deployment, or another host-owned scheduler. It intentionally starts no
-        long-lived task in the web process.
+        long-lived task in the web process. This raw mapping is retained for
+        compatibility; new integrations should prefer ``run_maintenance_once``
+        so missing steps and nested error counts cannot be mistaken for success.
         """
         if self._session_factory is None:
             raise ConfigurationError("Initialize OutlabsAuth before running background jobs")
@@ -1285,6 +1288,28 @@ class OutlabsAuth:
             results["api_key_usage_sync"] = await worker.sync_now()
 
         return results
+
+    async def run_maintenance_once(self) -> MaintenanceReport:
+        """Run one cycle and return a typed, operationally complete report.
+
+        Expected steps derive from host configuration rather than runtime
+        availability. A configured Redis sync that silently fails to run is
+        therefore reported as missing instead of looking like an empty success.
+        """
+
+        expected_steps: list[str] = []
+        if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
+            expected_steps.append("token_cleanup")
+        if self.config.enable_activity_tracking:
+            expected_steps.append("activity_sync")
+        if self.config.redis_enabled:
+            expected_steps.append("api_key_usage_sync")
+
+        results = await self.run_background_jobs_once()
+        return MaintenanceReport.from_results(
+            results,
+            expected_steps=expected_steps,
+        )
 
     def _start_token_cleanup_scheduler(self):
         """Start background task for token cleanup."""

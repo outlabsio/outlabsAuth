@@ -200,6 +200,37 @@ In compose, that's a one-shot service the app waits on:
 
 In Kubernetes, the same thing is an init container or a `Job` gating the rollout.
 
+### External Background Maintenance
+
+Keep `background_job_mode="disabled"` in every production API replica. Give
+token cleanup, activity aggregation, and Redis API-key usage sync one external
+owner per database/environment:
+
+```python
+auth = build_auth(background_job_mode="disabled")
+try:
+    await auth.initialize()
+    report = await auth.run_maintenance_once()
+    if not report.ok:
+        raise RuntimeError(
+            f"maintenance incomplete: missing={report.missing_steps!r} "
+            f"errors={report.reported_errors}"
+        )
+finally:
+    await auth.shutdown()
+```
+
+`MaintenanceReport` exposes completed, expected, missing, and error-bearing
+steps. Configured Redis with an unavailable sync is a failed report rather than
+an omitted-success result. The `outlabs-auth run-maintenance` CLI prints the
+same report and exits non-zero when `ok=false`.
+
+The worker may be locally supervised or cloud-hosted; place it wherever its
+Postgres/Redis dependencies, availability, and isolation requirements can be
+met. Start recurring schedules paused, canary one explicit invocation, then
+activate and observe a complete interval. See the implementer handbook's
+[Background Maintenance](../docs-library/09-Background-Maintenance.md) guide.
+
 ### Docker Compose (Development)
 
 ```yaml
@@ -1826,7 +1857,7 @@ outlabs-auth downgrade           # step back a revision
 outlabs-auth seed-system         # seed system permissions/config
 outlabs-auth bootstrap-admin     # create the initial admin user
 outlabs-auth adopt-existing-schema  # stamp an already-populated schema
-outlabs-auth run-maintenance     # one-off maintenance pass
+outlabs-auth run-maintenance     # typed one-off report; non-zero if incomplete
 outlabs-auth --version
 
 # PostgreSQL

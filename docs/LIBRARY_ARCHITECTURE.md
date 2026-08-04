@@ -1747,8 +1747,9 @@ redis_url: Optional[str] = None
 redis_key_prefix: Optional[str] = None
 cache_ttl_seconds: int = 300
 
-# Embedded schedulers are OFF by default — run one deterministic cycle with
-# `outlabs-auth run-maintenance` instead, or opt in explicitly.
+# Embedded schedulers are OFF by default. Run one typed deterministic cycle
+# with `auth.run_maintenance_once()` / `outlabs-auth run-maintenance`, or opt in
+# explicitly for single-process development.
 background_job_mode: Literal["disabled", "embedded"] = "disabled"
 
 # Injected services — the library defines the interface and calls it

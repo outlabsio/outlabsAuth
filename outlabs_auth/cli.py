@@ -32,6 +32,7 @@ from outlabs_auth.bootstrap import (
     build_bootstrap_config,
     seed_system_records,
 )
+from outlabs_auth.maintenance import MaintenanceReport
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ALEMBIC_VERSION_TABLE = "outlabs_auth_alembic_version"
@@ -213,13 +214,11 @@ async def _list_schema_tables(
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    """
+                text("""
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_schema = :schema_name
-                    """
-                ),
+                    """),
                 {"schema_name": schema_name},
             )
             return {str(row[0]) for row in result}
@@ -1317,6 +1316,31 @@ def migrate(revision: str):
     click.echo("Done!")
 
 
+async def _run_maintenance_once(
+    *,
+    database_url: str,
+    secret_key: str,
+    redis_url: str | None,
+    redis_key_prefix: str | None,
+) -> MaintenanceReport:
+    from outlabs_auth.core.auth import SimpleRBAC
+
+    auth = SimpleRBAC(
+        database_url=normalize_database_url(database_url),
+        database_schema=get_target_schema_from_env(),
+        secret_key=secret_key,
+        redis_enabled=bool(redis_url),
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        background_job_mode="disabled",
+    )
+    try:
+        await auth.initialize()
+        return await auth.run_maintenance_once()
+    finally:
+        await auth.shutdown()
+
+
 @main.command("run-maintenance")
 def run_maintenance_command():
     """Run one deterministic auth-maintenance cycle for an external scheduler.
@@ -1333,30 +1357,19 @@ def run_maintenance_command():
     if not secret_key:
         raise click.UsageError("SECRET_KEY environment variable not set")
     if redis_url and not redis_key_prefix:
-        raise click.UsageError(
-            "OUTLABS_AUTH_REDIS_KEY_PREFIX is required when REDIS_URL is configured"
-        )
+        raise click.UsageError("OUTLABS_AUTH_REDIS_KEY_PREFIX is required when REDIS_URL is configured")
 
-    async def run_once() -> dict[str, object]:
-        from outlabs_auth.core.auth import SimpleRBAC
-
-        auth = SimpleRBAC(
-            database_url=normalize_database_url(database_url),
-            database_schema=get_target_schema_from_env(),
+    report = asyncio.run(
+        _run_maintenance_once(
+            database_url=database_url,
             secret_key=secret_key,
-            redis_enabled=bool(redis_url),
             redis_url=redis_url,
             redis_key_prefix=redis_key_prefix,
-            background_job_mode="disabled",
         )
-        try:
-            await auth.initialize()
-            return await auth.run_background_jobs_once()
-        finally:
-            await auth.shutdown()
-
-    results = asyncio.run(run_once())
-    click.echo(json.dumps(results, default=str, sort_keys=True))
+    )
+    click.echo(json.dumps(report.model_dump(mode="json"), default=str, sort_keys=True))
+    if not report.ok:
+        raise click.exceptions.Exit(1)
 
 
 @main.command("adopt-existing-schema")
@@ -1603,16 +1616,14 @@ def tables():
         try:
             async with engine.connect() as conn:
                 result = await conn.execute(
-                    text(
-                        """
+                    text("""
                         SELECT table_name,
                                (SELECT COUNT(*) FROM information_schema.columns
                                 WHERE table_name = t.table_name AND table_schema = :schema_name) AS column_count
                         FROM information_schema.tables t
                         WHERE table_schema = :schema_name
                         ORDER BY table_name
-                        """
-                    ),
+                        """),
                     {"schema_name": schema},
                 )
                 return [(row[0], row[1]) for row in result]
