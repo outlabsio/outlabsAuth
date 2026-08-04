@@ -163,6 +163,7 @@ async def test_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["magic_links"] is False
     assert payload["features"]["access_codes"] is False
     assert payload["auth_methods"] == {"password": True, "magic_link": False, "access_code": False}
+    assert payload["mounted_surfaces"] == ["auth", "memberships", "users"]
     assert "available_permissions" not in payload
 
     unauthenticated_catalog = await enterprise_client.get("/v1/auth/config/permissions")

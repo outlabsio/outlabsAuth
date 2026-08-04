@@ -11,7 +11,6 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth._version import __version__
 from outlabs_auth.core.exceptions import (
     OutlabsAuthException,
     PermissionDeniedError,
@@ -32,6 +31,7 @@ from outlabs_auth.observability import (
 )
 from outlabs_auth.response_builders import build_user_response_async
 from outlabs_auth.routers._authz_utils import require_can_delegate_roles
+from outlabs_auth.routers.capabilities import build_auth_config_response, mark_auth_surface
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
     AccessCodeRequest,
@@ -108,7 +108,7 @@ def get_auth_router(
         summary="Get auth configuration",
         description="Returns preset type and enabled features (used by admin UIs)",
     )
-    async def get_config():
+    async def get_config(request: Request):
         """
         Get OutlabsAuth configuration.
 
@@ -119,35 +119,7 @@ def get_auth_router(
         catalog is available from the authenticated ``/config/permissions``
         endpoint.
         """
-        # Determine preset name
-        preset_name = auth.__class__.__name__
-
-        # Get feature flags from config
-        features = {
-            "entity_hierarchy": auth.config.enable_entity_hierarchy,
-            "context_aware_roles": auth.config.enable_context_aware_roles,
-            "abac": auth.config.enable_abac,
-            "tree_permissions": auth.config.enable_entity_hierarchy,  # Tree permissions require hierarchy
-            "api_keys": True,  # Always available
-            "system_api_keys": True,  # Platform-global system keys are available in all presets
-            "user_status": True,  # Always available
-            "activity_tracking": True,  # Always available
-            "invitations": auth.config.enable_invitations,
-            "magic_links": auth.config.enable_magic_links,
-            "access_codes": auth.config.enable_access_codes,
-        }
-        auth_methods = {
-            "password": True,
-            "magic_link": auth.config.enable_magic_links,
-            "access_code": auth.config.enable_access_codes,
-        }
-
-        return AuthConfigResponse(
-            library_version=__version__,
-            preset=preset_name,
-            features=features,
-            auth_methods=auth_methods,
-        )
+        return build_auth_config_response(auth, request)
 
     @router.get(
         "/config/permissions",
@@ -1007,4 +979,4 @@ def get_auth_router(
             obs.log_500_error(e)
             raise
 
-    return router
+    return mark_auth_surface(router, "auth")

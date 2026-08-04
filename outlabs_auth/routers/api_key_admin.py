@@ -12,6 +12,7 @@ from outlabs_auth.routers._api_key_response import (
     build_api_key_response,
     build_api_key_responses,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.api_key import ApiKeyResponse
 from outlabs_auth.schemas.common import PaginatedResponse
 
@@ -112,4 +113,4 @@ def get_api_key_admin_router(
         )
         return None
 
-    return router
+    return mark_auth_surface(router, "api_key_admin")

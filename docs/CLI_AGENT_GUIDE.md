@@ -47,6 +47,14 @@ outlabs-auth --output json capabilities
 outlabs-auth --output json whoami
 ```
 
+Treat configured `features` and `mounted_surfaces` as different facts.
+Features describe what the preset can support; mounted surfaces describe what
+this host actually exposes. Before selecting a typed command, require its
+surface in the capability response (for example `users`, `roles`, `audit`, or
+`api_key_admin`). If an older host does not report `mounted_surfaces`, stop and
+use its deployment documentation or OpenAPI contract rather than assuming the
+endpoint exists.
+
 Contexts contain no credential values. A stored human session is bound to the
 exact profile, base URL, and API prefix. Environment credentials take
 precedence over a stored session, which makes an explicit scoped API key the

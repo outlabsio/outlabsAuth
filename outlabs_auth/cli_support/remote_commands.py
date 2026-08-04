@@ -181,12 +181,14 @@ def capabilities_command():
     result, meta = RemoteClient(target).capabilities()
     if isinstance(result, dict):
         features = sorted(name for name, enabled in result.get("features", {}).items() if enabled)
+        surfaces = result.get("mounted_surfaces", [])
         text_output = (
             f"Target:   {target.name} ({target.base_url}{target.api_prefix})\n"
             f"Version:  {result.get('library_version', 'unknown')} "
             f"({result.get('api_contract_version', 'unversioned API')})\n"
             f"Preset:   {result.get('preset', 'unknown')}\n"
-            f"Features: {', '.join(features) if features else '(none reported)'}"
+            f"Features: {', '.join(features) if features else '(none reported)'}\n"
+            f"Surfaces: {', '.join(surfaces) if surfaces else '(not reported by host)'}"
         )
     else:
         text_output = str(result)

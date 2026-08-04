@@ -17,6 +17,7 @@ from outlabs_auth.schemas.config import (
     EntityTypeConfigUpdateRequest,
 )
 from outlabs_auth.services.config import ConfigService
+from outlabs_auth.routers.capabilities import mark_auth_surface
 
 
 def get_config_router(
@@ -133,4 +134,4 @@ def get_config_router(
             default_child_types=new_config.default_child_types,
         )
 
-    return router
+    return mark_auth_surface(router, "config")

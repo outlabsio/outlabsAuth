@@ -34,6 +34,7 @@ from outlabs_auth.routers.oauth_state_store import (
     issue_oauth_state,
     oauth_callback_route_name,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.routers.oauth_utils import (
     encrypt_provider_token,
     get_oauth_user_info,
@@ -477,7 +478,7 @@ def get_oauth_router(
             )
         return token_payload
 
-    return router
+    return mark_auth_surface(router, "oauth")
 
 
 async def oauth_callback(

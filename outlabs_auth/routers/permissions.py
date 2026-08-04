@@ -17,6 +17,7 @@ from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import build_permission_response
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
     AbacConditionResponse,
@@ -629,4 +630,4 @@ def get_permissions_router(
             raise HTTPException(status_code=404, detail="Condition not found")
         return None
 
-    return router
+    return mark_auth_surface(router, "permissions")

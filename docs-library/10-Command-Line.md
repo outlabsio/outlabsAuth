@@ -86,7 +86,11 @@ outlabs-auth capabilities
 outlabs-auth whoami
 ```
 
-`capabilities` reports the mounted preset and available server features.
+`capabilities` reports the mounted preset, available server features, and the
+stable names of router surfaces actually mounted by that host. Features do not
+imply routes: verify the required `mounted_surfaces` entry before using a typed
+remote command. Older hosts that omit this field need an OpenAPI or deployment
+contract check before automation assumes an endpoint exists.
 `whoami` confirms the authenticated identity and the exact resolved target.
 
 ### 4. Inspect and administer

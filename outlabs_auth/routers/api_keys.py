@@ -17,6 +17,7 @@ from outlabs_auth.routers._api_key_response import (
     build_api_key_response,
     build_api_key_responses,
 )
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -384,4 +385,4 @@ def get_api_keys_router(
         api_key_response = await build_api_key_response(auth, session, new_key)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
-    return router
+    return mark_auth_surface(router, "api_keys")

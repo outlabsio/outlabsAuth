@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 
@@ -149,4 +150,4 @@ def get_audit_router(
             obs.log_500_error(e, page=page, limit=limit)
             raise
 
-    return router
+    return mark_auth_surface(router, "audit")

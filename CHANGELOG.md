@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a31] - 2026-08-04
+
+### Added
+
+- Report stable `mounted_surfaces` from public capability discovery by
+  inspecting the OutlabsAuth routers actually included in the running FastAPI
+  application.
+- Add `get_capabilities_router()` for hosts that need discovery without the
+  full login, registration, password-reset, invitation, and passwordless auth
+  surface.
+- Add `discover_mounted_auth_surfaces()`, `missing_auth_surfaces()`, and
+  `assert_auth_surfaces()` helpers for explicit host integration tests.
+
+### Changed
+
+- Show mounted host surfaces in human-readable `outlabs-auth capabilities`
+  output while preserving the existing versioned JSON response.
+
+### Database migrations
+
+- None.
+
+### Operational upgrade notes
+
+- Existing `get_auth_router()` integrations remain compatible and now report
+  their actual sibling router surfaces automatically.
+- A host must mount either `get_auth_router(..., prefix="/v1/auth")` or the new
+  minimal `get_capabilities_router(..., prefix="/v1/auth")`, not both at the
+  same prefix, because both own `GET /config`.
+- Consumer tests should call `assert_auth_surfaces(app, REQUIRED_SURFACES)` so
+  CLI/API expectations cannot drift from host router mounts.
+
 ## [0.1.0a30] - 2026-08-04
 
 ### Added
