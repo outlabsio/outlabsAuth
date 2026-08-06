@@ -121,6 +121,7 @@ MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag("MAGIC_LINK_DEBUG_TOKENS", de
 ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag("ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE)
 INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag("INVITE_DEBUG_TOKENS", default=DEBUG_MODE)
 PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag("PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE)
+RESET_PASSWORD_DEBUG_TOKENS = DEBUG_MODE and _env_flag("RESET_PASSWORD_DEBUG_TOKENS", default=DEBUG_MODE)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 API_PUBLIC_URL = _trim_trailing_slash(os.getenv("API_PUBLIC_URL", "http://localhost:8004"))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -261,6 +262,7 @@ latest_magic_links: dict[str, dict[str, Any]] = {}
 latest_access_codes: dict[str, dict[str, Any]] = {}
 latest_invites: dict[str, dict[str, Any]] = {}
 latest_phone_verifies: dict[str, dict[str, Any]] = {}
+latest_password_resets: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -376,6 +378,24 @@ async def lifespan(app: FastAPI):
             await original_on_after_invite(user, token, request)
 
         auth.user_service.on_after_invite = capture_invite
+
+    if RESET_PASSWORD_DEBUG_TOKENS:
+        print("Password reset enabled with dev token capture")
+        original_on_after_forgot_password = auth.user_service.on_after_forgot_password
+
+        async def capture_forgot_password(user, token):
+            email = str(user.email).lower()
+            reset_url = f"{FRONTEND_URL}/auth/reset-password?token={token}"
+            latest_password_resets[email] = {
+                "email": email,
+                "token": token,
+                "reset_url": reset_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Password reset for {email}: {reset_url}")
+            await original_on_after_forgot_password(user, token)
+
+        auth.user_service.on_after_forgot_password = capture_forgot_password
 
     if PHONE_VERIFY_DEBUG_CODES:
         print("Phone verify enabled with dev code capture")
@@ -654,6 +674,21 @@ async def open_latest_invite(email: str = Query(..., min_length=1)):
     """Redirect to the latest captured invite accept URL for local development only."""
     captured = await latest_invite(email=email)
     return RedirectResponse(str(captured["invite_url"]))
+
+
+@app.get("/dev/auth/reset-password/latest", include_in_schema=False)
+async def latest_password_reset(email: str = Query(..., min_length=1)):
+    """Return the latest captured password-reset token for local development only."""
+    if not RESET_PASSWORD_DEBUG_TOKENS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_password_resets.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No password reset has been requested for that email",
+        )
+    return captured
 
 
 @app.get("/dev/auth/phone-verify/latest", include_in_schema=False)
