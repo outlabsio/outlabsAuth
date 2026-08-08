@@ -312,12 +312,12 @@ class RoleService(BaseService[Role]):
             await self._add_permissions_by_name(session, role_id, permission_names)
 
         if entity_type_permissions is not None:
-            await self.set_entity_type_permissions(
+            # Create-time overrides bypass set_entity_type_permissions so its
+            # system-role guard only applies to pre-existing rows.
+            await self._apply_entity_type_permissions(
                 session,
                 role_id,
                 entity_type_permissions,
-                changed_by_id=created_by_id,
-                record_history=False,
             )
 
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
@@ -1587,25 +1587,7 @@ class RoleService(BaseService[Role]):
 
         previous_snapshot = await self._build_role_definition_snapshot(session, role)
 
-        await session.execute(
-            sql_delete(RoleEntityTypePermission).where(
-                cast(Any, RoleEntityTypePermission.role_id) == role_id
-            )
-        )
-        await session.flush()
-
-        for entity_type, permission_names in (entity_type_permissions or {}).items():
-            permissions = await self._resolve_permissions_by_name(session, permission_names)
-            for permission in permissions:
-                session.add(
-                    RoleEntityTypePermission(
-                        role_id=role_id,
-                        entity_type=entity_type.lower(),
-                        permission_id=permission.id,
-                    )
-                )
-
-        await session.flush()
+        await self._apply_entity_type_permissions(session, role_id, entity_type_permissions)
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
         await self._invalidate_all_permissions_cache()
         current_role = (
@@ -1632,6 +1614,40 @@ class RoleService(BaseService[Role]):
                 after=current_snapshot,
             )
         return current_role
+
+    async def _apply_entity_type_permissions(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        entity_type_permissions: Optional[Dict[str, List[str]]],
+    ) -> None:
+        """
+        Replace a role's context-aware overrides in the database.
+
+        Carries no system-role guard: the guard in
+        ``set_entity_type_permissions`` keeps pre-existing system roles
+        immutable, while creation-time overrides for the row being created
+        must still work (mirroring ``_add_permissions_by_name``).
+        """
+        await session.execute(
+            sql_delete(RoleEntityTypePermission).where(
+                cast(Any, RoleEntityTypePermission.role_id) == role_id
+            )
+        )
+        await session.flush()
+
+        for entity_type, permission_names in (entity_type_permissions or {}).items():
+            permissions = await self._resolve_permissions_by_name(session, permission_names)
+            for permission in permissions:
+                session.add(
+                    RoleEntityTypePermission(
+                        role_id=role_id,
+                        entity_type=entity_type.lower(),
+                        permission_id=permission.id,
+                    )
+                )
+
+        await session.flush()
 
     async def add_permissions(
         self,

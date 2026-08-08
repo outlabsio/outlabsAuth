@@ -161,6 +161,35 @@ async def test_permission_service_crud_tag_and_archive_guards(
     with pytest.raises(InvalidInputError, match="Cannot delete system permission"):
         await service.delete_permission(test_session, system_permission.id)
 
+    # Create-time tags are allowed on system permissions — the immutability
+    # guard applies to existing rows, not the row being created.
+    tagged_system = await service.create_permission(
+        test_session,
+        name="system:audit",
+        display_name="System Audit",
+        is_system=True,
+        tags=["security", "security", " core "],
+    )
+    assert tagged_system.is_system is True
+    assert [tag.name for tag in tagged_system.tags] == ["security", "core"]
+
+    with pytest.raises(InvalidInputError, match="Cannot modify system permission"):
+        await service.set_permission_tags(
+            test_session,
+            tagged_system.id,
+            ["another"],
+        )
+
+    with pytest.raises(InvalidInputError, match="Cannot modify system permission"):
+        await service.update_permission(
+            test_session,
+            tagged_system.id,
+            tags=["another"],
+        )
+
+    with pytest.raises(InvalidInputError, match="Cannot delete system permission"):
+        await service.delete_permission(test_session, tagged_system.id)
+
     updated = await service.update_permission(
         test_session,
         regular.id,

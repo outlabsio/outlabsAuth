@@ -211,6 +211,49 @@ async def test_role_service_create_update_and_definition_guards(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_create_system_role_with_entity_type_permissions(
+    test_session,
+    auth_config: AuthConfig,
+):
+    permission_service = PermissionService(config=auth_config)
+    role_service = RoleService(config=auth_config)
+
+    permission = await permission_service.create_permission(
+        test_session,
+        name="report:read",
+        display_name="Report Read",
+    )
+
+    # Create-time overrides are allowed on system roles — the immutability
+    # guard applies to existing rows, not the row being created.
+    system_role = await role_service.create_role(
+        test_session,
+        name="system-context-role",
+        display_name="System Context Role",
+        is_global=True,
+        is_system_role=True,
+        permission_names=[permission.name],
+        entity_type_permissions={"TEAM": [permission.name]},
+    )
+    assert system_role.is_system_role is True
+    assert await role_service.get_role_entity_type_permission_names(
+        test_session,
+        system_role.id,
+    ) == {"team": [permission.name]}
+
+    with pytest.raises(InvalidInputError, match="Cannot modify system role permissions"):
+        await role_service.set_entity_type_permissions(
+            test_session,
+            system_role.id,
+            {"team": []},
+        )
+
+    with pytest.raises(InvalidInputError, match="Cannot delete system role"):
+        await role_service.delete_role(test_session, system_role.id)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_role_service_permission_assignment_and_revocation_paths(
     test_session,
     auth_config: AuthConfig,

@@ -45,7 +45,12 @@ class PermissionCreateRequest(BaseModel):
     )
     is_system: bool = Field(
         default=False,
-        description="Whether this is a system permission (cannot be deleted)",
+        description=(
+            "Must be false. System permissions are seeded by the library "
+            "(seed_system_records) and cannot be created through the API; "
+            "they are immutable once created. The field is accepted for "
+            "backward compatibility and rejected when true."
+        ),
     )
     status: Optional[DefinitionStatus] = Field(
         default=None,
@@ -60,6 +65,18 @@ class PermissionCreateRequest(BaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata"
     )
+
+    @field_validator("is_system")
+    @classmethod
+    def reject_system_permission_creation(cls, v: bool) -> bool:
+        """System permissions are seeder-owned; the API cannot mint them."""
+        if v:
+            raise ValueError(
+                "System permissions cannot be created via the API; they are "
+                "seeded by the library (seed_system_records) and immutable "
+                "once created"
+            )
+        return v
 
     @field_validator("name")
     @classmethod
