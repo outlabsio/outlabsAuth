@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Changed
+
+- **System definitions are seeder-owned (DD-060).** `POST /v1/permissions/`
+  now rejects `is_system=true` with a 422 pointing at `seed_system_records`:
+  system permissions are created by the library seeder (or host code at the
+  service layer), never minted through the HTTP API, because they are
+  immutable once created — no update, re-tagging, or delete. `is_system=false`
+  is still accepted for backward compatibility. This matches the roles API,
+  which has never exposed `is_system_role` on creation.
+- The `is_system` request-field description now states the enforced semantics:
+  system permissions are immutable once created, not merely "cannot be
+  deleted".
+
+### Fixed
+
+- `PermissionService.create_permission` no longer rejects `is_system=True`
+  combined with `tags` with a spurious "Cannot modify system permission"
+  error. Create-time tags now attach through an internal helper that bypasses
+  the immutability guard, which exists to protect pre-existing system
+  permissions from later mutation and misfired on the row being created.
+  Post-creation tag changes on system permissions remain blocked.
+- `RoleService.create_role` had the same guard misfire: `is_system_role=True`
+  combined with `entity_type_permissions` raised "Cannot modify system role
+  permissions". Create-time context-aware overrides now attach through a
+  guard-free internal helper, mirroring how create-time `permission_names`
+  already attached. Post-creation changes on system roles remain blocked.
+
 ## [0.1.0a31] - 2026-08-04
 
 ### Added

@@ -3832,5 +3832,39 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2026-07-29 (DD-059 r2: multi-frontend support via flow-wide frontend profiles and a host-supplied resolver, reconciled with the independent second audit — see `MULTI_FRONTEND_SUPPORT.md` §11; implementation not started)
+## DD-060: System Definitions Are Seeder-Owned and Immutable Once Created
+
+**Date**: 2026-08-08
+**Status**: Accepted (implemented)
+**Deciders**: Maintainer
+**Context**: `is_system` (permissions) and `is_system_role` (roles) mark the library-owned definition catalog. The services enforce full immutability on such rows — no update, re-tagging, condition edits, or delete — but three seams contradicted that model. First, the create paths composed children through the public, guard-carrying mutators: `create_permission` attached create-time `tags` via `set_permission_tags`, and `create_role` attached create-time `entity_type_permissions` via `set_entity_type_permissions`, so creating a system definition *with* children tripped a guard meant for pre-existing rows ("Cannot modify system permission" 422 on a row that was then rolled back). Both misfires date to the guard and the create-time call landing in the same commit, with no test covering the combination; `create_role`'s `permission_names` path already used a guard-free private helper, proving the intended pattern. Second, `PermissionCreateRequest` exposed `is_system` to any caller holding `permission:create`, documented as merely "cannot be deleted" — handing admins a one-way door to permanent, uneditable rows, while `RoleCreateRequest` never exposed `is_system_role` at all. Third, the seeder (`seed_system_records` / `SYSTEM_PERMISSION_CATALOG`) — the only intended producer of system rows — was undocumented.
+
+### Options Considered
+
+1. **Forbid the combination at the request schema** (reject `is_system` + `tags` together)
+   - Pros: one-line validator; preserves API-minted system permissions.
+   - Cons: leaves the service-layer bug for programmatic hosts and for `create_role`; keeps the admin foot-gun; encodes an arbitrary rule ("system XOR tags") instead of a model.
+2. **Fix the guard misfires and keep API-minted system permissions**
+   - Pros: smallest visible API change; combination works everywhere.
+   - Cons: any admin with `permission:create` can still mint immutable-forever rows by typo or misunderstanding; permissions and roles APIs stay inconsistent (roles never allowed it).
+3. **Guard-free create-time composition + seeder-owned system definitions** (chosen)
+   - Pros: one coherent model — guards protect *pre-existing* system rows, creation composes freely at the service layer, and the HTTP boundary cannot mint system rows at all, matching the existing roles contract.
+   - Cons: hosts that (hypothetically) created system permissions over HTTP must move to the service layer or the seeder's `permission_catalog` parameter; a request field is kept but permanently rejected when true.
+
+### Decision
+
+- **Semantics**: `is_system` / `is_system_role` mean *immutable once created* — no update, re-tag, condition edit, or delete. Docs and schema descriptions say so explicitly; "cannot be deleted" undersold the enforcement.
+- **Creation composes without guards**: create-time children go through private, guard-free helpers — `PermissionService._apply_permission_tags` and `RoleService._apply_entity_type_permissions` (joining the pre-existing `_add_permissions_by_name`). The public mutators keep their guards and history recording; the guards now fire only for rows that existed before the call.
+- **The HTTP API cannot mint system definitions**: `PermissionCreateRequest.is_system` is retained for wire compatibility but validates as must-be-false with an error naming `seed_system_records`; `RoleCreateRequest` continues to not expose `is_system_role`. System rows are produced by the seeder or by host code calling the services directly.
+
+### Consequences
+
+- **Positive**: the spurious 422 class is gone for programmatic creation; permissions and roles present one consistent API contract; admins can no longer create permanent rows by accident; the seeder is the documented owner of the system catalog.
+- **Positive**: admin UIs can drop their compensating mutual-exclusion logic between a "system" toggle and child inputs — the toggle has no API to drive.
+- **Negative**: a client that legitimately created system permissions over HTTP (none known) breaks loudly and must adopt the seeder or service layer.
+- **Negative**: `is_system` lives on as a request field that can only ever be false — removing it outright was rejected because Pydantic ignores unknown fields, which would have silently downgraded `is_system: true` requests into non-system rows instead of failing them.
+
+---
+
+**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; create-time composition bypasses the mutation guards)
 **Next Review**: After testing all examples

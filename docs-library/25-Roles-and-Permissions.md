@@ -33,10 +33,10 @@ app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/` | `permission:read` | Paginated. Query: `page`, `limit`, `resource` |
-| `POST` | `/` | `permission:create` | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate) |
+| `POST` | `/` | `permission:create` | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate). `is_system` must be false (422 otherwise) — see [System definitions](#system-definitions) |
 | `GET` | `/{permission_id}` | `permission:read` | One permission |
-| `PATCH` | `/{permission_id}` | `permission:update` | Display/status/tags — **not** rename |
-| `DELETE` | `/{permission_id}` | `permission:delete` | System permissions blocked in service |
+| `PATCH` | `/{permission_id}` | `permission:update` | Display/status/tags — **not** rename. System permissions rejected |
+| `DELETE` | `/{permission_id}` | `permission:delete` | System permissions rejected |
 | `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`) |
 | `GET` | `/user/{user_id}` | `permission:read` | Another user’s permission names |
 | `POST` | `/check` | `permission:check` | Batch check; optional `entity_id` for entity/tree context |
@@ -54,6 +54,25 @@ For effective permissions **with sources** (role vs membership), use
 
 ABAC condition groups/conditions also hang off `/{permission_id}/…` when you
 use ABAC — same pattern as roles below.
+
+### System definitions
+
+`is_system` (permissions) and `is_system_role` (roles) mark the library-owned
+catalog. System definitions are **immutable once created** — no update,
+re-tagging, condition edits, or delete — so the HTTP API refuses to mint them:
+`POST /v1/permissions/` rejects `is_system=true`, and `RoleCreateRequest` has
+no `is_system_role` field at all. They come from two places only:
+
+- `seed_system_records(...)` (`outlabs_auth.bootstrap`), which seeds the
+  library's permission catalog (`SYSTEM_PERMISSION_CATALOG`, overridable via
+  its `permission_catalog` parameter) at startup, idempotently.
+- Host code calling the services directly (`permission_service.
+  create_permission(..., is_system=True)` / `role_service.create_role(...,
+  is_system_role=True)`) — creation-time `tags`, `permission_names`, and
+  `entity_type_permissions` all work there; immutability begins after the row
+  exists.
+
+Rationale and history: DD-060 in `docs/DESIGN_DECISIONS.md`.
 
 ---
 

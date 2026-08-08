@@ -324,7 +324,7 @@ class Role(BaseModel, table=True):
     # NULL = system-wide role available everywhere
 
     # Configuration
-    is_system_role: bool = False     # System roles cannot be modified/deleted
+    is_system_role: bool = False     # Seeder/host-owned; immutable once created (DD-060)
     is_global: bool = False          # Can be assigned anywhere in hierarchy
     status: DefinitionStatus = DefinitionStatus.ACTIVE
 
@@ -431,7 +431,7 @@ class Permission(BaseModel, table=True):
     action: Optional[str] = None     # e.g. "create"
     scope: Optional[str] = None
 
-    is_system: bool = False
+    is_system: bool = False          # Seeder/host-owned; immutable once created (DD-060)
     status: DefinitionStatus = DefinitionStatus.ACTIVE
     is_active: bool = True
 

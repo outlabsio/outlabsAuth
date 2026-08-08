@@ -1675,7 +1675,8 @@ class PermissionService(BaseService[Permission]):
             name: Permission name (e.g., "invoice:approve")
             display_name: Human-readable name
             description: Permission description
-            is_system: Whether this is a system permission
+            is_system: Whether this is a system permission (immutable once
+                created — cannot be updated, re-tagged, or deleted)
         Returns:
             Created permission
         """
@@ -1708,13 +1709,15 @@ class PermissionService(BaseService[Permission]):
         await self.create(session, permission)
 
         if tags:
-            await self.set_permission_tags(
+            # Create-time tags bypass set_permission_tags so its
+            # system-permission guard only applies to pre-existing rows.
+            created = await self.get_permission_by_id(
                 session,
                 permission.id,
-                tags,
-                changed_by_id=created_by_id,
-                record_history=False,
+                load_tags=True,
             )
+            if created is not None:
+                await self._apply_permission_tags(session, created, tags)
 
         # A brand-new permission isn't referenced by any role yet — nothing
         # cached can change, so no invalidation (previously this globally
@@ -1925,6 +1928,9 @@ class PermissionService(BaseService[Permission]):
     ) -> Permission:
         """
         Replace a permission's tag set, creating tags if needed.
+
+        Raises InvalidInputError for system permissions — they are immutable
+        once created. Create-time tagging uses ``_apply_permission_tags``.
         """
         permission = await self.get_permission_by_id(session, permission_id, load_tags=True)
         if not permission:
@@ -1947,52 +1953,7 @@ class PermissionService(BaseService[Permission]):
                 },
             )
 
-        normalized = [t.strip() for t in tags if t and t.strip()]
-        # De-duplicate, preserve order
-        normalized = list(dict.fromkeys(normalized))
-
-        if not normalized:
-            permission.tags = []
-            await self.update(session, permission)
-            # Tags are organizational metadata — they never affect grants.
-            current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
-            current_snapshot = await self._build_permission_definition_snapshot(
-                session,
-                current_permission,
-            )
-            changed_fields = self._changed_permission_definition_fields(
-                previous_snapshot,
-                current_snapshot,
-            )
-            if record_history and changed_fields:
-                await self._record_permission_definition_history_event(
-                    session,
-                    permission=current_permission,
-                    event_type="updated",
-                    event_source=event_source,
-                    actor_user_id=changed_by_id,
-                    before=previous_snapshot,
-                    after=current_snapshot,
-                    metadata={"changed_fields": changed_fields},
-                )
-            return current_permission
-
-        # Load/create tag models
-        stmt = select(PermissionTag).where(cast(Any, PermissionTag.name).in_(normalized))
-        result = await session.execute(stmt)
-        existing_tags = {t.name: t for t in result.scalars().all()}
-
-        tag_models: List[PermissionTag] = []
-        for tag_name in normalized:
-            tag_model = existing_tags.get(tag_name)
-            if not tag_model:
-                tag_model = PermissionTag(name=tag_name)
-                session.add(tag_model)
-                await session.flush()
-            tag_models.append(tag_model)
-
-        permission.tags = tag_models
-        await self.update(session, permission)
+        await self._apply_permission_tags(session, permission, tags)
         # Tags are organizational metadata — they never affect grants.
         current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
         current_snapshot = await self._build_permission_definition_snapshot(
@@ -2015,6 +1976,47 @@ class PermissionService(BaseService[Permission]):
                 metadata={"changed_fields": changed_fields},
             )
         return current_permission
+
+    async def _apply_permission_tags(
+        self,
+        session: AsyncSession,
+        permission: Permission,
+        tags: List[str],
+    ) -> None:
+        """
+        Replace the tag collection of an already-loaded permission.
+
+        Carries no system-permission guard: the guard in
+        ``set_permission_tags`` keeps pre-existing system permissions
+        immutable, while creation-time tagging of the row being created must
+        still work (mirroring ``RoleService._add_permissions_by_name``).
+        The permission's ``tags`` relationship must be loaded.
+        """
+        normalized = [t.strip() for t in tags if t and t.strip()]
+        # De-duplicate, preserve order
+        normalized = list(dict.fromkeys(normalized))
+
+        if not normalized:
+            permission.tags = []
+            await self.update(session, permission)
+            return
+
+        # Load/create tag models
+        stmt = select(PermissionTag).where(cast(Any, PermissionTag.name).in_(normalized))
+        result = await session.execute(stmt)
+        existing_tags = {t.name: t for t in result.scalars().all()}
+
+        tag_models: List[PermissionTag] = []
+        for tag_name in normalized:
+            tag_model = existing_tags.get(tag_name)
+            if not tag_model:
+                tag_model = PermissionTag(name=tag_name)
+                session.add(tag_model)
+                await session.flush()
+            tag_models.append(tag_model)
+
+        permission.tags = tag_models
+        await self.update(session, permission)
 
     async def delete_permission(
         self,

@@ -328,6 +328,44 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_create_permission_rejects_is_system(
+    client: httpx.AsyncClient, admin_token: str
+):
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+
+    # System permissions are seeder-owned (immutable once created); the API
+    # refuses to mint them. Service-level creation — including create-time
+    # tags — is covered in the permission service lifecycle unit tests.
+    r_create = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": f"sysdemo:{uuid.uuid4().hex[:6]}",
+            "display_name": "System Demo Permission",
+            "is_system": True,
+            "is_active": True,
+            "tags": ["security", "contract"],
+        },
+    )
+    assert r_create.status_code == 422, r_create.text
+    assert "seeded by the library" in r_create.text
+
+    # An explicit false keeps working (backward compatibility).
+    r_regular = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": f"regdemo:{uuid.uuid4().hex[:6]}",
+            "display_name": "Regular Demo Permission",
+            "is_system": False,
+            "tags": ["security"],
+        },
+    )
+    assert r_regular.status_code == 201, r_regular.text
+    assert r_regular.json()["is_system"] is False
+    assert r_regular.json()["tags"] == ["security"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_deleted_roles_and_permissions_are_retained_but_hidden(
     client: httpx.AsyncClient,
     admin_token: str,
