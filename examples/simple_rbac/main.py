@@ -52,6 +52,14 @@ if not SECRET_KEY:
     )
 REDIS_URL = os.getenv("REDIS_URL", None)
 REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "outlabs-auth:development:simple-rbac") if REDIS_URL else None
+ENV = os.getenv("ENV", "development")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
+# Dev-only capture of the latest password-reset token per email (mirrors the
+# enterprise_rbac example) so local/E2E flows can drive the reset step without
+# reading real email. Exposed via /dev/auth/reset-password/latest below.
+RESET_PASSWORD_DEBUG_TOKENS = ENV != "production" and os.getenv("RESET_PASSWORD_DEBUG_TOKENS", "true").lower() != "false"
+latest_password_resets: dict[str, dict] = {}
 
 
 # ============================================================================
@@ -160,6 +168,25 @@ async def lifespan(app: FastAPI):
     await auth.initialize()
     print("✅ OutlabsAuth initialized")
 
+    # Dev-only: capture the latest password-reset token per email by wrapping the
+    # library's on_after_forgot_password hook (see /dev/auth/reset-password/latest).
+    if RESET_PASSWORD_DEBUG_TOKENS:
+        original_on_after_forgot_password = auth.user_service.on_after_forgot_password
+
+        async def capture_forgot_password(user, token):
+            email = str(user.email).lower()
+            latest_password_resets[email] = {
+                "email": email,
+                "token": token,
+                "reset_url": f"{FRONTEND_URL}/auth/reset-password?token={token}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"🔑 Password reset for {email}: {latest_password_resets[email]['reset_url']}")
+            await original_on_after_forgot_password(user, token)
+
+        auth.user_service.on_after_forgot_password = capture_forgot_password
+        print("✅ Password reset dev token capture enabled")
+
     # Include library routers for user/role/permission management. Routes —
     # unlike middleware — can still be added during lifespan, and these router
     # factories need auth.deps, which only exists after auth.initialize().
@@ -208,6 +235,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/dev/auth/reset-password/latest", include_in_schema=False)
+async def latest_password_reset(email: str = Query(..., min_length=1)):
+    """Return the latest captured password-reset token for local development only."""
+    if not RESET_PASSWORD_DEBUG_TOKENS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_password_resets.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No password reset has been requested for that email",
+        )
+    return captured
 
 # Install library FastAPI integrations: global JSON error envelopes, the
 # unit-of-work middleware (commits the request's session before the response
