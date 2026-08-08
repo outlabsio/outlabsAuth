@@ -3736,7 +3736,7 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 ## DD-059: Multi-Frontend Support via App Profiles and a Host-Supplied Audience Resolver
 
 **Date**: 2026-07-29
-**Status**: Proposed, r2 (audit + design complete; revised same day after an independent second audit, maintained privately — reconciliation summary in [`MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md); implementation not started)
+**Status**: Accepted; shipped in 0.1.0a25 (four implementation slices), with the two-profile enterprise example and status-document reconciliation completed 2026-08-04
 **Deciders**: Maintainer
 **Context**: One FastAPI host can serve several frontends off a single outlabsAuth mount, and auth mail / redirects must land on the frontend the recipient's account belongs to. The library cannot express this: mail URL builders are `Callable[[str], str]` frozen at construction (`mail/composer.py`), `ComposedAuthMailService` holds one composer for all four sends, OAuth redirect URLs are router-constructor parameters, and the challenge seam's client-supplied `redirect_url` is an unvalidated pass-through. Live consequences across the audited production hosts: one shipped a host subclass of the mail service that re-queries per send for root-entity data the library had in hand and still ships wrong per-audience paths; a second *lost* the per-audience mail routing its legacy stack had (its portal base URL is configured but unread — portal invites land on the admin console, which then rejects those users); a third bypasses the composer entirely for its three origins. Full audit: [`docs/MULTI_FRONTEND_SUPPORT.md`](./MULTI_FRONTEND_SUPPORT.md).
 
@@ -3763,7 +3763,7 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 - **OAuth becomes profile-bound state, not one-router-per-frontend**: one provider callback per host/provider; `/authorize` accepts a registered profile key; signed + persisted state binds `profile_id` + a unique nonce; cookie binding supports concurrent flows; the callback resolves success/error destinations from the bound profile. Applied to login **and association**; prefix-aware route names and exporting `get_oauth_router` land as hygiene; tests cover concurrent same-provider flows.
 - **Root entity is an input, not the key**: audience := root entity would misroute two of four audited hosts (one routes by root slug; another needs a canonical internal slug + explicit external types, with fallback/null/unknown roots → unresolved; a third routes by flow with no roots at all; a planned adopter's shared-root hierarchy needs role/membership inputs). The resolver owns the mapping; `MembershipService` root pinning is unchanged.
 - **Sessions carry `azp` provenance; sign-in is audience-gated**: minted tokens/sessions record the profile key as an `azp`-style claim bound to the refresh/session row and re-validated at rotation; `aud` stays the platform/resource audience (**no per-profile `aud`**). Every minting path (password login, magic-link verify, access-code verify, OAuth callback, invite-accept auto-login, refresh) enforces the profile's `accepted_audiences` server-side with a stable `wrong_application` rejection; default (no list) is the shared/SSO mode — partitioned and shared frontends are both plain configuration. Honest classification: this is level-2 separation — defense in depth, consistency, and audit signal on top of RBAC/DD-056 (which remain the data boundary), not credential isolation; endpoint families declared app-scoped get **enforced** `azp` checks, and anything stronger is separate deployments. Pulls the audience/provenance slice of option C forward; registry machinery stays deferred.
-- **Scope boundary, stated first-class**: one deployment = one platform (one user pool) serving N first-party frontends, each either partitioned (rejects off-audience sign-ins) or shared — both modes configuration; multi-frontend works both ways and is the default documented integration shape (single frontend = one profile). Running several unrelated SaaS products off one deployment stays out of scope; genuinely distinct products get separate deployments. **Q-004** records the open product decision on one hosted customer product; its shared-mount profile is transitional until decided.
+- **Scope boundary, stated first-class**: one deployment = one platform (one user pool) serving N first-party frontends, each either partitioned (rejects off-audience sign-ins) or shared — both modes configuration; multi-frontend works both ways and is the default documented integration shape (single frontend = one profile). Running several unrelated SaaS products off one deployment stays out of scope; genuinely distinct products get separate deployments. **Q-004 was resolved 2026-08-04**: the audited hosted frontend is explicitly part of its host platform and keeps the shared credential domain, while its users live in a disjoint top-level entity tree and internal operators cross that tree only through explicit system-wide/cross-root authority.
 - **Shipping shape**: four contract layers delivered as vertical slices per flow, with explicit schema migrations (challenge `profile_id`/target columns; session/token `azp`) — not characterized as purely additive. Library API compatibility is preserved (single-composer construction unchanged; **hook signatures do not change**), and invite intents finally populate their advertised `target_entity_name` / `inviter_email` / `role_names` metadata.
 
 ### Consequences
@@ -3797,9 +3797,9 @@ Track questions that need decisions:
 **Needs Decision By**: Week 4
 
 ### Q-004: Does the hosted customer product stay on its host's shared auth mount, or graduate to its own deployment?
-**Status**: Open (raised by the DD-059 second audit, 2026-07-29)
+**Status**: Resolved 2026-08-04 — remain on the shared mount as part of one platform
 **Context**: One audited host serves a customer-facing product with its own domain, brand, and bespoke portal endpoints off the same mount as its internal console; the host's own source calls it "a different product". Sharing the mount means one user namespace (one email cannot hold accounts in both products, per root pinning), shared keys, shared admin plane, and shared incident radius. The second audit recommends a separate deployment; the shared-mount profile treatment is labeled transitional until this is decided.
-**Proposed Decision**: separate deployment when the product graduates to a real standalone offering; explicit maintainer sign-off required to keep it permanently on the shared mount.
+**Decision**: The host explicitly accepts the shared user namespace, keys, issuer, admin plane, and incident radius because the customer frontend is part of the same platform. Its accounts live in a disjoint top-level entity tree; internal operators remain in their own root and administer the customer tree through console-scoped sessions plus explicit system-wide/cross-root roles or permissions, never dual-root membership. Revisit a separate deployment if independent credentials, issuer/keys, OAuth trust, admin plane, or incident radius becomes a product requirement.
 
 ---
 
@@ -3828,7 +3828,7 @@ Track questions that need decisions:
 | 2026-06-10 | **DD-056** | **Accepted (Tenant Isolation on User Routes; System-Wide Roles Grant Global Scope)** |
 | 2026-06-26 | **DD-057** | **Proposed (Cache Backend Abstraction — Redis-optional permission caching)** |
 | 2026-07-16 | **DD-058** | **Accepted (WhatsApp as Host-Owned Delivery Channel for Auth Challenges)** |
-| 2026-07-29 | **DD-059** | **Proposed (Multi-Frontend Support — Frontend Profiles + Audience Resolver); r2 same day after independent second audit (fail-closed, flow-wide profile, profile-bound OAuth state, azp provenance, Q-004)** |
+| 2026-07-29 | **DD-059** | **Accepted and shipped in 0.1.0a25 (Multi-Frontend Support — profiles, resolver, profile-bound challenges/OAuth, azp provenance, audience gates); Q-004 resolved 2026-08-04** |
 
 ---
 
@@ -3866,5 +3866,5 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; create-time composition bypasses the mutation guards)
+**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; DD-059 status reconciled to accepted/shipped — Q-004 resolved as shared-platform/disjoint-root)
 **Next Review**: After testing all examples

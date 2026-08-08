@@ -81,6 +81,21 @@ async def test_jwt_strategy_authenticates_active_user():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_jwt_strategy_surfaces_verified_azp_in_auth_context():
+    user = _make_user(last_password_change=None)
+    user_service = SimpleNamespace(get_user_by_id=AsyncMock(return_value=user))
+    strategy = JWTStrategy(secret="test-secret")
+    token = _make_access_token("test-secret", azp="console")
+
+    result = await strategy.authenticate(token, user_service=user_service, session=object())
+
+    assert result is not None
+    assert result["azp"] == "console"
+    assert result["metadata"]["azp"] == "console"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_jwt_strategy_rejects_blacklisted_token_before_db_lookup():
     redis_client = SimpleNamespace(
         is_available=True,

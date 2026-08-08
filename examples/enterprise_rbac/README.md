@@ -127,13 +127,18 @@ The API will be available at `http://localhost:8004` with auto-reload enabled.
 
 ### Transactional Auth Mail
 
-This example now demonstrates the recommended auth-mail integration model:
+This example now demonstrates the recommended auth-mail integration model —
+multi-frontend edition (DD-059):
 
-- `OutlabsAuth` emits typed invite/reset/access-granted intents
-- the example app composes branded messages
+- `OutlabsAuth` emits typed invite/reset/access-granted intents (with root-entity context)
+- two `FrontendProfile`s are declared — **console** (query-token links) and **portal** (path-token links, no invite page)
+- a `FrontendProfileResolver` routes each send per recipient (requested `app` key, then root-slug mapping, then the declared console default); unknown or unsupported selections fail closed instead of sending wrong-brand links
+- the example app composes branded messages per profile
 - delivery is selected by the host app
 
-The wiring lives in `examples/enterprise_rbac/transactional_mail.py`.
+The wiring lives in `examples/enterprise_rbac/transactional_mail.py`. The mail
+service's `frontend_resolver` is picked up by `EnterpriseRBAC` automatically,
+so challenge flows, OAuth, and the sign-in gate share the same routing.
 
 Current behavior:
 
@@ -143,7 +148,8 @@ Current behavior:
 
 Relevant env vars from `.env.example`:
 
-- `FRONTEND_URL`
+- `FRONTEND_URL` (console profile origin)
+- `PORTAL_FRONTEND_URL` (portal profile origin for the two-profile mail recipe; default `http://localhost:3001`)
 - `API_PUBLIC_URL` (public API origin used for OAuth callback URLs; default `http://localhost:8004`)
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional; mounts invite-only Google login at `/v1/oauth/google` and account linking at `/v1/oauth-associate/google`)
 - `OUTLABS_AUTH_MAIL_PROVIDER`

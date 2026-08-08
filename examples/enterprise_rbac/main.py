@@ -123,6 +123,10 @@ INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag("INVITE_DEBUG_TOKENS", default=DE
 PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag("PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE)
 RESET_PASSWORD_DEBUG_TOKENS = DEBUG_MODE and _env_flag("RESET_PASSWORD_DEBUG_TOKENS", default=DEBUG_MODE)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
+# Second frontend for the multi-frontend mail recipe (DD-059): the agent
+# portal profile's origin. The mail service's resolver is picked up by
+# EnterpriseRBAC automatically for challenge flows, OAuth, and the sign-in gate.
+PORTAL_FRONTEND_URL = _trim_trailing_slash(os.getenv("PORTAL_FRONTEND_URL", "http://localhost:3001"))
 API_PUBLIC_URL = _trim_trailing_slash(os.getenv("API_PUBLIC_URL", "http://localhost:8004"))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -241,6 +245,7 @@ auth = EnterpriseRBAC(
     observability_config=obs_config,
     transactional_mail_service=build_enterprise_example_transactional_mail_service(
         frontend_url=FRONTEND_URL,
+        portal_frontend_url=PORTAL_FRONTEND_URL,
         mail_provider=OUTLABS_AUTH_MAIL_PROVIDER,
         mailgun_api_base_url=MAILGUN_API_BASE_URL,
         mailgun_domain=MAILGUN_DOMAIN,
