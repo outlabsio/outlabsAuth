@@ -1,12 +1,13 @@
 # OutlabsAuth Deployment Guide
 
 
-**Version**: 1.4
-**Date**: 2025-01-14
+**Version**: 1.4.1
+**Date**: 2026-08-11
 **Audience**: DevOps engineers and system administrators
 **Status**: Production Reference
 
 **Key v1.4 Updates**:
+- **Consumer rollout safety**: package, schema, authorization, and runtime-artifact gates
 - **Redis Pub/Sub** (DD-037): <100ms cache invalidation across distributed instances
 - **Redis Counters** (DD-033): Background sync for API key usage tracking
 - **Closure Table** (DD-036): O(1) tree permission queries (20x faster)
@@ -199,6 +200,45 @@ In compose, that's a one-shot service the app waits on:
 ```
 
 In Kubernetes, the same thing is an init container or a `Job` gating the rollout.
+
+### Consumer Rollout Safety Gates
+
+An Auth library rollout has four independent contracts. Treating any one of
+them as proof of the others is a deployment error:
+
+| Contract | Required proof before traffic |
+|---|---|
+| Consumer package | The consumer manifest **and** lock select the intended exact release. Inspect the package inside the built artifact; a green local lockfile is not evidence about a remote build. |
+| Auth database schema | `outlabs-auth doctor` is green and `current` equals `heads` against the exact target database and schema. The host application's Alembic head is a separate contract. |
+| Authorization identity | The deployed principal has only the domain scopes its route needs. Test a negative request with a generic/worker key and a positive request with the dedicated integration key. |
+| Runtime artifact | The running image/directory identifies the intended source commit, package version, platform, and digest. Production must use an immutable release tag or digest, never a mutable `latest` tag as release evidence. |
+
+Use this fail-closed order for every consumer:
+
+1. Review the release notes and choose an exact library version. If the
+   consumer uses a range in `pyproject.toml`, remember that an image builder may
+   resolve that range without using the developer's lockfile. Prefer an exact
+   production pin or prove the resolved version in the built image.
+2. Build once from a clean, reviewed commit. Record the source SHA, image digest,
+   target platform, and installed `outlabs-auth` version. Retain the previous
+   immutable artifact for rollback.
+3. Back up and migrate the Auth schema out of process. Prove the target database
+   identity, `doctor`, and `current == heads`. Do not infer this from the host
+   application's migration status.
+4. Provision or update a dedicated integration principal for each domain
+   operator. Library authentication and queue capabilities do not grant host
+   application permissions. Do not broaden a generic producer or worker key to
+   make a domain planner route pass.
+5. Exercise authorization before opening traffic: generic identity gets the
+   expected `403`; the dedicated least-privilege identity succeeds on the exact
+   route; malformed/bad credentials still get `401`.
+6. Recreate from the attested immutable artifact under a serialized release
+   lock, then verify the running artifact and schema again. A deployment is not
+   complete because a build command returned successfully.
+
+If the consumer also embeds another database-backed library such as TaskQ,
+attest that library's package version and database contract separately before
+recreate. Do not patch the consumer around a library contract mismatch.
 
 ### External Background Maintenance
 
@@ -1752,6 +1792,8 @@ LIMIT 10;
 ### Pre-Deployment
 
 - [ ] All tests passing
+- [ ] Consumer manifest and lock resolve the intended exact Auth release
+- [ ] Built artifact reports the intended source SHA, platform, digest, and installed Auth version
 - [ ] Security audit reviewed (see `docs/SECURITY_AUDIT_2026-08-02.md`)
 - [ ] Load testing completed
 - [ ] `SECRET_KEY` is >= 32 chars and unique per environment
@@ -1759,6 +1801,9 @@ LIMIT 10;
 - [ ] Auth schema migrated with `outlabs-auth migrate` as a discrete deploy step
 - [ ] `auto_migrate` is **off** in production
 - [ ] `outlabs-auth doctor` green; `current` == `heads`
+- [ ] Auth target database/schema identity recorded independently of the host app's migrations
+- [ ] Dedicated least-privilege integration principal provisioned for each domain route
+- [ ] Generic/worker identity gets expected `403`; dedicated identity succeeds; bad credentials get `401`
 - [ ] `OUTLABS_AUTH_SCHEMA` set if isolating auth tables
 - [ ] `redis_key_prefix` set and unique per app+environment (if Redis is on)
 - [ ] Before first enabling Redis: audited `rate_limit_per_minute` on every row
@@ -1774,6 +1819,8 @@ LIMIT 10;
 ### Post-Deployment
 
 - [ ] Health checks passing
+- [ ] Running artifact still matches the accepted source SHA, platform, image digest, and Auth version
+- [ ] Previous immutable artifact retained and rollback command recorded
 - [ ] Metrics flowing to Prometheus
 - [ ] Logs aggregated in ELK/CloudWatch
 - [ ] Alerts configured
