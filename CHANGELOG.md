@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a32] - 2026-08-11
+
+### Fixed
+
+- Allow the `operate` action for EnterpriseRBAC system-integration API keys so applications can
+  delegate bounded operator permissions such as `agent:operate` without using wildcard or human
+  credentials. Personal-key policy and protected-resource exclusions are unchanged, and the
+  integration principal plus acting-user grant checks still apply.
+
+### Database migrations
+
+- None. Upgrade the package, then rerun the consuming application's idempotent permission/role seed
+  before granting an `*:operate` scope.
 
 ### Changed
 
