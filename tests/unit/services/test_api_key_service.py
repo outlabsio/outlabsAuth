@@ -303,6 +303,14 @@ async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime
             entity_id=root.id,
         )
 
+    with pytest.raises(InvalidInputError, match="not allowed for personal API keys"):
+        await service.create_api_key(
+            test_session,
+            owner_id=owner.id,
+            name="Personal Operator Key",
+            scopes=["agent:operate"],
+        )
+
     full_key, key = await service.create_api_key(
         test_session,
         owner_id=owner.id,
@@ -643,6 +651,12 @@ async def test_system_integration_keys_follow_principal_scope_and_entity_archive
         display_name="reports:update",
         description="system integration test permission",
     )
+    await permission_service.create_permission(
+        test_session,
+        name="agents:operate",
+        display_name="agents:operate",
+        description="system integration operator permission",
+    )
 
     principal = await principal_service.create_principal(
         test_session,
@@ -651,7 +665,7 @@ async def test_system_integration_keys_follow_principal_scope_and_entity_archive
         scope_kind=IntegrationPrincipalScopeKind.ENTITY,
         anchor_entity_id=root.id,
         inherit_from_tree=True,
-        allowed_scopes=["workers:run"],
+        allowed_scopes=["agents:operate", "workers:run"],
         created_by_user_id=actor.id,
     )
     assert principal.status == IntegrationPrincipalStatus.ACTIVE
@@ -660,7 +674,7 @@ async def test_system_integration_keys_follow_principal_scope_and_entity_archive
         test_session,
         integration_principal_id=principal.id,
         name="Worker Key",
-        scopes=["workers:run"],
+        scopes=["agents:operate", "workers:run"],
         key_kind=APIKeyKind.SYSTEM_INTEGRATION,
         actor_user_id=actor.id,
     )
@@ -668,6 +682,14 @@ async def test_system_integration_keys_follow_principal_scope_and_entity_archive
     assert api_key.integration_principal_id == principal.id
     assert api_key.entity_id == root.id
     assert api_key.inherit_from_tree is True
+
+    operator_verified, _ = await api_key_service.verify_api_key(
+        test_session,
+        full_key,
+        required_scope="agents:operate",
+        entity_id=child.id,
+    )
+    assert operator_verified is not None
 
     verified, _ = await api_key_service.verify_api_key(
         test_session,

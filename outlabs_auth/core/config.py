@@ -17,6 +17,36 @@ _SECRET_PLACEHOLDER_MARKERS = (
     "your-secret-key",
 )
 
+DEFAULT_PERSONAL_API_KEY_ACTION_PREFIXES = (
+    "read",
+    "list",
+    "search",
+    "view",
+    "get",
+    "update",
+)
+DEFAULT_SYSTEM_API_KEY_ACTION_PREFIXES = (
+    "create",
+    "read",
+    "list",
+    "search",
+    "view",
+    "get",
+    "update",
+    "delete",
+    "write",
+    "run",
+    "execute",
+    "trigger",
+    "control",
+    "operate",
+    "sync",
+    "import",
+    "export",
+    "generate",
+    "manage",
+)
+
 
 class AuthConfig(BaseModel):
     """
@@ -326,7 +356,7 @@ class AuthConfig(BaseModel):
         "secrets, so failure-based lockout is unnecessary; IP throttling belongs at the gateway.",
     )
     api_key_personal_allowed_action_prefixes: list[str] = Field(
-        default_factory=lambda: ["read", "list", "search", "view", "get", "update"],
+        default_factory=lambda: list(DEFAULT_PERSONAL_API_KEY_ACTION_PREFIXES),
         description="Action prefixes allowed for personal API keys in EnterpriseRBAC v1",
     )
     api_key_personal_excluded_resources: list[str] = Field(
@@ -338,26 +368,7 @@ class AuthConfig(BaseModel):
         description="Whether personal API keys may inherit anchor access to descendant entities",
     )
     api_key_system_allowed_action_prefixes: list[str] = Field(
-        default_factory=lambda: [
-            "create",
-            "read",
-            "list",
-            "search",
-            "view",
-            "get",
-            "update",
-            "delete",
-            "write",
-            "run",
-            "execute",
-            "trigger",
-            "control",
-            "sync",
-            "import",
-            "export",
-            "generate",
-            "manage",
-        ],
+        default_factory=lambda: list(DEFAULT_SYSTEM_API_KEY_ACTION_PREFIXES),
         description="Action prefixes allowed for system integration API keys in EnterpriseRBAC",
     )
     api_key_system_excluded_resources: list[str] = Field(

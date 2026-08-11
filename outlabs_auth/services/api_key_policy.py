@@ -16,7 +16,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.config import (
+    DEFAULT_PERSONAL_API_KEY_ACTION_PREFIXES,
+    DEFAULT_SYSTEM_API_KEY_ACTION_PREFIXES,
+    AuthConfig,
+)
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope
 from outlabs_auth.models.sql.closure import EntityClosure
@@ -63,7 +67,7 @@ class APIKeyPolicyService:
             for prefix in getattr(
                 config,
                 "api_key_personal_allowed_action_prefixes",
-                ["read", "list", "search", "view", "get", "update"],
+                DEFAULT_PERSONAL_API_KEY_ACTION_PREFIXES,
             )
             if prefix
         ]
@@ -81,26 +85,7 @@ class APIKeyPolicyService:
             for prefix in getattr(
                 config,
                 "api_key_system_allowed_action_prefixes",
-                [
-                    "create",
-                    "read",
-                    "list",
-                    "search",
-                    "view",
-                    "get",
-                    "update",
-                    "delete",
-                    "write",
-                    "run",
-                    "execute",
-                    "trigger",
-                    "control",
-                    "sync",
-                    "import",
-                    "export",
-                    "generate",
-                    "manage",
-                ],
+                DEFAULT_SYSTEM_API_KEY_ACTION_PREFIXES,
             )
             if prefix
         ]
