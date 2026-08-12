@@ -52,6 +52,11 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
     - `git tag vX.Y.ZaN`
     - `git push origin vX.Y.ZaN`
 11. Confirm the `Publish PyPI` workflow completes and the release appears on PyPI.
+12. For managed downstream applications, regenerate each manifest/lock from
+    the public index and run the source-owned
+    [`verify_consumer_pins.py`](../scripts/verify_consumer_pins.py) against the
+    operator's private inventory. The audit can also attest trusted wheel and
+    sdist hashes; see [Consumer Pin Audit](CONSUMER_PIN_AUDIT.md).
 
 ## API Integration Validation
 
