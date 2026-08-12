@@ -42,6 +42,7 @@ This `docs/` tree is design specs and maintainer material.
 - **SECURITY.md** - Security hardening requirements
 - **DEPLOYMENT_GUIDE.md** - Production deployment specifications
 - **PRIVATE_RELEASE.md** - Private package release workflow for `uv`
+- **CONSUMER_PIN_AUDIT.md** - Exact downstream manifest/lock and artifact-hash release gate
 - **TESTING_GUIDE.md** - Testing strategy and coverage goals
 
 ### Extensions
