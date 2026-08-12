@@ -26,7 +26,12 @@ from outlabs_auth.models.sql import ALL_MODELS  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # This library runs inside host applications as well as through its own
+    # CLI. Alembic's default disables every already-imported logger not named
+    # in alembic.ini, which can silently remove the host's application logs
+    # after an in-process migration. Preserve host logger state while still
+    # applying the migration-specific handlers and levels.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
