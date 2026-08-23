@@ -39,6 +39,18 @@ TEST_DATABASE_URL = os.getenv(
 # Tests that opt into the `redis_client` / `auth_with_cache` fixtures will
 # skip automatically if the URL is unreachable.
 TEST_REDIS_URL = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/15")
+TEST_REDIS_REQUIRED = os.getenv("TEST_REDIS_REQUIRED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+
+def _redis_unavailable(message: str) -> None:
+    """Fail Redis contract runs; keep Redis optional for ordinary local tests."""
+    if TEST_REDIS_REQUIRED:
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message)
 
 
 def pytest_configure(config):
@@ -46,6 +58,15 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "unit: marks tests as unit tests")
+    config.addinivalue_line("markers", "redis: requires and exercises a real Redis server")
+
+
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001
+    """Keep every real-Redis fixture test in the explicit Redis contract suite."""
+    redis_fixtures = {"redis_client", "auth_with_cache"}
+    for item in items:
+        if redis_fixtures.intersection(item.fixturenames):
+            item.add_marker(pytest.mark.redis)
 
 
 # ============================================================================
@@ -200,14 +221,15 @@ async def redis_client() -> AsyncGenerator["object", None]:
     """
     Connected RedisClient pointing at TEST_REDIS_URL (DB 15 by default).
 
-    Skips the test if Redis is not reachable, so the suite still runs on
-    boxes without Redis. The test DB is flushed before and after the test
-    to guarantee isolation — do not point TEST_REDIS_URL at a shared DB.
+    Redis is optional for ordinary local runs. With TEST_REDIS_REQUIRED=1,
+    an unavailable dependency fails the suite instead of silently skipping.
+    The test DB is flushed before and after the test to guarantee isolation —
+    do not point TEST_REDIS_URL at a shared DB.
     """
     try:
         import redis.asyncio as _redis  # type: ignore
     except ImportError:
-        pytest.skip("redis package not installed")
+        _redis_unavailable("redis package not installed")
 
     from outlabs_auth.core.config import AuthConfig
     from outlabs_auth.services.redis_client import RedisClient
@@ -221,9 +243,8 @@ async def redis_client() -> AsyncGenerator["object", None]:
     try:
         await probe.ping()
         await probe.flushdb()
-    except Exception as exc:  # noqa: BLE001 — surface any connection failure as a skip
-        await probe.close()
-        pytest.skip(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
+    except Exception as exc:  # noqa: BLE001 — test dependency probe
+        _redis_unavailable(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
     finally:
         await probe.close()
 
@@ -236,7 +257,7 @@ async def redis_client() -> AsyncGenerator["object", None]:
     client = RedisClient(config)
     connected = await client.connect()
     if not connected:
-        pytest.skip("RedisClient could not connect")
+        _redis_unavailable("RedisClient could not connect")
 
     yield client
 
@@ -255,12 +276,12 @@ async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, No
 
     Uses the same per-test schema isolation as `auth`, but also exercises
     Redis paths: cache service, pub/sub invalidation, API-key counters.
-    Skips if Redis is not reachable.
+    Redis is optional locally unless TEST_REDIS_REQUIRED=1.
     """
     try:
         import redis.asyncio as _redis  # type: ignore
     except ImportError:
-        pytest.skip("redis package not installed")
+        _redis_unavailable("redis package not installed")
 
     probe = _redis.Redis.from_url(
         TEST_REDIS_URL,
@@ -272,8 +293,7 @@ async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, No
         await probe.ping()
         await probe.flushdb()
     except Exception as exc:  # noqa: BLE001
-        await probe.close()
-        pytest.skip(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
+        _redis_unavailable(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
     finally:
         await probe.close()
 

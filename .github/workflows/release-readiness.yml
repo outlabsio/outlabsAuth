@@ -121,6 +121,51 @@ jobs:
       - name: Rehearse populated pre-release upgrade
         run: uv run --extra test python -m pytest tests/integration/test_seeded_upgrade_rehearsal.py -q
 
+  # Make the real-Redis contract independently visible and fail closed. The
+  # complete suite below also runs these tests, but an unavailable Redis must
+  # never turn a release-critical counter/invalidation regression into skips.
+  redis-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: outlabs_auth_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d outlabs_auth_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/outlabs_auth_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      TEST_REDIS_REQUIRED: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run mandatory real-Redis contract suite
+        run: uv run --extra all --extra test python -m pytest -m redis -q
+
   # The complete library test suite, with BOTH backing services. Without the
   # Redis service every cache/budget/invalidation test skips silently, so the
   # caching layer would ship unexercised by CI.
@@ -152,6 +197,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/outlabs_auth_test
       TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      TEST_REDIS_REQUIRED: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

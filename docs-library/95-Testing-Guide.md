@@ -9,11 +9,13 @@
 ## Quick start
 
 ```bash
-# Full suite (Postgres required; Redis-backed tests skip if unreachable)
+# Full local suite (Postgres required; Redis is optional in this mode)
 uv run pytest
 
-# With Redis so cache / budget / activity tests actually run
-TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest
+# Mandatory real-Redis contract: counter, quota, cache and invalidation tests
+TEST_REDIS_URL=redis://localhost:56379/15 \
+TEST_REDIS_REQUIRED=1 \
+uv run pytest -m redis
 
 # Focused
 uv run pytest tests/unit/
@@ -35,8 +37,11 @@ tests/
 └── integration/       # Router + multi-service flows against a real DB
 ```
 
-“Unit” here means **narrow**, not necessarily mock-everything. Redis-dependent
-fixtures skip cleanly when `TEST_REDIS_URL` is down.
+“Unit” here means **narrow**, not necessarily mock-everything. Tests using the
+real-Redis fixtures are automatically marked `redis`. They may skip in an ordinary
+local run, but `TEST_REDIS_REQUIRED=1` converts an unavailable Redis into a failure.
+Release CI runs that fail-closed selection independently and again as part of the
+complete PostgreSQL + Redis suite.
 
 ---
 
@@ -64,6 +69,7 @@ Library release gates also run an Enterprise API integration suite; see
 | Existing fixtures in `conftest.py` / `tests/fixtures/` | One-off engines per file |
 | Asserting public router/service contracts | Scraping private helpers unless testing that helper |
 | Markers (`@pytest.mark.unit`, `.integration`) | Undocumented skips |
+| Real Redis for counter expiry, concurrency and recovery | Redis-shaped mocks for server semantics |
 
 Examples of focused suites: OAuth callbacks, session inventory, API key
 lifecycle, query-count budgets under `tests/integration/`.
@@ -75,7 +81,7 @@ lifecycle, query-count budgets under `tests/integration/`.
 | Symptom | Likely fix |
 |---------|------------|
 | Connection errors to Postgres | Start local Postgres; check `DATABASE_URL` / test defaults in `conftest` |
-| Cache / rate-limit tests skipped | Set `TEST_REDIS_URL` to a reachable Redis |
+| Cache / rate-limit tests skipped | Set `TEST_REDIS_URL`, `TEST_REDIS_REQUIRED=1`, then run `pytest -m redis` |
 | Flaky timing around activity sync | Prefer unit tests that mock Redis for ActivityTracker |
 
 ---

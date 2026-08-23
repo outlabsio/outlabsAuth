@@ -33,16 +33,21 @@ Comprehensive test suite for the OutlabsAuth library covering Phase 2 (SimpleRBA
    `postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test`
    (`conftest.py`).
 
-3. **Redis** — optional. Tests that use the `redis_client` / `auth_with_cache`
-   fixtures **skip themselves** if it isn't reachable, so you can ignore this unless
-   you're working on caching. `TEST_REDIS_URL` defaults to
-   `redis://localhost:6379/15` (DB index 15, to stay clear of anything else local).
+3. **Redis** — optional for ordinary local work. Tests that use the `redis_client` /
+   `auth_with_cache` fixtures skip if it isn't reachable unless
+   `TEST_REDIS_REQUIRED=1`. Release CI sets that flag and fails closed, so cache,
+   API-key quota, activity and invalidation contracts cannot silently ship as skips.
+   `TEST_REDIS_URL` defaults to `redis://localhost:6379/15` (DB index 15, to stay
+   clear of anything else local).
 
 ### Run All Tests
 
 ```bash
 # Run all tests with coverage
 uv run pytest
+
+# Run every real-Redis contract and fail if Redis is unavailable
+TEST_REDIS_REQUIRED=1 uv run pytest -m redis
 
 # Run with verbose output
 uv run pytest -v
@@ -268,8 +273,13 @@ async def test_create_user_with_duplicate_email_raises_error(
 ### Cache Fixtures
 
 - **`redis_client`**: Redis client on `TEST_REDIS_URL`. **Skips the test** if Redis
-  isn't reachable — you don't need Redis to run the suite.
-- **`auth_with_cache`**: an auth instance with caching enabled; skips likewise.
+  isn't reachable in an ordinary local run; fails when `TEST_REDIS_REQUIRED=1`.
+- **`auth_with_cache`**: an auth instance with caching enabled; follows the same
+  required/optional rule.
+
+Tests requesting either fixture are automatically marked `redis`. Do not add a
+second handwritten Redis-test list: `pytest -m redis` is the canonical real-server
+contract selection, and the regular full suite collects the same tests.
 
 ### Auth Instance Fixtures
 
@@ -338,9 +348,16 @@ export TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 
 **Problem**: Redis-related tests are being skipped
 
-That is by design — `redis_client` / `auth_with_cache` skip when `TEST_REDIS_URL`
-(default `redis://localhost:6379/15`) is unreachable. Start Redis only if you're
-working on caching.
+That is expected only for an ordinary local run. Start Redis and use the fail-closed
+contract mode when changing caching, counters, quotas, invalidation or activity:
+
+```bash
+TEST_REDIS_URL=redis://localhost:6379/15 \
+TEST_REDIS_REQUIRED=1 \
+uv run pytest -m redis
+```
+
+Release CI runs this selection independently and also inside the full suite.
 
 **Problem**: Test database not cleaning up
 
