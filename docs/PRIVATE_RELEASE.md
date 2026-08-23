@@ -35,7 +35,8 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
    `Release Readiness` workflow runs both automatically (`full-suite` and
    `api-integration` jobs with ephemeral Postgres + Redis services) on every
    PR and on `main`/tags — run locally to iterate faster than CI:
-   - `TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest -q`
+   - `TEST_REDIS_URL=redis://localhost:56379/15 TEST_REDIS_REQUIRED=1 uv run pytest -q`
+   - `TEST_REDIS_URL=redis://localhost:56379/15 TEST_REDIS_REQUIRED=1 uv run pytest -m redis -q`
    - `uv run python scripts/run_enterprise_example_smoke.py`
 6. If the release contains new Alembic revisions, wait for the required
    [`seeded-upgrade-rehearsal`](#database-upgrade-rehearsal) CI job. It
@@ -51,8 +52,16 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
 10. Create and push the version tag:
     - `git tag vX.Y.ZaN`
     - `git push origin vX.Y.ZaN`
-11. Confirm the `Publish PyPI` workflow completes and the release appears on PyPI.
-12. For managed downstream applications, regenerate each manifest/lock from
+11. Open the `Publish PyPI` run after its package-verification job passes. The
+    protected `pypi` environment requires an explicit approval for the exact tag/run;
+    approve only after confirming the run SHA is the accepted merge commit. Confirm
+    the workflow completes and the release appears on PyPI, then record the public
+    wheel and sdist SHA-256 values.
+12. Update the certified Auth/TaskQ combination in `outlabs-release`
+    (`pyproject.toml`, `uv.lock`, and `src/outlabs_release/train.toml`) and run its
+    complete test suite. A compatible TaskQ dependency range does not replace this
+    explicit release-train gate.
+13. For managed downstream applications, regenerate each manifest/lock from
     the public index and run the source-owned
     [`verify_consumer_pins.py`](../scripts/verify_consumer_pins.py) against the
     operator's private inventory. The audit can also attest trusted wheel and

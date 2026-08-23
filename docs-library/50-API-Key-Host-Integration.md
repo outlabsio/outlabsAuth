@@ -122,6 +122,26 @@ Design epic (maintainer): [`docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md`](../doc
 Auth-layer metrics/logs cover validation, denials, rate limits, and lifecycle —
 see [Observability](./97-Observability.md).
 
+## Distributed rate limits
+
+Configured API-key minute, hour and day limits are Redis-backed fixed windows.
+The expiry is anchored to the first request in a window; later requests increment
+the counter without extending it. OutlabsAuth also repairs a counter that Redis
+reports without an expiry, so legacy state or an expiry-boundary recreation cannot
+leave a key permanently rate-limited.
+
+Treat Redis as required infrastructure when any API-key quota is configured. The
+default `api_key_rate_limit_failure_mode="fail_closed"` rejects authorization if
+the distributed counter cannot be enforced. Monitor persistent 429s together with
+the counter TTL: `TTL=-1` is invalid for a configured rate-limit window, while a
+positive TTL is the expected fixed-window state.
+
+Library contributors should exercise these semantics against a real server:
+
+```bash
+TEST_REDIS_REQUIRED=1 uv run pytest -m redis
+```
+
 ## Related
 
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md)
