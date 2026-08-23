@@ -688,12 +688,17 @@ class RedisClient:
         awaits on the API-key hot path:
           - ``INCR usage_key``
           - ``SET last_used_key`` (with optional TTL)
-          - for each ``(rate_limit_key, ttl)`` window: ``SET key 0 NX EX ttl`` then ``INCR``
+          - for each ``(rate_limit_key, ttl)`` window: ``SET key 0 NX EX ttl``, ``INCR``,
+            then ``TTL``
 
         The ``SET ... NX EX`` establishes the window TTL exactly once (on the first request
         of the window) and is a no-op thereafter, preserving true fixed-window semantics
         without a read-back — issuing a bare ``EXPIRE`` every request would instead keep
         resetting the TTL and the counter would never roll over under steady traffic.
+        The pipelined ``TTL`` also detects a legacy immortal counter, or the narrow expiry
+        boundary where ``SET NX`` observed the old key but ``INCR`` recreated it after expiry.
+        Only that exceptional ``TTL == -1`` path adds a second round trip to restore the
+        configured window expiry.
 
         Returns ``{usage_key: count, <rate_limit_key>: count, ...}``, or ``None`` if Redis
         is unavailable (callers fall back to their existing per-op path).
@@ -715,6 +720,7 @@ class RedisClient:
             for _rate_key, qualified_rate_key, ttl in qualified_windows:
                 pipe.set(qualified_rate_key, 0, nx=True, ex=ttl)
                 pipe.incrby(qualified_rate_key, 1)
+                pipe.ttl(qualified_rate_key)
             results = await pipe.execute()
         except RedisError as e:
             self._trip_breaker(e)
@@ -724,12 +730,28 @@ class RedisClient:
         try:
             counts: dict[str, int] = {usage_key: int(results[0] or 0)}
             cursor = 2  # results[1] is the last_used SET
-            for rate_key, _qualified_rate_key, _ttl in qualified_windows:
-                # results[cursor] = SET NX result, results[cursor + 1] = INCR result
+            immortal_windows: list[tuple[str, int]] = []
+            for rate_key, qualified_rate_key, ttl in qualified_windows:
+                # SET NX, INCR, and TTL occupy three consecutive results.
                 counts[rate_key] = int(results[cursor + 1] or 0)
-                cursor += 2
+                observed_ttl = int(results[cursor + 2])
+                if observed_ttl == -1:
+                    immortal_windows.append((qualified_rate_key, ttl))
+                cursor += 3
+
+            if immortal_windows:
+                repair = self._client.pipeline(transaction=False)
+                for qualified_rate_key, ttl in immortal_windows:
+                    repair.expire(qualified_rate_key, ttl)
+                repaired = await repair.execute()
+                if not all(bool(value) for value in repaired):
+                    raise RedisError("failed to restore expiry on API-key rate-limit counter")
         except (IndexError, TypeError, ValueError) as e:
             logger.debug(f"API key usage pipeline result parse failed: {e}")
+            return None
+        except RedisError as e:
+            self._trip_breaker(e)
+            logger.debug(f"API key usage pipeline TTL repair failed: {e}")
             return None
         return counts
 

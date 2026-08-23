@@ -7,6 +7,7 @@ Performance regression tests for the API-key hot-path optimizations
   TTL is established once per window and not reset by later requests).
 - Perf #1: an opt-in per-process snapshot cache serves hot keys without a Redis read.
 """
+
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
@@ -55,6 +56,7 @@ class _FakeRedis:
 # Perf #2 — pipelined usage + fixed-window rate limit (real Redis)
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_usage_pipeline_counts_and_fixed_window(redis_client):
@@ -94,6 +96,32 @@ async def test_usage_pipeline_counts_and_fixed_window(redis_client):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_usage_pipeline_heals_immortal_rate_limit_window(redis_client):
+    usage_key = "perftest:immortal:usage"
+    last_key = "perftest:immortal:last"
+    rl_key = "perftest:immortal:rl:minute"
+    qualified_rl_key = redis_client.make_key(rl_key)
+
+    # Reproduce the production failure: an accumulated rate counter exists but
+    # has no expiry, so every request remains over limit forever.
+    await redis_client.set_raw(rl_key, "4487")
+    assert await redis_client._client.ttl(qualified_rl_key) == -1
+
+    counts = await redis_client.record_api_key_usage_pipeline(
+        usage_key=usage_key,
+        last_used_key=last_key,
+        last_used_value="repair",
+        last_used_ttl=300,
+        rate_windows=[(rl_key, 60)],
+    )
+
+    assert counts is not None
+    assert counts[rl_key] == 4488
+    assert 0 < await redis_client._client.ttl(qualified_rl_key) <= 60
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_usage_pipeline_without_rate_windows(redis_client):
     counts = await redis_client.record_api_key_usage_pipeline(
         usage_key="perftest:u2",
@@ -108,6 +136,7 @@ async def test_usage_pipeline_without_rate_windows(redis_client):
 # --------------------------------------------------------------------------
 # Perf #1 — opt-in per-process snapshot cache
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_local_snapshot_cache_disabled_by_default():
