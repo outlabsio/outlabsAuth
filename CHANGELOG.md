@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Fixed
+
+- Heal API-key rate-limit counters that exist without an expiry on the cached-key pipeline. The
+  one-round-trip hot path now inspects each counter TTL and restores the configured fixed-window
+  expiry only when Redis reports an immortal counter, preventing a worker integration from becoming
+  permanently rate-limited after a legacy counter or an expiry-boundary race.
+
+### Database migrations
+
+- None.
+
 ## [0.1.0a33] - 2026-08-11
 
 ### Fixed
