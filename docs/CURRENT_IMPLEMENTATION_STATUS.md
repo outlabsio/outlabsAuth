@@ -315,6 +315,12 @@ These are intentional implementation details that are slightly more specific tha
   but host-product UX and operational guidance for when to prefer
   `system_integration` keys versus JWT service tokens still needs more product
   documentation.
+- OutlabsAuth does not yet provide first-class renewable workload identity. An
+  unattended service must currently hold either a static integration-principal
+  API key or a pre-minted service JWT that it cannot renew. The recommended
+  asymmetric workload-key and short-lived token-exchange direction is recorded
+  in `WORKLOAD_IDENTITY_AND_TOKEN_EXCHANGE_GAP.md`; it is an open design gap,
+  not a committed release surface.
 
 ### Test Coverage Gaps
 

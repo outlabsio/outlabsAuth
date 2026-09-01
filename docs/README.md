@@ -33,6 +33,7 @@ This `docs/` tree is design specs and maintainer material.
 - **CLI_AGENT_GUIDE.md** - Operating and recovery guidance for coding agents
 - **CLI_MANIFEST.md** - Declarative state and plan/apply contract
 - **API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md** - In-progress entity-scoped API key grant model, current backend status, lifecycle rules, and remaining design follow-ups
+- **WORKLOAD_IDENTITY_AND_TOKEN_EXCHANGE_GAP.md** - Open machine-identity lifecycle gap and recommended asymmetric token-exchange direction for unattended workloads
 - **TASKQ_AUTHENTICATED_CONTEXT_PLAN.md** - Implemented candidate for once-per-request API-key accounting and auth-owned two-phase authorization; joint TaskQ audit/release pending
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
 - **HOST_INTEGRATION_QUERIES.md** - Supported auth-owned query boundaries for embedded host applications

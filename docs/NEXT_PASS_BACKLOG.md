@@ -270,6 +270,23 @@ Known hot-path areas worth another pass after the next release:
   actually checked into the repo so release planning is based on the current
   test surface, not stale documentation.
 
+## Workload Identity And Token Exchange
+
+**Status:** Open design gap; no release assigned.
+
+- Design an asymmetric workload-key enrollment and token-exchange contract for
+  Enterprise integration principals. Issue short-lived, audience/environment-
+  bound access JWTs from signed client assertions; support overlapping public
+  keys, immediate disable of new issuance, deterministic replay protection,
+  audit, and forced-rotation tests.
+- Keep integration-principal API keys as a compatibility/bootstrap option, not
+  the preferred permanent credential for unattended fleets. Do not treat
+  consumer-side rotation or longer-lived service JWTs as closure.
+- Coordinate the client side with TaskQ's separate dynamic credential-provider
+  gap while keeping OutlabsAuth independent of TaskQ worker internals.
+- Full problem statement, boundary, and acceptance criteria:
+  `WORKLOAD_IDENTITY_AND_TOKEN_EXCHANGE_GAP.md`.
+
 ## Production Docs And Runbooks
 
 The README now has the correct production defaults, but some operator guidance still deserves a tighter pass:
