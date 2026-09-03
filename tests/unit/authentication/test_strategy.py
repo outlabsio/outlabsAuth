@@ -16,6 +16,7 @@ from outlabs_auth.authentication.strategy import (
     ServiceTokenStrategy,
     SuperuserStrategy,
 )
+from outlabs_auth.services.auth import AuthService
 
 
 def _make_access_token(secret: str, **claims: object) -> str:
@@ -244,6 +245,40 @@ def test_jwt_strategy_token_timestamp_prefers_iat_ms_and_staleness_defaults_clos
 
     assert normalized == issued_at.replace(microsecond=0) or abs((normalized - issued_at).total_seconds()) < 0.001
     assert JWTStrategy._token_is_stale({"iat": "bad"}, issued_at) is True
+
+
+@pytest.mark.unit
+def test_jwt_strategy_compares_password_changes_at_jwt_millisecond_precision():
+    password_changed_at = datetime(2026, 9, 3, 20, 30, 0, 123999, tzinfo=timezone.utc)
+
+    assert (
+        JWTStrategy._token_is_stale(
+            {"iat_ms": int(password_changed_at.timestamp() * 1000)},
+            password_changed_at,
+        )
+        is False
+    )
+    assert (
+        JWTStrategy._token_is_stale(
+            {"iat_ms": int(password_changed_at.timestamp() * 1000) - 1},
+            password_changed_at,
+        )
+        is True
+    )
+    assert (
+        AuthService._token_is_stale(
+            {"iat_ms": int(password_changed_at.timestamp() * 1000)},
+            password_changed_at,
+        )
+        is False
+    )
+    assert (
+        AuthService._token_is_stale(
+            {"iat_ms": int(password_changed_at.timestamp() * 1000) - 1},
+            password_changed_at,
+        )
+        is True
+    )
 
 
 @pytest.mark.unit

@@ -226,6 +226,13 @@ class JWTStrategy:
             if last_password_change.tzinfo is not None
             else last_password_change.replace(tzinfo=timezone.utc)
         )
+        # JWT ``iat_ms`` is intentionally millisecond precision. PostgreSQL
+        # preserves microseconds, so compare both sides at the coarser token
+        # precision; otherwise an invite/password flow can reject the token it
+        # just issued when both events occur within the same millisecond.
+        password_change_dt = password_change_dt.replace(
+            microsecond=(password_change_dt.microsecond // 1000) * 1000,
+        )
         return issued_at_dt < password_change_dt
 
 
