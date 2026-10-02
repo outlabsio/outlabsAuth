@@ -46,6 +46,17 @@ Enterprise-oriented admin for `system_integration` keys:
 
 Includes create / patch / delete principal, list/create/rotate/revoke keys.
 
+Scope pickers should read the **system-integration** policy, not the personal
+`/v1/api-keys/grantable-scopes` list:
+
+- `GET /entities/{entity_id}/integration-principals/grantable-scopes`
+  (tree `api_key:create`) — scopes the caller may grant to a principal or
+  machine key anchored at that entity;
+- `GET /system/integration-principals/grantable-scopes` (superuser on
+  Enterprise; `api_key:create` on SimpleRBAC) — the platform-global envelope.
+
+Both return `grantable_scopes` plus `system_allowed_action_prefixes`.
+
 ### Entity inventory (`/v1/admin/entities`)
 
 Incident response across keys anchored to an entity:

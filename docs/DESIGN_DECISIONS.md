@@ -3542,7 +3542,7 @@ Entities do not store live direct permission grants. Access is granted through:
 ## DD-056: Tenant Isolation on User-Management Routes; System-Wide Roles Grant Global Scope
 
 **Date**: 2026-06-10
-**Status**: Accepted
+**Status**: Accepted (extended by DD-061 to membership, permission and entity routes)
 **Deciders**: Maintainer (via SEC-4 design investigation)
 **Context**: The 2026-06 security audit (SEC-4) found that user-management endpoints enforced no entity/tenant scoping: authorization was a flat `require_permission("user:*")`, so a non-superuser admin in one top-level tree could read, modify, deactivate, or delete users in other trees, and `GET /users/` enumerated every tenant. The roles routes already enforced scope visibility (`_require_role_visibility`), and `AccessScopeService` already computed actor scope — the model simply was never mirrored onto user routes. The blocker was a legitimate use case: an "administration" top-level entity whose admins manage all other trees, which worked only because of the gap. The full investigation is recorded in `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`.
 
@@ -3866,5 +3866,155 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2026-08-08 (DD-060: system definitions are seeder-owned and immutable once created; DD-059 status reconciled to accepted/shipped — Q-004 resolved as shared-platform/disjoint-root)
+## DD-061: Tenant Isolation Extends to Membership, Permission and Entity Routes; Global Scope Is Granted Only by Global Actors
+
+**Date**: 2026-10-02
+**Status**: Accepted (implemented in 0.1.0a35)
+**Deciders**: Maintainer (via the admin-console audit)
+**Context**: DD-056 put tenant isolation on the user-management routes only. An
+admin-console audit then showed the rest of the identity graph still leaked or
+could be widened across tenants: `GET /memberships/user/{id}`,
+`GET /permissions/user/{id}` and `POST /permissions/check` answered for any
+user ID; every entity route (list, get, children, path, members, update,
+archive, move) used flat permission checks with no scope filter, so a tenant
+admin could read — and with `entity:update` / `entity:delete` change — another
+tenant's tree; a tenant-scoped inviter could grant a **system-wide** role
+directly, which DD-056 turns into global scope; `POST /users` accepted another
+tenant's root; reactivating a suspended direct role or entity membership
+re-granted its permissions without the SEC-2 containment check that a new
+assignment runs; clearing `assignable_at_types` was not treated as widening;
+and ABAC condition writes accepted operators and attribute contexts the
+engine cannot evaluate, some of which then failed open.
+
+### Options Considered
+
+1. **Extend the DD-056 model to every route that exposes or changes the identity graph** (chosen)
+   - Pros: one predicate and one error contract everywhere; reuses
+     `AccessScopeService` and the system-wide-role carrier; closes read and
+     write gaps together.
+   - Cons: behavior change for tenant-scoped admins who relied on the gaps;
+     per-request scope resolution on more routes.
+2. **Leave reads, fix writes only**
+   - Pros: smaller change.
+   - Cons: leaves cross-tenant reconnaissance (membership graphs, permission
+     probes, foreign entity trees) — the same reason DD-056 rejected
+     "writes-scoped, reads-global".
+3. **Gate the console instead of the API**
+   - Cons: not a boundary; every finding was reachable over plain HTTP.
+
+### Decision
+
+1. **One scope predicate.** `outlabs_auth/routers/_scope.py` owns the DD-056
+   predicate for all routers. A principal's scope is: a human (JWT or personal
+   API key) → the user's DD-056 scope; an integration principal → its key
+   anchor (no anchor = global); a host-minted service token → global (a
+   platform credential with no tenant anchor); anything else → empty. Global
+   actors remain superusers and holders of an active **direct** system-wide
+   role. `enforce_user_scope=False` and SimpleRBAC keep the unscoped behavior.
+2. **Membership and permission reads** (`GET /memberships/user/{id}`,
+   `GET /permissions/user/{id}`, `POST /permissions/check`) require the target
+   user to be in scope; out of scope answers **404**, identical to a
+   nonexistent user. Self-requests always pass.
+3. **Entity routes** list only entities inside the caller's scope and answer
+   **404** for out-of-scope entities on get, children, path, descendants,
+   members, update, archive, move (source and new parent) and type
+   suggestions. The path of an in-scope entity still returns its full ancestor
+   breadcrumb. Creating a root, moving an entity to the root level and
+   archiving a root create or remove a tenant, so they need a global actor
+   (**403** otherwise); a move to the root level must also satisfy the
+   configured root entity types.
+4. **Global scope is granted only by global actors.** A direct assignment of
+   a system-wide role — `POST /users/{id}/roles`, `POST /auth/invite` without
+   an entity, reactivation of a direct role — is refused (**403**, with
+   `details.system_wide_role_ids`) unless the actor is global. Roles granted
+   through entity memberships never widen scope and are unaffected.
+5. **New accounts stay in the creator's tenant.** A non-global actor may only
+   root an account (`POST /users`, invite without entity) at an entity in its
+   scope; with no root named, the account inherits the actor's own root.
+6. **Re-granting is granting.** Moving a direct role membership or an entity
+   membership back to `active`, or widening its validity window, re-runs SEC-2
+   containment for every permission it carries (plus the global-scope rule for
+   direct system-wide roles). Suspending or narrowing never does — incident
+   responders must be able to cut access they do not hold.
+7. **Clearing `assignable_at_types` widens a role** (empty means "assignable
+   everywhere"); comparisons are case-insensitive.
+8. **Orphans keep their tenant.** `GET /users/orphaned` scopes non-global
+   actors by the orphan's `root_entity_id` and excludes soft-deleted accounts
+   unless `status=deleted` is requested.
+9. **ABAC writes are validated, evaluation fails closed.** Writes reject
+   unknown operators, attribute paths outside `user.` / `resource.` / `env.` /
+   `time.` (the contexts the engine populates; `request.` is never populated
+   and is rejected), and values that do not fit the operator or value type. At
+   evaluation, a missing attribute satisfies neither `is_true` nor `is_false`,
+   `not_in` / `not_contains` with a mismatched type are false, and a stored
+   row that cannot be interpreted evaluates to false instead of raising.
+
+### Judgement calls (conservative, backward-compatible)
+
+- **Scope stays per tenant root.** A user's first membership roots them at
+  that tree (`MembershipService.add_member`), so tenant-wide listings are the
+  unit of isolation; region- and office-level limits are enforced on
+  tree-permission surfaces (membership writes, entity-context checks). Not
+  changed here: making listings mid-tree-scoped would be a new model.
+- **Flat permission reads keep their meaning.** Without `entity_id`,
+  `/permissions/me` and `/permissions/user/{id}` keep returning the historical
+  union across contexts (`*:*` for superusers). Entity context is opt-in via
+  `entity_id`, mirroring `POST /permissions/check`.
+- **Self-service email change is disabled by default**
+  (`allow_self_service_email_change=False`) — the safer of the two options the
+  audit offered. Enabled, it requires `current_password`; resending the
+  unchanged address is always accepted so whole-object profile forms keep
+  working. Notifying the old address is left to the host's `on_after_update`
+  hook rather than a new built-in mail flow.
+- **Registration stays open by default** (`enable_registration=True`); closing
+  it also forces invite-only OAuth sign-in so "closed" means closed.
+- **ABAC flat checks are unchanged.** With ABAC enabled, a check without an
+  entity considers direct role assignments only, while non-ABAC flat checks
+  also count non-entity-local membership roles. Aligning them would widen
+  grants for ABAC hosts, so it is left as documented behavior; the example
+  seeds hold org-scoped direct baselines for routes that check flat
+  permissions.
+- **Error shapes are unchanged** for API-key and integration-principal policy
+  errors (`detail` stays a string) and for dependency 403s; consoles read
+  `details.missing_permissions` from delegation errors, which already carry it.
+- **No optimistic concurrency yet.** Responses now expose `updated_at`;
+  `If-Match` / version preconditions are not introduced.
+
+### Consequences
+
+- **Positive**: the membership graph, effective permissions and entity trees
+  of one tenant are no longer readable or writable from another; global scope
+  can only be handed out by someone who already has it.
+- **Positive**: one error contract (404 out of scope, 403 for platform-level
+  operations) across users, roles, memberships, permissions and entities.
+- **Negative (breaking for scoped admins)**: tenant-scoped actors lose
+  cross-tenant entity, membership and permission visibility, root
+  create/move/archive, direct system-wide grants and reactivation of grants
+  they could not assign; ABAC policies that relied on fail-open evaluation now
+  deny. Global actors and SimpleRBAC are unaffected.
+- **Neutral**: more routes pay DD-056's scope resolution (2–3 indexed
+  queries).
+
+### Implementation
+
+- `outlabs_auth/routers/_scope.py` — principal scope, target predicate,
+  system-wide grant guard, scoped root resolution
+- `outlabs_auth/routers/entities.py`, `memberships.py`, `permissions.py`,
+  `users.py`, `auth.py`, `roles.py`; `outlabs_auth/routers/_authz_utils.py`
+  (`lifecycle_update_grants_access`)
+- `outlabs_auth/services/abac_validation.py`, `policy_engine.py`,
+  `permission.py`, `role.py`, `entity.py` (move-to-root type rules, audit
+  events), `membership.py` (orphan scope)
+- Tests: `tests/integration/test_console_scope_hardening.py`,
+  `tests/unit/services/test_abac_write_validation_and_fail_closed.py`; HTTP
+  release checks in `examples/enterprise_rbac/api_integration_check.py`
+
+### Related Decisions
+
+- DD-005, DD-050, DD-053/DD-054 (scope model), DD-056 (user-route isolation),
+  DD-060 (system definitions)
+
+---
+
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors)
 **Next Review**: After testing all examples

@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-08-04
+**Updated**: 2026-10-02
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -8,6 +8,23 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
 
 ## Completed Slices
+
+### Admin-Console Authorization Hardening (0.1.0a35)
+
+- DD-061 extends DD-056 tenant isolation to membership, effective-permission
+  and entity routes; root create/move/archive need a global actor; direct
+  system-wide grants need a global actor; new accounts stay in the creator's
+  tenant; reactivation re-runs delegation containment.
+- ABAC condition writes are validated and evaluation fails closed.
+- Console contract additions: `/auth/config` password policy, access-code
+  length and registration mode; session `is_current` via the `sid` claim and
+  `keep_current`; paginated member details with totals; names on
+  `/memberships/me`; role/permission definition history endpoints;
+  `has_password`; `updated_at`; entity/config audit events; system-integration
+  grantable scopes; OAuth associate failures redirect to the SPA.
+- Known, documented behavior: tenant scope is per tenant root (a first
+  membership roots the user), and ABAC-mode flat checks count direct role
+  assignments only (DD-061 judgement calls).
 
 ### Agent-First CLI Foundation
 

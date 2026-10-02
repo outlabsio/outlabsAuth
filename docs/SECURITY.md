@@ -81,6 +81,22 @@ The core trust boundaries are:
   grants because removing or changing a condition may broaden access.
 - Removing permissions or disabling a role remains possible during incident
   response even when the responder does not hold the removed grant.
+- Tenant isolation (DD-056, DD-061) covers user, membership-graph,
+  effective-permission and entity routes: non-global actors only reach targets
+  inside their scope, and out-of-scope targets answer 404 like nonexistent
+  ones. Creating, promoting to, or archiving a root entity needs a global
+  actor.
+- Global scope is granted only by global actors: directly assigning a
+  system-wide role (including on invite and on reactivation) is refused for
+  tenant-scoped admins, and new accounts stay inside the creator's tenant.
+- Reactivating a suspended/revoked role or membership, or widening its
+  validity window, re-runs delegation containment; clearing a role's
+  `assignable_at_types` counts as widening.
+- ABAC condition writes are validated (operators, `user.` / `resource.` /
+  `env.` / `time.` attribute contexts, value types) and evaluation fails closed
+  on missing attributes and malformed stored rows.
+- Self-service email change is disabled by default; when a host enables it,
+  the request must re-authenticate with the current password.
 
 ## API keys
 

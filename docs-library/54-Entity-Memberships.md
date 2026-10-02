@@ -48,12 +48,13 @@ the same membership different windows.
 
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
-| `GET` | `/me` | Authenticated | Own memberships; `include_inactive` |
+| `GET` | `/me` | Authenticated | Own memberships; `include_inactive`. Rows include `entity_name`, `entity_display_name`, `entity_type` and `role_names` |
 | `POST` | `/` | Tree `membership:create` | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason` |
 | `GET` | `/entity/{entity_id}` | Tree `membership:read` | Members of one entity (paginated) |
-| `GET` | `/entity/{entity_id}/details` | Tree `membership:read` | Same + user/role summaries |
-| `GET` | `/user/{user_id}` | Tree / scoped read | User’s memberships (access reviews) |
-| `PATCH` | `/{entity_id}/{user_id}` | Tree `membership:update` | Replace roles, suspend/reactivate, set/clear windows (`null` clears) |
+| `GET` | `/entity/{entity_id}/details` | Tree `membership:read` | Same + user/role summaries (bare list) |
+| `GET` | `/entity/{entity_id}/members` | Tree `membership:read` | Paginated details envelope with `total`; optional `search` (email / name) |
+| `GET` | `/user/{user_id}` | `membership:read` + target in tenant scope | User’s memberships (access reviews). Out-of-scope users → 404 |
+| `PATCH` | `/{entity_id}/{user_id}` | Tree `membership:update` | Replace roles, suspend/reactivate, set/clear windows (`null` clears). Reactivating or widening the window re-runs role delegation checks |
 | `DELETE` | `/{entity_id}/{user_id}` | Tree `membership:delete` | Soft revoke → `revoked`; reactivate later with `PATCH` `status=active` |
 
 List/detail queries: `page`, `limit`, `include_inactive` (default false).

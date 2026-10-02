@@ -50,6 +50,12 @@ over querying closure yourself. Deeper write-up:
 Users get access via **memberships on entities**, not by appearing on the
 entity row alone — [Entity Memberships](./54-Entity-Memberships.md).
 
+An entity's `status` (`inactive`) and validity window do **not** suspend the
+access its members hold through their memberships — membership status and
+windows do that. They block entity-anchored API keys and integration
+principals (service accounts). Archiving an entity (`DELETE`) is different: it
+revokes the entity's memberships, anchored keys and principals.
+
 ---
 
 ## Permissions (short)
@@ -63,6 +69,15 @@ entity row alone — [Entity Memberships](./54-Entity-Memberships.md).
 Create under a parent uses tree create on that parent; root create falls back
 to a global create check.
 
+**Tenant scope (DD-061).** With `enforce_user_scope=True` (default) every entity
+route applies the same tenant scope as the user routes: non-global actors only
+list and open entities inside their resolved scope (their root tree plus
+membership subtrees), and out-of-scope entities answer **404**. Changes that
+create or remove a tenant — creating a root, moving an entity to the root
+level, archiving a root — require a global actor (superuser or active
+system-wide role holder) and answer **403** otherwise. Moving to the root level
+must also satisfy the configured root entity types.
+
 ---
 
 ## HTTP API
@@ -74,10 +89,10 @@ Paths relative to `/v1/entities`.
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/` | `entity:read` | Paginated active entities. Query: `search`, `entity_class`, `entity_type`, `parent_id`, `root_only`, `page`, `limit` |
-| `POST` | `/` | Tree `entity:create` on `parent_entity_id` (or global if root) | `EntityCreateRequest` → `EntityResponse` (201) |
+| `POST` | `/` | Tree `entity:create` on `parent_entity_id` (root create: global actor) | `EntityCreateRequest` → `EntityResponse` (201) |
 | `GET` | `/{entity_id}` | `entity:read` | `EntityResponse` |
 | `PATCH` | `/{entity_id}` | `entity:update` | Partial `EntityUpdateRequest` (identity / parent not renamed here) |
-| `DELETE` | `/{entity_id}` | `entity:delete` | Query `cascade` (default false) → 204 |
+| `DELETE` | `/{entity_id}` | `entity:delete` | Query `cascade` (default false) → 204. Archiving a root needs a global actor |
 
 ### Tree navigation
 
@@ -86,7 +101,7 @@ Paths relative to `/v1/entities`.
 | `GET` | `/{entity_id}/children` | `entity:read` | Direct active children |
 | `GET` | `/{entity_id}/descendants` | Tree `entity:read` | Subtree; optional `entity_type` filter |
 | `GET` | `/{entity_id}/path` | `entity:read` | Breadcrumb root → entity |
-| `POST` | `/{entity_id}/move` | Entity `entity:update`; tree create on new parent if set | `EntityMoveRequest` (`new_parent_id` optional → promote to root). Rewrites closure |
+| `POST` | `/{entity_id}/move` | Entity `entity:update`; tree create on new parent if set | `EntityMoveRequest` (`new_parent_id` optional → promote to root: global actor and an allowed root type). Rewrites closure |
 
 ### Create UX helper
 
@@ -120,7 +135,11 @@ Per-parent child rules still use the entity’s `allowed_child_*` fields.
 
 **`EntityResponse`:** `id`, `name`, `display_name`, `slug`, `description`,
 `entity_class`, `entity_type`, `parent_entity_id`, `status`, validity window,
-`allowed_child_classes` / `allowed_child_types`, optional naming governance.
+`allowed_child_classes` / `allowed_child_types`, optional naming governance,
+`created_at` / `updated_at` when loaded.
+
+Create, update (field-level diff), move and archive emit retained audit events
+(`category=entity`) — [Sessions & Audit](./05-Sessions-and-Audit.md).
 
 **`MemberResponse`:** `user_id`, email/names, `role_ids`, `role_names`.
 

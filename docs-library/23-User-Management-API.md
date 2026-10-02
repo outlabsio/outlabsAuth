@@ -53,7 +53,8 @@ Same router for both presets. Behavior depends on flags:
 | Concern | Behavior |
 |---------|----------|
 | **SimpleRBAC** (`enable_entity_hierarchy=False`) | Scope filtering is effectively off — list/get are system-wide for permitted actors |
-| **Enterprise** + `enforce_user_scope=True` (default) | Non-global actors only see/mutate users in their entity trees. Out of scope → **404** (not 403). Self always allowed |
+| **Enterprise** + `enforce_user_scope=True` (default) | Non-global actors only see/mutate users in their entity trees. Out of scope → **404** (not 403). Self always allowed. The same rule protects `GET /memberships/user/{id}`, `GET /permissions/user/{id}` and `POST /permissions/check` |
+| Global actors | Superusers and holders of an active **direct** system-wide role. Only a global actor may grant a system-wide role directly (`POST /{user_id}/roles`, invite without entity, reactivation) |
 | `root_entity_id` on list | Narrows within the actor’s scope; never widens it |
 | `/orphaned`, `/{id}/membership-history` | Meaningful when membership service exists (Enterprise); otherwise empty pages |
 
@@ -65,7 +66,7 @@ Set `enforce_user_scope=False` only as a transitional escape hatch.
 
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
-| `POST` | `/` | `user:create` | Admin create (not public register). Only superusers may set `is_superuser` |
+| `POST` | `/` | `user:create` | Admin create (not public register). Only superusers may set `is_superuser`. Tenant-scoped actors must name a `root_entity_id` inside their scope (403 otherwise); omitted, it defaults to the actor's own root |
 | `GET` | `/` | `user:read` | Paginated list. Query: `page`, `limit`, `search`, `status`, `is_superuser`, `root_entity_id` |
 | `GET` | `/{user_id}` | `user:read` | Single user (scoped) |
 | `PATCH` | `/{user_id}` | `user:update` | Admin profile update |
@@ -81,7 +82,8 @@ List `status` filter: `active` | `suspended` | `banned` | `deleted`.
 **Create body** (`UserCreateRequest`): email, password, optional names / phone /
 `is_superuser`.  
 **Update body** (`UserUpdateRequest`): email, names, phone (partial).  
-**Responses**: `UserResponse` (UUID `id`, profile fields, status flags).  
+**Responses**: `UserResponse` (UUID `id`, profile fields, status flags,
+`has_password` — false for OAuth-only, magic-link-only and invited accounts).  
 **List**: `PaginatedResponse[UserResponse]` (`items`, `total`, `page`, `limit`, `pages`).
 
 ---
@@ -91,7 +93,7 @@ List `status` filter: `active` | `suspended` | `banned` | `deleted`.
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | `GET` | `/me` | Authenticated | Own profile |
-| `PATCH` | `/me` | Authenticated | Own profile (`UserUpdateRequest`) |
+| `PATCH` | `/me` | Authenticated | Own profile (`SelfUserUpdateRequest`). Changing `email` is refused (403) unless the host sets `allow_self_service_email_change`; then `current_password` is required. Resending the unchanged email is accepted |
 | `POST` | `/me/change-password` | Authenticated | `ChangePasswordRequest` (current + new) → 204 |
 | `POST` | `/me/phone/request-code` | Authenticated | OTP to registered phone (rate-limited) → 204 |
 | `POST` | `/me/phone/verify-code` | Authenticated | `PhoneVerifyCodeRequest` → `UserResponse` |
@@ -106,9 +108,9 @@ Direct role memberships (flat RBAC and Enterprise “direct” roles):
 |--------|------|------------|-------|
 | `GET` | `/{user_id}/roles` | `user:read` | `?include_inactive` → `RoleResponse[]` |
 | `GET` | `/{user_id}/role-memberships` | `user:read` | Membership rows + embedded role |
-| `POST` | `/{user_id}/roles` | `user:update` | `AssignRoleRequest` → membership (201). Actor must hold all permissions on the role |
+| `POST` | `/{user_id}/roles` | `user:update` | `AssignRoleRequest` → membership (201). Actor must hold all permissions on the role; a system-wide role also needs a global actor |
 | `DELETE` | `/{user_id}/roles/{role_id}` | `user:update` | Soft-revoke |
-| `PATCH` | `/{user_id}/role-memberships/{membership_id}` | `user:update` | Validity window / status |
+| `PATCH` | `/{user_id}/role-memberships/{membership_id}` | `user:update` | Validity window / status. Reactivating or widening the window re-runs the assignment checks (403 with `details.missing_permissions`); suspending or narrowing never does |
 | `GET` | `/{user_id}/permissions` | Self **or** `user:read` | Effective perms: direct roles **and** entity-membership roles when present → `UserPermissionSource[]` |
 
 Entity-scoped role assignment (membership + roles on an entity) is **not** here —
@@ -120,7 +122,7 @@ use [Entity Memberships](./54-Entity-Memberships.md).
 
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
-| `GET` | `/orphaned` | `user:read` | Users with no active entity memberships. Empty for non-global scoped actors or without membership service |
+| `GET` | `/orphaned` | `user:read` | Users with no active entity memberships. Scoped actors see orphans rooted inside their scope. Soft-deleted users are excluded unless `?status=deleted` |
 | `GET` | `/{user_id}/membership-history` | `user:read` | Append-only entity membership lifecycle events |
 
 ---

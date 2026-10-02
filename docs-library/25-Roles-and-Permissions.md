@@ -37,17 +37,20 @@ app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
 | `GET` | `/{permission_id}` | `permission:read` | One permission |
 | `PATCH` | `/{permission_id}` | `permission:update` | Display/status/tags — **not** rename. System permissions rejected |
 | `DELETE` | `/{permission_id}` | `permission:delete` | System permissions rejected |
-| `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`) |
-| `GET` | `/user/{user_id}` | `permission:read` | Another user’s permission names |
-| `POST` | `/check` | `permission:check` | Batch check; optional `entity_id` for entity/tree context |
+| `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`); optional `entity_id` |
+| `GET` | `/user/{user_id}` | `permission:read` + target in tenant scope | Another user’s permission names; optional `entity_id`. Out-of-scope users → 404 |
+| `POST` | `/check` | `permission:check` + target in tenant scope | Batch check; optional `entity_id` for entity/tree context |
+| `GET` | `/{permission_id}/history` | `permission:read` | Append-only definition history |
 
 **Schemas:** `PermissionResponse`, `PermissionCreateRequest`,
 `PermissionUpdateRequest`, `PermissionCheckRequest` /
 `PermissionCheckResponse` (`has_all_permissions`, `results` map).
 
-> `/me` and `/user/{id}` accept `entity_id` in query today but the service path
-> may not apply it. For “can they do X **here**?”, prefer
-> `POST /check` with `entity_id`.
+> Without `entity_id`, `/me` and `/user/{id}` return the historical aggregate
+> (the union across contexts, `*:*` for superusers). With `entity_id` they
+> return the catalog permissions held **at that entity** — direct grants there
+> plus `_tree` / `_all` grants inherited from ancestors — the same semantics as
+> `POST /check`. Gate entity-level UI actions on the entity-context set.
 
 For effective permissions **with sources** (role vs membership), use
 `GET /v1/users/{id}/permissions` on the users router.
@@ -85,7 +88,8 @@ Rationale and history: DD-060 in `docs/DESIGN_DECISIONS.md`.
 | `GET` | `/` | `role:read` | Paginated. Query: `page`, `limit`, `search`, `is_global`, `root_entity_id` |
 | `POST` | `/` | `role:create` | `RoleCreateRequest`. Actor must already hold every permission they attach |
 | `GET` | `/{role_id}` | `role:read` | One role |
-| `PATCH` | `/{role_id}` | `role:update` | `RoleUpdateRequest`; `permissions` replaces the set when sent |
+| `PATCH` | `/{role_id}` | `role:update` | `RoleUpdateRequest`; `permissions` replaces the set when sent. Widening changes (activation, `is_global`, hierarchy scope, auto-assign, new or **cleared** `assignable_at_types`) re-run containment for the role's permissions |
+| `GET` | `/{role_id}/history` | `role:read` | Append-only definition history (visibility rules apply) |
 | `DELETE` | `/{role_id}` | `role:delete` | 204 |
 | `POST` | `/{role_id}/permissions` | `role:update` | Body: `list[str]` permission names to add |
 | `DELETE` | `/{role_id}/permissions` | `role:update` | Body: `list[str]` to remove |
@@ -108,7 +112,8 @@ Enterprise tips:
 - Non-global actors only manage roles in their trees; system-wide roles they
   cannot touch → **403**; out-of-tree → **404**
 - SimpleRBAC treats list/create visibility as effectively global
-- `assignable_at_types` limits which entity types may receive the role
+- `assignable_at_types` limits which entity types may receive the role; an
+  empty list means *assignable everywhere*, so clearing it counts as widening
 - `is_auto_assigned` can auto-apply on membership create/update
 
 ### ABAC on roles (when enabled)

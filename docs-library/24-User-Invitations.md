@@ -78,7 +78,14 @@ On accept: password stored, `email_verified=true`, invite token fields cleared.
 | `first_name` / `last_name` | No | |
 | `is_superuser` | No | Only current superusers may set |
 | `role_ids` | No | Without `entity_id`: direct roles. With `entity_id`: roles on that membership |
-| `entity_id` | No | Enterprise membership (needs membership service) |
+| `entity_id` | No | Enterprise membership (needs membership service); the first membership roots the invitee at that tree |
+
+Enterprise scope rules (DD-056): the inviter must hold every permission the
+roles carry; a **system-wide** role in `role_ids` without `entity_id` makes the
+invitee a global actor, so only a global inviter (superuser or system-wide role
+holder) may grant it (403 with `details.system_wide_role_ids`). Without
+`entity_id`, a tenant-scoped inviter's invitee is rooted at the inviter's own
+root so it stays visible to that tenant.
 
 **Accept** (`AcceptInviteRequest`): `token`, `new_password` (length policy enforced).
 

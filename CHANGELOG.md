@@ -5,6 +5,135 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a35] - 2026-10-02
+
+Admin-console hardening release: closes the backend scope and delegation gaps
+found by the console audit (DD-061) and adds the contract fields consoles need.
+Items marked **Breaking** are security fixes that change behavior for
+tenant-scoped administrators or ABAC policies; global actors (superusers and
+holders of a direct system-wide role) and SimpleRBAC are unaffected unless
+noted.
+
+### Security
+
+- **Breaking:** `GET /memberships/user/{user_id}`, `GET /permissions/user/{user_id}`
+  and `POST /permissions/check` apply the DD-056 target scope. A tenant-scoped
+  caller asking about a user outside its tenant gets **404**, identical to a
+  nonexistent user (unknown users on `/memberships/user/{id}` now also answer
+  404 instead of an empty list). Self-requests always pass.
+- **Breaking:** entity routes are tenant-scoped (DD-061). `GET /entities/`
+  lists only entities inside the caller's scope; get, children, path,
+  descendants, members, update, archive, move and type suggestions answer
+  **404** for out-of-scope entities. Creating a root entity, moving an entity
+  to the root level and archiving a root now require a global actor (**403**
+  otherwise), and a move to the root level must satisfy the configured root
+  entity types (**422** otherwise).
+- **Breaking:** directly granting a system-wide role — `POST /users/{id}/roles`,
+  `POST /auth/invite` without `entity_id`, or reactivating a direct role
+  membership — requires a global actor, because a direct system-wide role makes
+  its holder global (DD-056). Refusals answer 403 with
+  `details.system_wide_role_ids`.
+- **Breaking:** tenant-scoped actors can only root new accounts inside their
+  scope: `POST /users` with another tenant's `root_entity_id` answers 403; with
+  no root, the new account (and an invitee without an entity) inherits the
+  actor's own root instead of being created outside every tenant.
+- Reactivating a suspended/revoked direct role membership or entity membership,
+  or widening its validity window, re-runs SEC-2 delegation containment (403
+  with `details.missing_permissions`). Suspending or narrowing is never checked.
+- Clearing a role's `assignable_at_types` (which makes it assignable
+  everywhere) now counts as widening and requires containment; comparisons are
+  case-insensitive.
+- **Breaking:** ABAC condition writes (roles and permissions, HTTP and service
+  layer) reject unknown operators, attribute paths outside `user.` /
+  `resource.` / `env.` / `time.`, and values that do not fit the operator or
+  `value_type` (400 with `details.reason = invalid_abac_condition`). Operators
+  are stored lowercase.
+- **Breaking:** ABAC evaluation fails closed: a missing attribute no longer
+  satisfies `is_false`; `not_in` with a non-list value and `not_contains` on a
+  non-collection attribute evaluate false; a stored condition that cannot be
+  interpreted evaluates false instead of raising a 500.
+- **Breaking:** self-service email change is disabled by default.
+  `PATCH /users/me` with a different `email` answers 403
+  (`details.reason = self_service_email_change_disabled`) unless the host sets
+  `allow_self_service_email_change=True`, in which case the request must carry
+  `current_password` (422 when missing, 401 when wrong). Resending the
+  unchanged address is accepted; admin edits via `PATCH /users/{id}` are
+  unchanged.
+- `GET /users/orphaned` shows tenant-scoped actors the orphans rooted inside
+  their scope (it was always empty for them) and excludes soft-deleted
+  accounts unless `?status=deleted`; `status` filters by account status.
+
+### Added
+
+- `GET /auth/config` publishes `password_policy` (lengths, required character
+  classes and the exact `special_characters` set), `access_code_length`,
+  `registration_mode` (`open` | `invite_only` | `closed`) and
+  `self_service_email_change`; `features` gains `registration` and
+  `self_service_email_change`.
+- `enable_registration` config flag (default `True`). When `False`,
+  `POST /auth/register` answers 403 (`code: registration_disabled`) and OAuth
+  sign-in no longer creates new accounts.
+- Access tokens carry a `sid` claim (the session family). Session lists return
+  `is_current`, and `DELETE /users/me/sessions?keep_current=true` signs out
+  every other session.
+- OAuth account linking redirects failures back to the SPA with
+  `?link_error=<code>&provider=<name>` whenever a landing URL is known;
+  `get_oauth_associate_router` accepts an optional `error_redirect_url`.
+- `GET /admin/entities/{entity_id}/integration-principals/grantable-scopes` and
+  `GET /admin/system/integration-principals/grantable-scopes` expose the
+  system-integration grant policy for service-account scope pickers.
+- `GET /memberships/entity/{entity_id}/members`: paginated member details with
+  `total` and optional `search`.
+- `/permissions/me` and `/permissions/user/{id}` honor `entity_id` (permissions
+  effective at that entity, like `POST /permissions/check`); without it they
+  keep returning the historical aggregate.
+- `GET /roles/{role_id}/history` and `GET /permissions/{permission_id}/history`
+  expose the existing append-only definition history.
+- Retained audit events for entity create, update (field diff), move and
+  archive (`category=entity`) and entity-type configuration changes
+  (`category=config`).
+- Response fields: `has_password` on users; `entity_name`,
+  `entity_display_name`, `entity_type`, `role_names` and `updated_at` on
+  memberships; `updated_at` on entity member details; `created_at` /
+  `updated_at` on entities.
+
+### Changed
+
+- The example seeds now exercise every console persona and lifecycle state:
+  the EnterpriseRBAC seed installs the library permission catalog verbatim
+  (legacy `apikey:*` and `user:manage` are gone), scoped personas hold
+  org-scoped roles instead of direct system-wide roles (the permission catalog
+  admin is the one deliberately global persona), and memberships, direct roles,
+  API keys, service accounts, sessions, entities and ABAC conditions are seeded
+  in every state with fixtures that no longer expire. SimpleRBAC seeds a
+  non-superuser administrator.
+- Both example apps read `LOGIN_IP_RATE_LIMIT_MAX` /
+  `LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS`; the SimpleRBAC example's CORS allows the
+  `FRONTEND_URL` origin like the EnterpriseRBAC example; the example console
+  profile declares an account-linking landing.
+- The ABAC cookbook seeds through migrations with a valid secret and editable
+  ABAC definitions, and its smoke runs in release CI. The EnterpriseRBAC
+  integration suite adds tenant-scope checks (53 checks).
+
+### Database migrations
+
+- None.
+
+### Operational upgrade notes
+
+- Tenant-scoped admins that relied on cross-tenant entity, membership or
+  permission access, on creating/promoting/archiving roots, or on granting
+  system-wide roles directly need a global actor (a superuser assigns a
+  system-wide role) — see DD-061. `enforce_user_scope=False` still restores
+  the unscoped behavior for one more alpha cycle.
+- Review stored ABAC conditions: rows with legacy operators (for example
+  `eq`) or unsupported attribute contexts now evaluate false; rewrite them with
+  the documented operators and contexts.
+- Hosts that let users change their own email must opt in with
+  `allow_self_service_email_change=True` and send `current_password`.
+- Sessions created before the upgrade have no `sid`: they are never marked
+  current and cannot use `keep_current` until the user signs in again.
+
 ## [0.1.0a34] - 2026-08-23
 
 ### Fixed
