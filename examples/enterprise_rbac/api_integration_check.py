@@ -38,6 +38,7 @@ PERSONAS = {
     "auditor": "auditor@acme.com",
     "summit_agent": "agent@austin.summit.com",
     "summit_admin": "summit-admin@summit.com",
+    "permissions_admin": "permissions-admin@acme.com",
 }
 
 RESULTS: list[tuple[str, bool, str]] = []
@@ -584,6 +585,53 @@ def main() -> int:
         "other-root admin cannot invite into an ACME entity (404)",
         response.status_code == 404,
         f"http {response.status_code}",
+    )
+
+    # Another tenant's role cannot be granted directly either: to itself, or
+    # through an invite without an entity (both look like a missing role).
+    acme_admin_role = next((r for r in role_rows if r["name"] == "acme_org_admin"), None)
+    summit_me = client.get("/v1/users/me", headers=summit_headers).json()
+    response = client.post(
+        f"/v1/users/{summit_me.get('id')}/roles",
+        json={"role_id": (acme_admin_role or {}).get("id")},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot assign itself an ACME role (404)",
+        acme_admin_role is not None and response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.post(
+        "/v1/auth/invite",
+        json={
+            "email": f"cross-role-{uuid.uuid4().hex[:8]}@example.com",
+            "role_ids": [(acme_admin_role or {}).get("id")],
+        },
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot invite with an ACME role (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
+    # The permission catalog is shared by every tenant: the deliberately
+    # global catalog admin can still write it.
+    catalog_headers = {"Authorization": f"Bearer {tokens['permissions_admin']}"}
+    created = client.post(
+        "/v1/permissions/",
+        json={"name": f"smoke:{uuid.uuid4().hex[:8]}", "display_name": "Smoke"},
+        headers=catalog_headers,
+    )
+    deleted = (
+        client.delete(f"/v1/permissions/{created.json()['id']}", headers=catalog_headers)
+        if created.status_code == 201
+        else None
+    )
+    check(
+        "global catalog admin can create and delete a permission",
+        created.status_code == 201 and deleted is not None and deleted.status_code == 204,
+        f"create http {created.status_code}, delete http {getattr(deleted, 'status_code', None)}",
     )
 
     # The West Coast admin holds only org-scoped (never system-wide) roles, so
