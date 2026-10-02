@@ -20,7 +20,10 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   global administrators (or accounts with a dormant system-wide grant);
   personal API keys carry their owner's scope. Direct role grants are
   tenant-bound (404 for another tenant's role, org roles only to users rooted
-  in their organization) and the permission catalog is global-only.
+  in their organization) and the permission catalog is global-only. Accounts
+  are managed only by the tenant that holds their root: membership-only
+  visibility (unrooted legacy members, members of a subtree moved across
+  roots) is read-only.
 - ABAC condition writes are validated and evaluation fails closed.
 - Console contract additions: `/auth/config` password policy, access-code
   length and registration mode; session `is_current` via the `sid` claim and

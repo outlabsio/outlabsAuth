@@ -3582,8 +3582,10 @@ Entities do not store live direct permission grants. Access is granted through:
    The predicate is evaluated from the target side (O(target's memberships)) and deliberately NOT via
    `member_user_ids`, which omits root-assigned users that have no membership rows and enumerates every
    user in scope. Out-of-scope targets return **404** (anti-enumeration; the roles router was aligned
-   to the same contract in this change — see Consequences). Self-requests always pass. List/search
-   endpoints silently filter to actor scope;
+   to the same contract in this change — see Consequences). Self-requests always pass.
+   DD-061 decision 16 adds an ownership rule for mutations: the target's root must be the actor's
+   own root or lie below it (403 otherwise), so an account visible only through a membership is
+   read-only. List/search endpoints silently filter to actor scope;
    the `root_entity_id` param narrows within scope, never widens. Orphaned users (no root, no
    memberships) match only global scopes.
 
@@ -3917,6 +3919,17 @@ scheduled or suspended and inherit global scope once it activated. And the
 shared permission catalog (definitions and their ABAC conditions, which apply
 in every tenant) could be rewritten by any holder of `permission:update`.
 
+A third review found that visibility still implied ownership: the users
+router let a tenant admin modify any non-global account it could see, and an
+active membership in its scope was enough to see one. `add_member` keeps
+memberships in their holder's tree, but `move_entity` lets a global actor
+re-parent a populated subtree under another root (or promote it to a root)
+without re-rooting its members. The destination tenant's admins could then
+reset the passwords of the moved members — including the old tenant's org
+admins — and sign in as them; when the moved subtree became a root, its
+members could likewise take over the new tenant's accounts; and a tenant
+admin could adopt an unrooted legacy member through `POST /memberships`.
+
 ### Options Considered
 
 1. **Extend the DD-056 model to every route that exposes or changes the identity graph** (chosen)
@@ -4014,9 +4027,11 @@ in every tenant) could be rewritten by any holder of `permission:update`.
 11. **Tenant admins cannot adopt unaffiliated accounts.** `POST /memberships`
     requires the target user to be inside the actor's scope (rooted in it or
     holding an active membership in it); otherwise **404**, like a
-    nonexistent user. Adopting an account with no root — which DD-056 already
-    hides from tenant admins — is a global-actor operation, because the
-    tenant would gain control over that account (password, email, status).
+    nonexistent user. A visible account must also belong to the actor's
+    tenant (decision 16); otherwise **403**. Adopting an account with no
+    root — hidden from tenant admins unless it holds a membership in their
+    tree — is a global-actor operation, because the tenant would gain control
+    over that account (password, email, status).
 12. **Global-scope accounts are managed only by global actors.** The DD-056
     superuser-target guard now covers every account with a direct
     system-wide role row on every user mutation route (profile, password,
@@ -4043,14 +4058,34 @@ in every tenant) could be rewritten by any holder of `permission:update`.
     every actor and is enforced in `RoleService` too
     (`require_direct_role_root_match`), so a global actor cannot create a
     cross-tree direct grant by accident; a stored cross-tree row cannot be
-    reactivated or widened. Entity memberships remain the way to give a user
-    authority in another tree. Narrowing or suspending is never checked.
+    reactivated or widened. Memberships do not cross trees either
+    (`MembershipService.add_member` refuses a user rooted in another tree),
+    so authority in another tree needs a system-wide role from a global
+    actor. Narrowing or suspending is never checked.
 15. **The permission catalog is a platform object.** Permission definitions
     and their ABAC conditions and condition groups apply in every tenant, so
     with tenant scope enforced only a global actor (superuser, system-wide
     role holder, service token, unanchored integration principal) may create,
     update or delete them (**403** otherwise, like system-wide roles). Reads
     are unchanged.
+16. **An account is managed by the tenant that holds its root.** Visibility
+    (decision 2, the DD-056 predicate) is not ownership. With tenant scope
+    enforced, a non-global actor may change an account — every users-router
+    mutation (profile and email, password, status, restore, delete, invite
+    resend, direct role grants and revocations, role-membership updates,
+    session and API-key revocation) and `POST /memberships` — only when the
+    account's `root_entity_id` is the actor's own root or lies below it in
+    the entity tree; otherwise **403**. Memberships count on neither side: an
+    account seen only through a membership (an unrooted legacy member, or a
+    member of a subtree that a global actor moved under another root or to
+    the root level) stays readable but read-only, and an actor's own
+    membership in a moved subtree — even one promoted to a root — never makes
+    that tree its tenant. Unrooted non-global actors change no accounts. A
+    personal API key is judged by its owner's root (a global owner's anchored
+    key keeps its owner's reach); a principal without a user record by its
+    own scope. Self-requests and global actors are unaffected. In consistent
+    data a membership shares its holder's root, so this only differs from
+    visibility after a cross-root move or for legacy rows.
 
 ### Judgement calls (conservative, backward-compatible)
 
@@ -4082,9 +4117,31 @@ in every tenant) could be rewritten by any holder of `permission:update`.
   `details.missing_permissions` from delegation errors, which already carry it.
 - **No optimistic concurrency yet.** Responses now expose `updated_at`;
   `If-Match` / version preconditions are not introduced.
-- **Target scope, not a separate "unrooted" rule, gates `POST /memberships`.**
-  It also refuses unrooted accounts that hold memberships in another tenant,
-  and it matches what tenant admins can already see.
+- **Ownership, not visibility alone, gates `POST /memberships`.** The target
+  must be visible (404 otherwise, what tenant admins can already see) and
+  belong to the actor's tenant (403 otherwise, decision 16). Together they
+  refuse unrooted accounts, accounts rooted in another tenant and accounts
+  that only hold memberships in the actor's tree.
+- **Cross-root moves stay allowed and do not re-root members** (decision 16).
+  Refusing a global actor's move of a populated subtree would block
+  reorganizations; re-rooting its members would silently transfer accounts
+  whose other memberships and direct org roles stay in the old tree. Instead
+  the move hands over no accounts: members stay with their root tenant, and
+  the destination tenant reads them and manages only their memberships in
+  its own entities (suspend, revoke, its own roles). The memberships keep the
+  old tree's roles; reviewing those is left to the operator.
+- **A visible account that belongs elsewhere answers 403, not 404, on
+  writes.** The actor can already read it, so 404 would contradict `GET`
+  without hiding anything.
+- **Ownership follows the actor's root tree, not its resolved scope.** A
+  scope also holds membership subtrees; once a moved subtree becomes a root,
+  a member's scope contains that root, and a scope test would hand the new
+  tenant's accounts to the member. A root that a global actor moves under
+  another tenant's tree (a deliberate merge) makes its accounts part of the
+  containing tenant.
+- **Reads stay visibility-based.** The destination tenant of a move still
+  reads the moved members (profile, roles, memberships, sessions); hiding
+  them would hide members of its own entities.
 - **Anchored personal keys are intersected, not widened.** Before this
   release the roles router gave an anchored key its anchor scope only; it now
   gets the overlap of anchor and owner scope, never more than either. The
@@ -4129,7 +4186,9 @@ in every tenant) could be rewritten by any holder of `permission:update`.
   direct role no longer authorizes anything in another tenant, including host
   routes, and a tenant admin can no longer grant itself or anyone else
   another tenant's role; the shared permission catalog can only be changed by
-  a global actor.
+  a global actor; an account can only be changed by its own tenant, so a
+  cross-root move cannot hand one tenant's accounts or administrators to
+  another.
 - **Positive**: one error contract (404 out of scope, 403 for platform-level
   operations) across users, roles, memberships, permissions and entities.
 - **Negative (breaking for scoped admins)**: tenant-scoped actors lose
@@ -4141,7 +4200,8 @@ in every tenant) could be rewritten by any holder of `permission:update`.
   direct org-scoped role outside its own tree (including the "administration
   root" pattern DD-056 already moved to system-wide roles); direct org-scoped
   roles can no longer be assigned to users rooted elsewhere or unrooted, by
-  anyone; out-of-scope entities
+  anyone; accounts seen only through a membership are read-only for tenant
+  admins, and unrooted tenant admins change no accounts; out-of-scope entities
   answer 404 on entity-keyed routes that used to answer 403; ABAC policies
   that relied on fail-open evaluation now deny. Global actors and SimpleRBAC
   are unaffected.
@@ -4158,7 +4218,9 @@ in every tenant) could be rewritten by any holder of `permission:update`.
   anchors), target predicate, `entity_scope_guard`, global-account
   (`user_is_global_account`) and system-wide grant guards, the shared role
   visibility predicate and direct-grant rules
-  (`require_direct_role_grants_in_scope`), scoped root resolution
+  (`require_direct_role_grants_in_scope`), account ownership
+  (`account_in_users_tenant`, `require_account_managed_by_principal`),
+  scoped root resolution
 - `outlabs_auth/services/role.py` (`require_direct_role_root_match`, also run
   on reactivation), `outlabs_auth/services/access_scope.py`
   (`user_has_system_wide_role_grant`), `outlabs_auth/utils/lifecycle.py`
@@ -4183,5 +4245,5 @@ in every tenant) could be rewritten by any holder of `permission:update`.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only)
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root)
 **Next Review**: After testing all examples

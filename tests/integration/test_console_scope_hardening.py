@@ -1649,3 +1649,284 @@ async def test_permission_catalog_writes_need_a_global_actor(client, auth_instan
     assert (await client.delete(f"{base}/condition-groups/{group_id}", headers=catalog)).status_code == 204
     assert (await client.delete(f"{base}/conditions/{condition_id}", headers=catalog)).status_code == 204
     assert (await client.delete(f"/v1/permissions/{created.json()['id']}", headers=catalog)).status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Review round 4 (DD-061 decision 16): visibility through a membership never
+# hands an account rooted in another tenant to that tenant
+# ---------------------------------------------------------------------------
+
+
+def _account_mutations(
+    user_id: Any,
+    *,
+    grant_role_id: Any,
+    held_role_id: Any,
+    role_membership_id: Any,
+) -> list[tuple[str, str, Any]]:
+    """Every users-router mutation of one account (the DD-056 ``for_mutation`` routes)."""
+    base = f"/v1/users/{user_id}"
+    return [
+        ("PATCH", base, {"first_name": "Owned"}),
+        ("PATCH", base, {"email": f"owned-{_suffix()}@example.com"}),
+        ("PATCH", f"{base}/password", {"new_password": "Hijacked123!x"}),
+        ("PATCH", f"{base}/status", {"status": "suspended"}),
+        ("POST", f"{base}/restore", None),
+        ("POST", f"{base}/resend-invite", None),
+        ("POST", f"{base}/roles", {"role_id": str(grant_role_id)}),
+        ("DELETE", f"{base}/roles/{held_role_id}", None),
+        ("PATCH", f"{base}/role-memberships/{role_membership_id}", {"status": "suspended"}),
+        ("DELETE", f"{base}/sessions/{uuid.uuid4()}", None),
+        ("DELETE", f"{base}/sessions", None),
+        ("DELETE", f"{base}/api-keys/{uuid.uuid4()}", None),
+        ("DELETE", base, None),
+    ]
+
+
+async def _assert_account_untouched(client, auth, user, *, password: str = "TestPass123!") -> None:
+    hijacked = await client.post("/v1/auth/login", json={"email": user.email, "password": "Hijacked123!x"})
+    assert hijacked.status_code == 401, hijacked.text
+    original = await client.post("/v1/auth/login", json={"email": user.email, "password": password})
+    assert original.status_code == 200, original.text
+    async with auth.get_session() as session:
+        current = await auth.user_service.get_user_by_id(session, user.id)
+        assert current.email == user.email
+        assert current.first_name == user.first_name
+        assert str(getattr(current.status, "value", current.status)) == "active"
+        assert current.deleted_at is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["under_another_root", "to_the_root_level"])
+async def test_cross_root_move_does_not_hand_accounts_to_the_new_tenant(client, auth_instance, world, destination):
+    auth = auth_instance
+    async with auth.get_session() as session:
+        # A tenant-A branch ("organization", so it may also become a root) with
+        # tenant A's second org admin (direct org role) and a plain member.
+        branch = await _entity(
+            auth, session, label="branch-a", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        admin_a2 = await _user(auth, session, prefix="admin-a2", root_entity_id=world["root_a"].id)
+        a2_grant = await auth.role_service.assign_role_to_user(
+            session, user_id=admin_a2.id, role_id=world["scoped_role"].id
+        )
+        member_a = await _user(auth, session, prefix="member-a", root_entity_id=world["root_a"].id)
+        for account in (admin_a2, member_a):
+            await auth.membership_service.add_member(
+                session, entity_id=branch.id, user_id=account.id, role_ids=[world["member_role_a"].id]
+            )
+        await session.commit()
+
+    super_headers = _headers(auth, world["superuser"].id)
+    if destination == "under_another_root":
+        new_root_id = world["root_b"].id
+        body = {"new_parent_id": str(new_root_id)}
+    else:
+        new_root_id = branch.id
+        body = {"new_parent_id": None}
+    moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    assert moved.status_code == 200, moved.text
+
+    # The destination tenant's admin (direct org role at the new root) and one
+    # of its own accounts.
+    async with auth.get_session() as session:
+        new_admin = await _user(auth, session, prefix="new-tenant-admin", root_entity_id=new_root_id)
+        new_admin_role = await _role(auth, session, permissions=ADMIN_PERMISSIONS, root_entity_id=new_root_id)
+        await auth.role_service.assign_role_to_user(session, user_id=new_admin.id, role_id=new_admin_role.id)
+        new_tenant_user = await _user(auth, session, prefix="new-tenant-user", root_entity_id=new_root_id)
+        await session.commit()
+    new_admin_headers = _headers(auth, new_admin.id)
+
+    # Tenant A's members are now visible to the destination tenant through
+    # their memberships in the moved subtree (reads are unchanged) ...
+    for member in (admin_a2, member_a):
+        read = await client.get(f"/v1/users/{member.id}", headers=new_admin_headers)
+        assert read.status_code == 200, read.text
+        assert read.json()["root_entity_id"] == str(world["root_a"].id)
+
+    # ... but the destination tenant cannot modify accounts rooted in tenant A.
+    for member, grant in ((admin_a2, a2_grant), (member_a, None)):
+        for method, path, payload in _account_mutations(
+            member.id,
+            grant_role_id=new_admin_role.id,
+            held_role_id=world["scoped_role"].id,
+            role_membership_id=grant.id if grant is not None else uuid.uuid4(),
+        ):
+            response = await client.request(method, path, headers=new_admin_headers, json=payload)
+            assert response.status_code == 403, (destination, member.email, method, path, response.text)
+            assert "own tenant" in response.text, response.text
+        # Nor pull them into one of its entities.
+        pulled = await client.post(
+            "/v1/memberships/",
+            headers=new_admin_headers,
+            json={"entity_id": str(new_root_id), "user_id": str(member.id), "role_ids": []},
+        )
+        assert pulled.status_code == 403, pulled.text
+        await _assert_account_untouched(client, auth, member)
+    async with auth.get_session() as session:
+        roles = await auth.role_service.get_user_roles(session, admin_a2.id)
+        assert world["scoped_role"].id in {role.id for role in roles}
+        memberships, _ = await auth.membership_service.get_user_entities(session, user_id=admin_a2.id)
+        assert [membership.entity_id for membership in memberships] == [branch.id]
+
+    # The reverse direction: the destination tenant adds one of its own
+    # accounts to the moved entity (positive: still allowed) ...
+    added = await client.post(
+        "/v1/memberships/",
+        headers=new_admin_headers,
+        json={"entity_id": str(branch.id), "user_id": str(new_tenant_user.id), "role_ids": []},
+    )
+    assert added.status_code == 201, added.text
+    # ... which tenant A's admin, a member of that entity, can now read but not modify.
+    a2_headers = _headers(auth, admin_a2.id)
+    assert (await client.get(f"/v1/users/{new_tenant_user.id}", headers=a2_headers)).status_code == 200
+    reverse = await client.patch(
+        f"/v1/users/{new_tenant_user.id}/password", headers=a2_headers, json={"new_password": "Hijacked123!x"}
+    )
+    assert reverse.status_code == 403, reverse.text
+    await _assert_account_untouched(client, auth, new_tenant_user)
+
+    # Positive: the destination tenant still manages its own accounts, and the
+    # memberships of tenant A's accounts in its own entities.
+    own = await client.patch(
+        f"/v1/users/{new_tenant_user.id}/status", headers=new_admin_headers, json={"status": "suspended"}
+    )
+    assert own.status_code == 200, own.text
+    membership = await client.patch(
+        f"/v1/memberships/{branch.id}/{member_a.id}", headers=new_admin_headers, json={"status": "suspended"}
+    )
+    assert membership.status_code == 200, membership.text
+
+    # Positive: tenant A's admin and global actors still manage the moved members.
+    scoped = _headers(auth, world["scoped_admin"].id)
+    reset = await client.patch(
+        f"/v1/users/{admin_a2.id}/password", headers=scoped, json={"new_password": "Rotated123!x"}
+    )
+    assert reset.status_code == 204, reset.text
+    assert (
+        await client.post("/v1/auth/login", json={"email": admin_a2.email, "password": "Rotated123!x"})
+    ).status_code == 200
+    suspended = await client.patch(f"/v1/users/{member_a.id}/status", headers=scoped, json={"status": "suspended"})
+    assert suspended.status_code == 200, suspended.text
+    for headers, new_status in (
+        (_headers(auth, world["global_admin"].id), "active"),
+        (super_headers, "suspended"),
+    ):
+        by_global = await client.patch(f"/v1/users/{member_a.id}/status", headers=headers, json={"status": new_status})
+        assert by_global.status_code == 200, by_global.text
+        by_global_reset = await client.patch(
+            f"/v1/users/{admin_a2.id}/password", headers=headers, json={"new_password": "Global123!x"}
+        )
+        assert by_global_reset.status_code == 204, by_global_reset.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_membership_only_visibility_is_read_only_for_tenant_admins(client, auth_instance, world):
+    from sqlalchemy import update
+
+    from outlabs_auth.models.sql.user import User
+
+    auth = auth_instance
+    async with auth.get_session() as session:
+        # An account that predates the root rule: a member of tenant A's team
+        # but rooted nowhere (add_member roots it, so clear the root afterwards).
+        legacy = await _user(auth, session, prefix="legacy")
+        await auth.membership_service.add_member(session, entity_id=world["child_a"].id, user_id=legacy.id, role_ids=[])
+        await session.execute(update(User).where(User.id == legacy.id).values(root_entity_id=None))
+        await session.commit()
+        legacy = await auth.user_service.get_user_by_id(session, legacy.id)
+        assert legacy.root_entity_id is None
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    # Visible through its membership ...
+    assert (await client.get(f"/v1/users/{legacy.id}", headers=scoped)).status_code == 200
+    # ... but read-only for the tenant admin: no takeover ...
+    for method, path, payload in _account_mutations(
+        legacy.id,
+        grant_role_id=world["member_role_a"].id,
+        held_role_id=world["member_role_a"].id,
+        role_membership_id=uuid.uuid4(),
+    ):
+        response = await client.request(method, path, headers=scoped, json=payload)
+        assert response.status_code == 403, (method, path, response.text)
+    await _assert_account_untouched(client, auth, legacy)
+    # ... and no adoption: POST /memberships would root it in tenant A.
+    adopt = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["root_a"].id), "user_id": str(legacy.id), "role_ids": []},
+    )
+    assert adopt.status_code == 403, adopt.text
+    async with auth.get_session() as session:
+        assert (await auth.user_service.get_user_by_id(session, legacy.id)).root_entity_id is None
+
+    # Positive: the account still manages itself.
+    self_update = await client.patch("/v1/users/me", headers=_headers(auth, legacy.id), json={"first_name": "Self"})
+    assert self_update.status_code == 200, self_update.text
+
+    # Positive: a global actor manages and adopts it.
+    global_headers = _headers(auth, world["global_admin"].id)
+    by_global = await client.patch(
+        f"/v1/users/{legacy.id}/password", headers=global_headers, json={"new_password": "Global123!x"}
+    )
+    assert by_global.status_code == 204, by_global.text
+    adopted = await client.post(
+        "/v1/memberships/",
+        headers=global_headers,
+        json={"entity_id": str(world["root_a"].id), "user_id": str(legacy.id), "role_ids": []},
+    )
+    assert adopted.status_code == 201, adopted.text
+    async with auth.get_session() as session:
+        assert (await auth.user_service.get_user_by_id(session, legacy.id)).root_entity_id == world["root_a"].id
+
+    # Once rooted in tenant A, the tenant admin manages it like any other account.
+    managed = await client.patch(f"/v1/users/{legacy.id}/status", headers=scoped, json={"status": "suspended"})
+    assert managed.status_code == 200, managed.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_anchored_personal_keys_add_members_of_their_owners_tenant_only(client, auth_instance, world):
+    from sqlalchemy import update
+
+    from outlabs_auth.models.sql.user import User
+
+    auth = auth_instance
+    # A host that lets personal keys create memberships.
+    auth.api_key_policy_service._personal_allowed_action_prefixes.append("create")
+    async with auth.get_session() as session:
+        legacy = await _user(auth, session, prefix="legacy-member")
+        await auth.membership_service.add_member(session, entity_id=world["child_a"].id, user_id=legacy.id, role_ids=[])
+        await session.execute(update(User).where(User.id == legacy.id).values(root_entity_id=None))
+        secret, _ = await auth.api_key_service.create_api_key(
+            session,
+            owner_id=world["scoped_admin"].id,
+            name=f"team-key-{_suffix()}",
+            scopes=["membership:create_tree"],
+            entity_id=world["child_a"].id,
+            actor_user_id=world["scoped_admin"].id,
+        )
+        await session.commit()
+    key = {"X-API-Key": secret}
+
+    # Positive: the anchor narrows where the key acts, not whose accounts its
+    # owner's tenant manages, so a tenant-A member of the anchor is accepted
+    # although its root lies outside the anchor's subtree.
+    own = await client.post(
+        "/v1/memberships/",
+        headers=key,
+        json={"entity_id": str(world["child_a"].id), "user_id": str(world["user_a"].id), "role_ids": []},
+    )
+    assert own.status_code == 201, own.text
+
+    # Negative: an account seen only through its membership is not adopted.
+    adopt = await client.post(
+        "/v1/memberships/",
+        headers=key,
+        json={"entity_id": str(world["child_a"].id), "user_id": str(legacy.id), "role_ids": []},
+    )
+    assert adopt.status_code == 403, adopt.text
+    async with auth.get_session() as session:
+        assert (await auth.user_service.get_user_by_id(session, legacy.id)).root_entity_id is None

@@ -32,6 +32,26 @@ noted.
   no longer pull an unaffiliated account — for example an unrooted holder of a
   system-wide role — into its tenant and then take it over; adopting such
   accounts needs a global actor.
+- **Breaking:** an account is managed only by its own tenant. For a
+  non-global actor, every user mutation route (`PATCH /users/{id}`,
+  `PATCH /users/{id}/password`, `PATCH /users/{id}/status`,
+  `POST /users/{id}/restore`, `DELETE /users/{id}`,
+  `POST /users/{id}/resend-invite`, `POST`/`DELETE /users/{id}/roles...`,
+  `PATCH /users/{id}/role-memberships/{id}`, session and API-key revocation)
+  and `POST /memberships` now answer **403** unless the target account's root
+  is the actor's own root or lies below it. Visibility is unchanged: an
+  account seen only through an active membership in the actor's scope — an
+  unrooted legacy member, or a member of a subtree that a global actor moved
+  under another root or to the root level — stays readable. Before, that
+  membership was enough to modify the account: after a superuser moved a
+  populated subtree under another tenant's root, the destination tenant's
+  admins could reset the passwords of the moved members, including the old
+  tenant's org admins, and sign in as them; a member of a moved subtree that
+  became a root could likewise take over the new tenant's accounts; and a
+  tenant admin could adopt an unrooted legacy member through
+  `POST /memberships`. Unrooted non-global actors no longer modify any
+  account. A personal API key is judged by its owner's root, so an entity
+  anchor does not stop it from adding its owner's tenant members it can see.
 - **Breaking:** the superuser-target guard now also protects every account
   with a direct system-wide role row — active, scheduled (`valid_from` in the
   future), suspended, expired or revoked, whatever the role definition's
@@ -211,13 +231,29 @@ noted.
   role's tree but can no longer be assigned, reactivated or widened. Find them
   with `SELECT m.id FROM user_role_memberships m JOIN roles r ON r.id =
   m.role_id JOIN users u ON u.id = m.user_id WHERE r.root_entity_id IS NOT
-  NULL AND r.root_entity_id IS DISTINCT FROM u.root_entity_id` and move that
-  access to entity memberships.
+  NULL AND r.root_entity_id IS DISTINCT FROM u.root_entity_id`. An unrooted
+  holder can move that access to entity memberships in the role's tree (its
+  first membership roots it there); a holder rooted in another tree cannot,
+  because memberships never cross trees either.
 - Accounts that have ever held a direct system-wide role (any row, including
   revoked ones) are now managed by global actors only.
 - Users who authorized work in other trees through a direct org-scoped role
   (for example an "administration" root whose org role managed other
-  tenants) need a system-wide role, or memberships in the trees they manage.
+  tenants) need a system-wide role: `MembershipService.add_member` refuses a
+  user rooted in another tree, so memberships cannot carry authority across
+  trees.
+- Accounts are managed by the tenant that holds their root. Moving an entity
+  across roots (or to the root level) does not re-root its members: their
+  root tenant keeps managing them, the destination tenant sees them
+  read-only through their memberships, and only global actors manage them
+  from there. Unrooted legacy accounts with memberships are likewise
+  read-only for tenant admins until a global actor roots them (adding a
+  membership with `POST /memberships` roots an unrooted account in that
+  entity's tree), and unrooted non-global administrators can no longer modify
+  accounts. Find such members with `SELECT m.id FROM entity_memberships m
+  JOIN users u ON u.id = m.user_id WHERE u.root_entity_id IS NULL OR NOT
+  EXISTS (SELECT 1 FROM entity_closure c WHERE c.ancestor_id =
+  u.root_entity_id AND c.descendant_id = m.entity_id)`.
 - Permission-check verdicts cached before the upgrade can still allow a
   cross-tree entity check until they expire (`cache_permission_ttl`, 15
   minutes by default). Run

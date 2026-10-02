@@ -49,7 +49,7 @@ the same membership different windows.
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/me` | Authenticated | Own memberships; `include_inactive`. Rows include `entity_name`, `entity_display_name`, `entity_type` and `role_names` |
-| `POST` | `/` | Tree `membership:create` + entity and user in tenant scope | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason`. Out-of-scope entity or user → 404; adopting an account with no tenant needs a global actor |
+| `POST` | `/` | Tree `membership:create` + entity and user in tenant scope | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason`. Out-of-scope entity or user → 404; a visible user that does not belong to the actor's tenant (rooted elsewhere or unrooted, seen only through a membership) → 403, so adopting such an account needs a global actor |
 | `GET` | `/entity/{entity_id}` | Tree `membership:read` | Members of one entity (paginated) |
 | `GET` | `/entity/{entity_id}/details` | Tree `membership:read` | Same + user/role summaries (bare list) |
 | `GET` | `/entity/{entity_id}/members` | Tree `membership:read` | Paginated details envelope with `total`; optional `search` (email / name) |

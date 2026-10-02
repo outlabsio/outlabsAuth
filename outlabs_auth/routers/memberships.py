@@ -21,6 +21,7 @@ from outlabs_auth.routers._authz_utils import (
 from outlabs_auth.routers._scope import (
     entity_scope_guard,
     get_visible_user_or_404,
+    require_account_managed_by_principal,
     resolve_principal_scope,
     scope_enforced,
 )
@@ -167,16 +168,19 @@ def get_memberships_router(
         DD-061: a tenant-scoped actor can only add users it can already see
         (rooted in, or a member of, its scope) to entities inside its scope
         (the entity is checked by ``entity_scope_guard``). Both answer 404
-        otherwise, exactly like nonexistent IDs. Pulling an unaffiliated
+        otherwise, exactly like nonexistent IDs. A visible account must also
+        be *rooted* in the actor's tenant (decision 16): one seen only through
+        a membership answers 403. Pulling an unaffiliated or foreign-rooted
         account into a tenant is a global-actor operation: it would hand the
         tenant control over that account.
         """
         if scope_enforced(auth):
             actor_scope = await resolve_principal_scope(auth, session, auth_result)
             if not actor_scope.get("is_global"):
-                await get_visible_user_or_404(
+                target_user = await get_visible_user_or_404(
                     auth, session, auth_result, UUID(data.user_id), scope=actor_scope
                 )
+                await require_account_managed_by_principal(auth, session, auth_result, target_user, scope=actor_scope)
         role_ids = [UUID(rid) for rid in data.role_ids]
         auto_roles = await auth.membership_service.get_auto_assigned_roles_for_entity(session, UUID(data.entity_id))
         containment_role_ids = list({*role_ids, *(role.id for role in auto_roles)})

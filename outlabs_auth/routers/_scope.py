@@ -9,7 +9,10 @@ routes. Keeping the predicate in one module guarantees a single contract:
   platform-global integration principals, service tokens) span every tree;
 * everyone else sees only the entities in their resolved access scope and the
   users rooted in, or holding an active membership in, those entities;
-* out-of-scope targets answer **404**, indistinguishable from nonexistent ones.
+* out-of-scope targets answer **404**, indistinguishable from nonexistent ones;
+* only accounts of the actor's own tenant (rooted at or below the actor's
+  root) can be modified: an account seen through a membership alone is
+  read-only (**403**, DD-061 decision 16).
 """
 
 from __future__ import annotations
@@ -19,10 +22,11 @@ from typing import Any, Callable, Iterable, Optional, cast
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import PermissionDeniedError
+from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.role import Role
@@ -250,6 +254,108 @@ async def target_user_in_scope(
     result = await session.execute(stmt)
     target_entity_ids = {str(entity_id) for (entity_id,) in result.all() if entity_id is not None}
     return bool(target_entity_ids & entity_ids)
+
+
+def target_user_rooted_in_scope(target_user: Any, scope: dict[str, Any]) -> bool:
+    """Whether a principal scope holds the account's root entity.
+
+    Used for principals without a user record (their scope *is* their
+    tenant). Human actors are judged by :func:`account_in_users_tenant`.
+    """
+    if scope.get("is_global"):
+        return True
+    root_entity_id = getattr(target_user, "root_entity_id", None)
+    return root_entity_id is not None and str(root_entity_id) in scope_entity_ids(scope)
+
+
+async def account_in_users_tenant(session: AsyncSession, actor_user: Any, target_user: Any) -> bool:
+    """Whether ``target_user`` belongs to ``actor_user``'s own tenant (DD-061 decision 16).
+
+    :func:`target_user_in_scope` decides *visibility*: a user rooted in the
+    actor's scope or holding an active membership in it. *Managing* an account
+    (password, email, status, grants, sessions, keys, adoption into a tenant)
+    needs more: the account belongs to the tenant whose tree contains its
+    root entity, so its root must be the actor's own root or lie below it.
+
+    Memberships never count here, on either side. An account seen only through
+    a membership (an unrooted legacy account, or a member of a subtree that a
+    global actor moved under another root) stays readable but is not
+    modifiable, and an actor's membership in a moved subtree (even one promoted
+    to a root) never makes that tree its tenant. An unrooted actor manages no
+    accounts. In consistent data, memberships share their holder's root
+    (``MembershipService.add_member``), so this only differs from the
+    visibility predicate after a cross-root move or for legacy rows.
+    """
+    actor_root_entity_id = getattr(actor_user, "root_entity_id", None)
+    target_root_entity_id = getattr(target_user, "root_entity_id", None)
+    if actor_root_entity_id is None or target_root_entity_id is None:
+        return False
+    if str(actor_root_entity_id) == str(target_root_entity_id):
+        return True
+    stmt = (
+        select(literal(True))
+        .select_from(EntityClosure)
+        .where(
+            cast(Any, EntityClosure.ancestor_id) == actor_root_entity_id,
+            cast(Any, EntityClosure.descendant_id) == target_root_entity_id,
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).first() is not None
+
+
+def account_managed_elsewhere() -> HTTPException:
+    """403 for a visible account that belongs to another tenant (DD-061 decision 16)."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only the account's own tenant or a global administrator can modify this account",
+    )
+
+
+async def require_account_managed_by_principal(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: Optional[dict[str, Any]],
+    target_user: Any,
+    *,
+    scope: dict[str, Any],
+) -> None:
+    """403 unless the target account belongs to the principal's tenant.
+
+    Call after the visibility check (:func:`get_visible_user_or_404`) on a
+    write outside the users router that hands a tenant control over an
+    existing account (``POST /memberships``). Self-requests pass. A human —
+    including the owner behind a personal API key, whose entity anchor narrows
+    *where* the key acts, not *whose* accounts its owner's tenant manages — is
+    judged by :func:`account_in_users_tenant`; a global owner's anchored key
+    keeps its owner's reach. A principal without a user record is judged by
+    its own scope.
+    """
+    if not scope_enforced(auth) or scope.get("is_global"):
+        return
+    auth_result = auth_result or {}
+    actor_user_id = auth_result.get("user_id")
+    if actor_user_id is not None and str(actor_user_id) == str(target_user.id):
+        return
+    actor_user = auth_result.get("user")
+    if actor_user is None and actor_user_id is not None:
+        try:
+            actor_user = await auth.user_service.get_user_by_id(session, UUID(str(actor_user_id)))
+        except (TypeError, ValueError):
+            actor_user = None
+    if actor_user is not None:
+        if await account_in_users_tenant(session, actor_user, target_user):
+            return
+        if auth_result.get("source") == "api_key":
+            if bool(getattr(actor_user, "is_superuser", False)):
+                return
+            owner_scope = await resolve_user_scope(auth, session, actor_user)
+            if owner_scope.get("is_global"):
+                return
+        raise account_managed_elsewhere()
+    if actor_user_id is None and target_user_rooted_in_scope(target_user, scope):
+        return
+    raise account_managed_elsewhere()
 
 
 def user_not_found() -> HTTPException:

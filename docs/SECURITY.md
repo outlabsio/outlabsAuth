@@ -86,6 +86,11 @@ The core trust boundaries are:
   inside their scope, and out-of-scope targets answer 404 like nonexistent
   ones. Creating, promoting to, or archiving a root entity needs a global
   actor.
+- Seeing an account is not owning it: only the tenant that holds an account's
+  root (or a global actor) can modify it or add it to an entity. An account
+  visible only through a membership — for example a member of a subtree a
+  superuser moved under another tenant — is read-only (403), so a cross-root
+  move cannot hand one tenant's accounts, or its administrators, to another.
 - Global scope is granted only by global actors: directly assigning a
   system-wide role (including on invite and on reactivation) is refused for
   tenant-scoped admins, and new accounts stay inside the creator's tenant.

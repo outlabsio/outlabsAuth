@@ -46,6 +46,8 @@ from outlabs_auth.routers._authz_utils import (
     require_can_delegate_direct_roles,
 )
 from outlabs_auth.routers._scope import (
+    account_in_users_tenant,
+    account_managed_elsewhere,
     require_direct_role_grants_in_scope,
     resolve_root_for_scoped_create,
     resolve_user_scope,
@@ -176,6 +178,14 @@ def get_users_router(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found",
             )
+
+        # DD-061 decision 16: visibility through a membership is not
+        # ownership. An account belongs to the tenant whose tree holds its
+        # root; one seen only through a membership (an unrooted legacy
+        # account, or a member of a subtree a global actor moved under
+        # another root) is read-only here, or that tenant could take it over.
+        if for_mutation and not await account_in_users_tenant(session, actor_user, target_user):
+            raise account_managed_elsewhere()
 
         if for_mutation and bool(getattr(target_user, "is_superuser", False)):
             raise HTTPException(

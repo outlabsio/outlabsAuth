@@ -80,6 +80,16 @@ level, archiving a root — require a global actor (superuser or active
 system-wide role holder) and answer **403** otherwise. Moving to the root level
 must also satisfy the configured root entity types.
 
+**Moves do not re-root members.** An account belongs to the tenant whose tree
+holds its root (DD-061 decision 16). When a global actor moves a subtree under
+another root, or promotes it to a root, its members keep their old root: their
+root tenant keeps managing them, while the destination tenant sees them only
+through their memberships and gets **403** on every account change (password,
+email, status, roles, sessions, keys) and on adding them elsewhere; it can
+still suspend or revoke their memberships in its own entities. Likewise, a
+member of the moved subtree gains no control over the destination tenant's
+accounts. Memberships keep their roles; review them after such a move.
+
 ---
 
 ## HTTP API
