@@ -54,7 +54,7 @@ Same router for both presets. Behavior depends on flags:
 |---------|----------|
 | **SimpleRBAC** (`enable_entity_hierarchy=False`) | Scope filtering is effectively off — list/get are system-wide for permitted actors |
 | **Enterprise** + `enforce_user_scope=True` (default) | Non-global actors only see/mutate users in their entity trees. Out of scope → **404** (not 403). Self always allowed. The same rule protects `GET /memberships/user/{id}`, `GET /permissions/user/{id}` and `POST /permissions/check` |
-| Global actors | Superusers and holders of an active **direct** system-wide role. Only a global actor may grant a system-wide role directly (`POST /{user_id}/roles`, invite without entity, reactivation), and only a global actor may mutate a global actor's account (profile, password, status, delete, roles, sessions, API keys → 403 for tenant admins; reads stay allowed) |
+| Global actors | Superusers and holders of an active **direct** system-wide role. Only a global actor may grant a system-wide role directly (`POST /{user_id}/roles`, invite without entity, reactivation), and only a global actor may mutate a global actor's account (profile, password, status, delete, roles, sessions, API keys → 403 for tenant admins; reads stay allowed). That includes any account with a direct system-wide role row that is scheduled, suspended, expired or revoked, since it can become active later |
 | `root_entity_id` on list | Narrows within the actor’s scope; never widens it |
 | `/orphaned`, `/{id}/membership-history` | Meaningful when membership service exists (Enterprise); otherwise empty pages |
 
@@ -108,9 +108,9 @@ Direct role memberships (flat RBAC and Enterprise “direct” roles):
 |--------|------|------------|-------|
 | `GET` | `/{user_id}/roles` | `user:read` | `?include_inactive` → `RoleResponse[]` |
 | `GET` | `/{user_id}/role-memberships` | `user:read` | Membership rows + embedded role |
-| `POST` | `/{user_id}/roles` | `user:update` | `AssignRoleRequest` → membership (201). Actor must hold all permissions on the role; a system-wide role also needs a global actor |
+| `POST` | `/{user_id}/roles` | `user:update` | `AssignRoleRequest` → membership (201). Actor must hold all permissions on the role where it takes effect (an org-scoped role: at its root). Enterprise: a system-wide role needs a global actor (403); a role outside the actor's scope answers 404 like a missing one; an org-scoped role only goes to a user rooted in its organization (422, `details.reason = role_root_mismatch`, for every actor) |
 | `DELETE` | `/{user_id}/roles/{role_id}` | `user:update` | Soft-revoke |
-| `PATCH` | `/{user_id}/role-memberships/{membership_id}` | `user:update` | Validity window / status. Reactivating or widening the window re-runs the assignment checks (403 with `details.missing_permissions`); suspending or narrowing never does |
+| `PATCH` | `/{user_id}/role-memberships/{membership_id}` | `user:update` | Validity window / status. Reactivating or widening the window re-runs the assignment checks (403 / 404 / 422 as for `POST /{user_id}/roles`); suspending or narrowing never does |
 | `GET` | `/{user_id}/permissions` | Self **or** `user:read` | Effective perms: direct roles **and** entity-membership roles when present → `UserPermissionSource[]` |
 
 Entity-scoped role assignment (membership + roles on an entity) is **not** here —

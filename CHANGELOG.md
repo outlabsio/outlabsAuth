@@ -32,11 +32,40 @@ noted.
   no longer pull an unaffiliated account — for example an unrooted holder of a
   system-wide role — into its tenant and then take it over; adopting such
   accounts needs a global actor.
-- **Breaking:** the superuser-target guard now also protects holders of an
-  active direct system-wide role: a tenant admin gets 403 when updating,
-  resetting the password of, changing the status of, restoring, deleting,
-  re-inviting or changing the roles, sessions or API keys of an in-tree global
-  administrator. Reads are unchanged.
+- **Breaking:** the superuser-target guard now also protects every account
+  with a direct system-wide role row — active, scheduled (`valid_from` in the
+  future), suspended, expired or revoked, whatever the role definition's
+  status: a tenant admin gets 403 when updating, resetting the password of,
+  changing the status of, restoring, deleting, re-inviting or changing the
+  roles, sessions or API keys of such an account. A grant that is not active
+  yet can become active without anyone reviewing the account again, so a
+  tenant admin who reset its password today would inherit global scope later.
+  Reads are unchanged.
+- **Breaking:** direct role grants are tenant-bound. `POST /users/{id}/roles`,
+  `POST /auth/invite` without `entity_id`, and reactivating or widening a
+  direct role membership (`PATCH /users/{id}/role-memberships/{id}`) now
+  answer **404** for a role outside the actor's scope (another tenant's role
+  is indistinguishable from a nonexistent one, the roles router's read rule),
+  run SEC-2 containment at the role's own entity context (its root, or its
+  scope entity) counting its entity-type permissions instead of flat, and
+  refuse an org-scoped role whose root is not the target user's root (**422**,
+  `details.reason = role_root_mismatch`). The root rule applies to every
+  actor, superusers included, and is also enforced by
+  `RoleService.assign_role_to_user` and `update_user_role_membership`; a
+  global inviter's invitee without an entity is rooted in the organization of
+  its direct roles (roles from two organizations: 422, no account). Before, a
+  tenant admin who knew another tenant's role ID could grant it to itself, an
+  in-tree user or an invitee and, through the direct-role tree bound, pass
+  host routes and service checks inside that tenant. Narrowing or suspending a
+  direct role membership is never checked.
+- **Breaking:** the shared permission catalog is written by global actors
+  only. `POST /permissions`, `PATCH`/`DELETE /permissions/{id}` and every
+  `POST`/`PATCH`/`DELETE` under `/permissions/{id}/conditions` and
+  `/permissions/{id}/condition-groups` answer **403** for a tenant-scoped
+  actor, like system-wide roles on the roles router. Permission definitions
+  and their ABAC conditions apply in every tenant, so a tenant admin holding
+  `permission:update` could deactivate a permission or delete a condition
+  platform-wide. Reads are unchanged.
 - **Breaking:** `POST /auth/invite` with an `entity_id` outside the inviter's
   tenant answers 404 and creates no account.
 - **Breaking:** the roles router resolves a personal API key to its owner's
@@ -142,6 +171,9 @@ noted.
 - Host-minted service tokens resolve to global scope on the roles router, as
   they already did on the other scoped routers (the roles router used to give
   them an empty scope).
+- The EnterpriseRBAC seed roots its SF team lead and agents at ACME, the
+  organization of their direct baseline roles (required by the direct-role
+  root rule).
 - The example seeds now exercise every console persona and lifecycle state:
   the EnterpriseRBAC seed installs the library permission catalog verbatim
   (legacy `apikey:*` and `user:manage` are gone), scoped personas hold
@@ -171,6 +203,18 @@ noted.
   system-wide role) — see DD-061. `enforce_user_scope=False` still restores
   the unscoped behavior (including the unbounded entity-context reach of
   direct org-scoped roles) for one more alpha cycle.
+- Permission-catalog administrators (create, update, delete permissions and
+  their ABAC conditions) need a global actor: give them a system-wide role, as
+  the example's permission catalog admin has.
+- Direct org-scoped role rows whose root differs from the holder's root (for
+  example an unrooted user holding a tenant role) keep their reach inside the
+  role's tree but can no longer be assigned, reactivated or widened. Find them
+  with `SELECT m.id FROM user_role_memberships m JOIN roles r ON r.id =
+  m.role_id JOIN users u ON u.id = m.user_id WHERE r.root_entity_id IS NOT
+  NULL AND r.root_entity_id IS DISTINCT FROM u.root_entity_id` and move that
+  access to entity memberships.
+- Accounts that have ever held a direct system-wide role (any row, including
+  revoked ones) are now managed by global actors only.
 - Users who authorized work in other trees through a direct org-scoped role
   (for example an "administration" root whose org role managed other
   tenants) need a system-wide role, or memberships in the trees they manage.

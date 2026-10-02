@@ -3419,7 +3419,8 @@ The ROLE's scope determines when its permissions apply, not the permission itsel
 > **Update (DD-061, 0.1.0a35):** until 0.1.0a35 the "if entity in org" and
 > "if scope matches" rows held for entity-membership roles only; a *direct*
 > (`UserRoleMembership`) role granted at any entity. Direct roles now follow
-> this matrix too.
+> this matrix too, and a direct org-scoped role can only be assigned to a
+> user rooted in its organization (DD-061 decision 14).
 
 ### Implementation
 
@@ -3595,7 +3596,8 @@ Entities do not store live direct permission grants. Access is granted through:
 
 3. **Superuser-target guard.** A non-global actor can never mutate a user with `is_superuser=True`
    (403), even if that user is inside the actor's tree. Reads of in-tree superusers remain allowed.
-   DD-061 extends the guard to holders of an active direct system-wide role.
+   DD-061 extends the guard to every account with a direct system-wide role row (active, scheduled,
+   suspended, expired or revoked).
 
 4. **Rollout**: enforcement is **on by default** (`enforce_user_scope=True`). A transitional config
    flag (`enforce_user_scope=False`) restores the legacy behavior for one alpha cycle and will be
@@ -3904,6 +3906,17 @@ password, that the DD-056 superuser-target guard did not cover system-wide-role
 holders, and that the roles router treated an unanchored personal API key as a
 global credential.
 
+A second review of the release candidate found three more paths. The direct
+role grant routes checked only flat containment and the system-wide guard, so
+a tenant admin who knew another tenant's role ID could assign it to itself, an
+in-tree user or an invitee — and the tree bound above then let that role grant
+inside the other tenant, on host routes and in service checks. The
+global-account guard only recognized a system-wide grant that was active right
+now, so a tenant admin could reset the password of an account whose grant was
+scheduled or suspended and inherit global scope once it activated. And the
+shared permission catalog (definitions and their ABAC conditions, which apply
+in every tenant) could be rewritten by any holder of `permission:update`.
+
 ### Options Considered
 
 1. **Extend the DD-056 model to every route that exposes or changes the identity graph** (chosen)
@@ -4005,14 +4018,39 @@ global credential.
     hides from tenant admins — is a global-actor operation, because the
     tenant would gain control over that account (password, email, status).
 12. **Global-scope accounts are managed only by global actors.** The DD-056
-    superuser-target guard now covers holders of an active direct system-wide
-    role on every user mutation route (profile, password, status, restore,
-    delete, invite resend, role grants, sessions, API keys): a tenant admin
-    gets **403** even when the account is rooted in its tenant. Reads are
-    unchanged.
+    superuser-target guard now covers every account with a direct
+    system-wide role row on every user mutation route (profile, password,
+    status, restore, delete, invite resend, role grants, sessions, API keys):
+    a tenant admin gets **403** even when the account is rooted in its
+    tenant. The row counts whatever its state — active, scheduled, suspended,
+    expired or revoked — and whatever the role definition's status, because
+    such a grant can become active later (time passes, or a global admin
+    reactivates the grant or the role) without anyone reviewing the account
+    again. Reads are unchanged.
 13. **Invites stay in the inviter's tenant.** `POST /auth/invite` with an
     `entity_id` outside the inviter's scope answers **404** before any
     account is created.
+14. **Direct role grants are tenant-bound.** Assigning a role directly
+    (`POST /users/{id}/roles`, `POST /auth/invite` without an entity) and
+    reactivating or widening a direct role membership require, with tenant
+    scope enforced: a global actor for a system-wide role (**403**, decision
+    4); a role visible in the actor's scope — the roles router's read
+    predicate — otherwise **404**, identical to a nonexistent role; an
+    org-scoped role whose root is the target user's root, otherwise **422**
+    (`details.reason = role_root_mismatch`); and SEC-2 containment at the
+    role's own entity context (its scope entity, else its root), counting its
+    entity-type permissions, instead of a flat check. The root rule applies to
+    every actor and is enforced in `RoleService` too
+    (`require_direct_role_root_match`), so a global actor cannot create a
+    cross-tree direct grant by accident; a stored cross-tree row cannot be
+    reactivated or widened. Entity memberships remain the way to give a user
+    authority in another tree. Narrowing or suspending is never checked.
+15. **The permission catalog is a platform object.** Permission definitions
+    and their ABAC conditions and condition groups apply in every tenant, so
+    with tenant scope enforced only a global actor (superuser, system-wide
+    role holder, service token, unanchored integration principal) may create,
+    update or delete them (**403** otherwise, like system-wide roles). Reads
+    are unchanged.
 
 ### Judgement calls (conservative, backward-compatible)
 
@@ -4056,23 +4094,54 @@ global credential.
   global platform credentials.
 - **Entity-local roles cannot be assigned directly through the API**; the
   bound in decision 10 still applies to any such rows already stored.
+- **Revoked system-wide rows still mark a global account** (decision 12). A
+  global admin can reactivate a revoked grant as easily as a suspended one,
+  so excluding it would reopen the takeover. The cost: a demoted former
+  global administrator stays manageable by global actors only (the row is
+  retained history, not deleted).
+- **A global inviter's invitee is rooted where its direct roles are.**
+  Without an entity, `role_ids` are direct grants, and a direct org-scoped
+  role now requires its holder to be rooted in its organization; rooting the
+  invitee there (instead of refusing every such invite) keeps the global
+  invite flow working. Roles from two organizations cannot share one invitee
+  (422). Tenant-scoped inviters already root invitees at their own root,
+  which is the only root whose roles they can see.
+- **Invisible role → 404, wrong tree → 422.** A role the actor cannot see
+  answers 404 so role IDs from another tenant reveal nothing (the roles
+  router's rule). A visible role assigned to a user rooted elsewhere is a
+  request the actor can see is invalid, hence 422 with a machine-readable
+  reason. Global actors only ever get the 422.
+- **Containment for a direct role counts all its contextual permissions at
+  its root**, because a direct org-scoped role reaches entities of every type
+  in its tree. Like the flat check it replaces, this can refuse a grantor who
+  holds a contextual permission only for some entity types; it never accepts
+  more than the flat check did for the same tenant.
+- **Permission catalog writes need a global actor even for a global owner's
+  entity-anchored personal key** (it resolves to the anchor's scope, which is
+  not global). Use an unanchored key or a JWT for catalog administration.
 
 ### Consequences
 
 - **Positive**: the membership graph, effective permissions and entity trees
   of one tenant are no longer readable or writable from another; global scope
-  can only be handed out, taken over or pulled into a tenant by someone who
-  already has it; a tenant-scoped direct role no longer authorizes anything in
-  another tenant, including host routes.
+  can only be handed out, taken over (now or once a dormant grant activates)
+  or pulled into a tenant by someone who already has it; a tenant-scoped
+  direct role no longer authorizes anything in another tenant, including host
+  routes, and a tenant admin can no longer grant itself or anyone else
+  another tenant's role; the shared permission catalog can only be changed by
+  a global actor.
 - **Positive**: one error contract (404 out of scope, 403 for platform-level
   operations) across users, roles, memberships, permissions and entities.
 - **Negative (breaking for scoped admins)**: tenant-scoped actors lose
   cross-tenant entity, membership and permission visibility, root
   create/move/archive, direct system-wide grants and reactivation of grants
   they could not assign, adoption of unaffiliated accounts, mutation of
-  in-tree global administrators, and any entity-context grant from a direct
-  org-scoped role outside its own tree (including the "administration root"
-  pattern DD-056 already moved to system-wide roles); out-of-scope entities
+  in-tree global administrators (and of accounts with a dormant system-wide
+  grant), permission-catalog writes, and any entity-context grant from a
+  direct org-scoped role outside its own tree (including the "administration
+  root" pattern DD-056 already moved to system-wide roles); direct org-scoped
+  roles can no longer be assigned to users rooted elsewhere or unrooted, by
+  anyone; out-of-scope entities
   answer 404 on entity-keyed routes that used to answer 403; ABAC policies
   that relied on fail-open evaluation now deny. Global actors and SimpleRBAC
   are unaffected.
@@ -4086,12 +4155,19 @@ global credential.
 ### Implementation
 
 - `outlabs_auth/routers/_scope.py` — principal scope (including personal-key
-  anchors), target predicate, `entity_scope_guard`, global-target and
-  system-wide grant guards, scoped root resolution
+  anchors), target predicate, `entity_scope_guard`, global-account
+  (`user_is_global_account`) and system-wide grant guards, the shared role
+  visibility predicate and direct-grant rules
+  (`require_direct_role_grants_in_scope`), scoped root resolution
+- `outlabs_auth/services/role.py` (`require_direct_role_root_match`, also run
+  on reactivation), `outlabs_auth/services/access_scope.py`
+  (`user_has_system_wide_role_grant`), `outlabs_auth/utils/lifecycle.py`
+  (`lifecycle_update_grants_access`, shared by routers and services)
 - `outlabs_auth/routers/entities.py`, `memberships.py`, `permissions.py`,
   `users.py`, `auth.py`, `roles.py`, `api_key_admin.py`,
   `integration_principals.py`; `outlabs_auth/routers/_authz_utils.py`
-  (`lifecycle_update_grants_access`)
+  (`require_can_delegate_direct_roles`: containment at a direct role's
+  context)
 - `outlabs_auth/services/abac_validation.py`, `policy_engine.py`,
   `permission.py` (direct-role entity bound), `role.py`, `entity.py`
   (move-to-root type rules, audit events), `membership.py` (orphan scope)
@@ -4107,5 +4183,5 @@ global credential.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context)
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only)
 **Next Review**: After testing all examples

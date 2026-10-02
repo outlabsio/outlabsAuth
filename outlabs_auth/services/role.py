@@ -40,10 +40,44 @@ from outlabs_auth.models.sql.role import (
 )
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.utils.lifecycle import lifecycle_update_grants_access
 from outlabs_auth.schemas.abac import serialize_condition_value
 from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_name, validate_slug
+
+
+def require_direct_role_root_match(
+    config: Any,
+    role: Any,
+    user_root_entity_id: Optional[UUID],
+) -> None:
+    """A direct org-scoped role must belong to the holder's own tree (DD-061).
+
+    A direct org-scoped role grants inside its root's tree (DD-054), so
+    assigning it to a user rooted elsewhere (or unrooted) would make that user
+    a cross-tenant account. Applies to every caller, global actors included,
+    whenever tenant scope is enforced (EnterpriseRBAC with
+    ``enforce_user_scope``); system-wide roles (no root) are unaffected. Entity
+    memberships are the way to give a user authority in another tree.
+
+    Raises:
+        InvalidInputError: (422, ``details.reason = role_root_mismatch``)
+    """
+    if not (getattr(config, "enable_entity_hierarchy", False) and getattr(config, "enforce_user_scope", True)):
+        return
+    role_root_entity_id = getattr(role, "root_entity_id", None)
+    if role_root_entity_id is None:
+        return
+    if user_root_entity_id is not None and str(role_root_entity_id) == str(user_root_entity_id):
+        return
+    raise InvalidInputError(
+        message=(
+            "An organization-scoped role can only be assigned directly to a user rooted in that "
+            "organization; use an entity membership to grant access in another tree"
+        ),
+        details={"reason": "role_root_mismatch", "role_id": str(getattr(role, "id", ""))},
+    )
 
 
 class RoleService(BaseService[Role]):
@@ -119,6 +153,9 @@ class RoleService(BaseService[Role]):
                 details={"status": requested_status.value},
             )
         return requested_status
+
+    def _require_direct_role_in_user_tree(self, role: Role, user: User) -> None:
+        require_direct_role_root_match(self.config, role, getattr(user, "root_entity_id", None))
 
     @staticmethod
     def _role_definition_is_active(role: Optional[Role]) -> bool:
@@ -1878,6 +1915,8 @@ class RoleService(BaseService[Role]):
                 },
             )
 
+        self._require_direct_role_in_user_tree(role, user)
+
         # Keep one current-state row per (user, role) and reactivate it in place.
         membership_stmt = select(UserRoleMembership).where(
             cast(Any, UserRoleMembership.user_id) == user_id,
@@ -2082,6 +2121,18 @@ class RoleService(BaseService[Role]):
                     "membership_id": str(membership_id),
                 },
             )
+
+        if lifecycle_update_grants_access(
+            current_status=membership.status,
+            current_valid_from=membership.valid_from,
+            current_valid_until=membership.valid_until,
+            next_status=status if update_status and status is not None else membership.status,
+            next_valid_from=next_valid_from,
+            next_valid_until=next_valid_until,
+        ):
+            # Re-granting is granting: a stored cross-tree row (for example one
+            # created before 0.1.0a35) cannot be reactivated or widened.
+            self._require_direct_role_in_user_tree(role, user)
 
         if update_valid_from:
             membership.valid_from = valid_from

@@ -17,7 +17,7 @@ from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import build_permission_response
-from outlabs_auth.routers._scope import get_visible_user_or_404
+from outlabs_auth.routers._scope import actor_is_global, get_visible_user_or_404, scope_enforced
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
@@ -77,6 +77,24 @@ def get_permissions_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["permissions"])
 
+    async def _require_global_catalog_actor(session: AsyncSession, auth_result: Any) -> None:
+        """Permission definitions and their ABAC conditions are shared by every tenant.
+
+        Creating, changing or deleting them changes authorization in every
+        tenant, so with tenant scope enforced only a global actor (superuser,
+        system-wide role holder, service token or unanchored integration
+        principal) may write them — like system-wide roles on the roles router
+        (DD-061). Reads are unchanged.
+        """
+        if not scope_enforced(auth):
+            return
+        if await actor_is_global(auth, session, auth_result):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only global administrators can change the shared permission catalog",
+        )
+
     @router.get(
         "/",
         response_model=PaginatedResponse[PermissionResponse],
@@ -129,6 +147,7 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:create")),
     ):
         """Create a new permission."""
+        await _require_global_catalog_actor(session, auth_result)
         if auth.observability:
             auth.observability.logger.debug(
                 "permission_create_request",
@@ -380,6 +399,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
     ):
         """Update permission details."""
+        await _require_global_catalog_actor(session, auth_result)
         await auth.permission_service.update_permission(
             session,
             permission_id,
@@ -421,6 +441,7 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:delete")),
     ):
         """Delete permission by ID."""
+        await _require_global_catalog_actor(session, auth_result)
         deleted = await auth.permission_service.delete_permission(
             session,
             permission_id,
@@ -483,6 +504,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             group = await auth.permission_service.create_permission_condition_group(
                 session,
@@ -516,6 +538,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             group = await auth.permission_service.update_permission_condition_group(
                 session,
@@ -553,6 +576,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             deleted = await auth.permission_service.delete_permission_condition_group(
                 session,
@@ -614,6 +638,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             cond = await auth.permission_service.create_permission_condition(
                 session,
@@ -655,6 +680,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             cond = await auth.permission_service.update_permission_condition(
                 session,
@@ -702,6 +728,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             deleted = await auth.permission_service.delete_permission_condition(
                 session,

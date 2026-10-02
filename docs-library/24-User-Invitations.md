@@ -80,12 +80,16 @@ On accept: password stored, `email_verified=true`, invite token fields cleared.
 | `role_ids` | No | Without `entity_id`: direct roles. With `entity_id`: roles on that membership |
 | `entity_id` | No | Enterprise membership (needs membership service); the first membership roots the invitee at that tree |
 
-Enterprise scope rules (DD-056): the inviter must hold every permission the
+Enterprise scope rules (DD-056, DD-061): the inviter must hold every permission the
 roles carry; a **system-wide** role in `role_ids` without `entity_id` makes the
 invitee a global actor, so only a global inviter (superuser or system-wide role
 holder) may grant it (403 with `details.system_wide_role_ids`). Without
-`entity_id`, a tenant-scoped inviter's invitee is rooted at the inviter's own
-root so it stays visible to that tenant. With `entity_id`, the entity must be
+`entity_id`, `role_ids` are direct grants: a role outside the inviter's scope
+answers 404 (no account is created), containment is checked where each role
+takes effect, and an org-scoped role must belong to the invitee's root. A
+tenant-scoped inviter's invitee is rooted at the inviter's own root so it stays
+visible to that tenant; a global inviter's invitee is rooted in the
+organization of its direct roles (roles from two organizations: 422). With `entity_id`, the entity must be
 inside the inviter's tenant (DD-061): another tenant's entity answers 404 and
 no account is created.
 

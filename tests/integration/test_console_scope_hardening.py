@@ -16,7 +16,14 @@ or global request still works):
   tenant, modify an in-tree global administrator, invite into another tenant's
   entity, or reach other tenants' roles through a personal API key;
 * direct org-scoped and entity-local roles only grant inside their own tree in
-  an entity context (DD-054 matrix).
+  an entity context (DD-054 matrix);
+* a direct grant (assign, invite without entity, reactivation) of another
+  tenant's role answers 404, a direct org role only goes to users rooted in its
+  tree, and its SEC-2 containment runs at the role's root;
+* accounts with a dormant (scheduled, suspended, expired, revoked or
+  inactive-definition) system-wide grant are managed by global actors only;
+* the shared permission catalog and its ABAC conditions are written by global
+  actors only.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.fastapi import register_exception_handlers
 from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope, UserStatus
 from outlabs_auth.routers import (
@@ -1203,3 +1211,441 @@ async def test_enforce_user_scope_false_restores_legacy_direct_role_reach(test_e
         assert not await auth_instance.permission_service.check_permission(
             session, world["scoped_admin"].id, "membership:create_tree", entity_id=world["child_b"].id
         )
+
+
+# ---------------------------------------------------------------------------
+# Review round 3 (DD-061): direct grants of another tenant's role, dormant
+# system-wide grants, and the shared permission catalog
+# ---------------------------------------------------------------------------
+
+
+def _host_app(auth: EnterpriseRBAC) -> FastAPI:
+    """The library routers plus host routes guarded by entity-context checks."""
+    from fastapi import Depends
+
+    app = _make_app(auth)
+
+    @app.get("/host/tree/{entity_id}")
+    async def host_tree(
+        entity_id: str,
+        _: Any = Depends(auth.require_tree_permission("membership:create_tree", "entity_id")),
+    ) -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/host/entity/{entity_id}")
+    async def host_entity(
+        entity_id: str,
+        _: Any = Depends(auth.require_entity_permission("user:read", "entity_id")),
+    ) -> dict[str, bool]:
+        return {"ok": True}
+
+    return app
+
+
+async def _tenant_b_admin_role(auth: EnterpriseRBAC, world: dict[str, Any]):
+    """A tenant-B role whose permission names the tenant-A admin also holds, so
+    flat SEC-2 containment alone cannot refuse it."""
+    async with auth.get_session() as session:
+        role = await _role(
+            auth,
+            session,
+            permissions=["user:read", "membership:read", "membership:create_tree", "entity:read"],
+            root_entity_id=world["root_b"].id,
+        )
+        await session.commit()
+    return role
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoped_admin_cannot_directly_grant_another_tenants_role(auth_instance, world):
+    auth = auth_instance
+    role_b = await _tenant_b_admin_role(auth, world)
+    scoped_admin, user_a = world["scoped_admin"], world["user_a"]
+    scoped = _headers(auth, scoped_admin.id)
+    child_b = world["child_b"]
+
+    async with _client(_host_app(auth)) as http:
+        assert (await http.get(f"/host/tree/{child_b.id}", headers=scoped)).status_code == 403
+
+        # Negative: to itself and to an in-scope user, another tenant's role
+        # answers 404 exactly like a nonexistent role.
+        to_self = await http.post(
+            f"/v1/users/{scoped_admin.id}/roles", headers=scoped, json={"role_id": str(role_b.id)}
+        )
+        assert to_self.status_code == 404, to_self.text
+        to_user = await http.post(f"/v1/users/{user_a.id}/roles", headers=scoped, json={"role_id": str(role_b.id)})
+        assert to_user.status_code == 404, to_user.text
+        ghost = await http.post(f"/v1/users/{user_a.id}/roles", headers=scoped, json={"role_id": str(uuid.uuid4())})
+        assert ghost.status_code == 404
+        assert ghost.json() == to_self.json() == to_user.json()
+
+        # Negative: invite without an entity turns role_ids into direct grants.
+        email = f"plant-direct-{_suffix()}@example.com"
+        invited = await http.post(
+            "/v1/auth/invite", headers=scoped, json={"email": email, "role_ids": [str(role_b.id)]}
+        )
+        assert invited.status_code == 404, invited.text
+        async with auth.get_session() as session:
+            assert await auth.user_service.get_user_by_email(session, email) is None
+
+        # ... so the host routes and service checks in tenant B stay closed.
+        assert (await http.get(f"/host/tree/{child_b.id}", headers=scoped)).status_code == 403
+        assert (await http.get(f"/host/entity/{child_b.id}", headers=scoped)).status_code == 403
+        async with auth.get_session() as session:
+            for user_id in (scoped_admin.id, user_a.id):
+                assert not await auth.permission_service.check_permission(
+                    session, user_id, "membership:create_tree", entity_id=child_b.id
+                )
+            roles = await auth.role_service.get_user_roles(session, user_a.id)
+            assert role_b.id not in {role.id for role in roles}
+
+        # Positive: the tenant's own role can still be granted directly and
+        # reaches the tenant's entities (host routes included).
+        async with auth.get_session() as session:
+            role_a = await _role(
+                auth,
+                session,
+                permissions=["membership:create_tree", "user:read"],
+                root_entity_id=world["root_a"].id,
+            )
+            await session.commit()
+        own = await http.post(f"/v1/users/{user_a.id}/roles", headers=scoped, json={"role_id": str(role_a.id)})
+        assert own.status_code == 201, own.text
+        user_a_headers = _headers(auth, user_a.id)
+        assert (await http.get(f"/host/tree/{world['child_a'].id}", headers=user_a_headers)).status_code == 200
+        assert (await http.get(f"/host/tree/{child_b.id}", headers=user_a_headers)).status_code == 403
+        own_invite = await http.post(
+            "/v1/auth/invite",
+            headers=scoped,
+            json={"email": f"own-direct-{_suffix()}@example.com", "role_ids": [str(role_a.id)]},
+        )
+        assert own_invite.status_code == 201, own_invite.text
+        assert own_invite.json()["root_entity_id"] == str(world["root_a"].id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_org_roles_only_go_to_users_rooted_in_their_tree(client, auth_instance, world):
+    """Service rule for every actor, global ones included (DD-061)."""
+    auth = auth_instance
+    role_b = await _tenant_b_admin_role(auth, world)
+    global_headers = _headers(auth, world["global_admin"].id)
+    super_headers = _headers(auth, world["superuser"].id)
+
+    # Negative: a global actor cannot make a tenant-A user a tenant-B role holder.
+    for headers in (global_headers, super_headers):
+        refused = await client.post(
+            f"/v1/users/{world['user_a'].id}/roles", headers=headers, json={"role_id": str(role_b.id)}
+        )
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["details"]["reason"] == "role_root_mismatch"
+
+    async with auth.get_session() as session:
+        unrooted = await _user(auth, session, prefix="unrooted-direct")
+        await session.commit()
+        unrooted_id = unrooted.id
+        with pytest.raises(InvalidInputError) as excinfo:
+            await auth.role_service.assign_role_to_user(session, user_id=unrooted_id, role_id=role_b.id)
+        assert excinfo.value.details["reason"] == "role_root_mismatch"
+        await session.rollback()
+
+    # Negative: roles of two organizations cannot be combined on one invitee.
+    mixed_email = f"mixed-{_suffix()}@example.com"
+    mixed = await client.post(
+        "/v1/auth/invite",
+        headers=super_headers,
+        json={"email": mixed_email, "role_ids": [str(world["member_role_a"].id), str(role_b.id)]},
+    )
+    assert mixed.status_code == 422, mixed.text
+    async with auth.get_session() as session:
+        assert await auth.user_service.get_user_by_email(session, mixed_email) is None
+
+    # Positive: a user rooted in the role's tree can hold it; a global
+    # inviter's invitee is rooted where its direct roles are; system-wide
+    # roles keep going to anyone.
+    in_tree = await client.post(
+        f"/v1/users/{world['user_b'].id}/roles", headers=global_headers, json={"role_id": str(role_b.id)}
+    )
+    assert in_tree.status_code == 201, in_tree.text
+    invited = await client.post(
+        "/v1/auth/invite",
+        headers=super_headers,
+        json={"email": f"global-direct-{_suffix()}@example.com", "role_ids": [str(role_b.id)]},
+    )
+    assert invited.status_code == 201, invited.text
+    assert invited.json()["root_entity_id"] == str(world["root_b"].id)
+    async with auth.get_session() as session:
+        await auth.role_service.assign_role_to_user(
+            session, user_id=unrooted_id, role_id=world["system_admin_role"].id
+        )
+        await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reactivating_a_cross_tenant_direct_role_is_refused(client, auth_instance, world):
+    """A cross-tree row stored before 0.1.0a35 cannot be granted again."""
+    from datetime import datetime, timezone
+
+    from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+
+    auth = auth_instance
+    role_b = await _tenant_b_admin_role(auth, world)
+    user_a = world["user_a"]
+    async with auth.get_session() as session:
+        legacy = UserRoleMembership(
+            user_id=user_a.id,
+            role_id=role_b.id,
+            assigned_at=datetime.now(timezone.utc),
+            status=MembershipStatus.ACTIVE,
+        )
+        session.add(legacy)
+        # Permissions the tenant admin holds, so containment passes.
+        own_role = await _role(auth, session, permissions=["user:read"], root_entity_id=world["root_a"].id)
+        own_membership = await auth.role_service.assign_role_to_user(
+            session, user_id=user_a.id, role_id=own_role.id
+        )
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    path = f"/v1/users/{user_a.id}/role-memberships/{legacy.id}"
+
+    # Positive: cutting access is always allowed, even for a role the tenant
+    # admin cannot see.
+    suspended = await client.patch(path, headers=scoped, json={"status": "suspended"})
+    assert suspended.status_code == 200, suspended.text
+
+    # Negative: re-granting it is refused — 404 for the tenant admin (the role
+    # is not visible to it), 422 for a global actor (wrong tree).
+    reactivated = await client.patch(path, headers=scoped, json={"status": "active"})
+    assert reactivated.status_code == 404, reactivated.text
+    by_superuser = await client.patch(path, headers=_headers(auth, world["superuser"].id), json={"status": "active"})
+    assert by_superuser.status_code == 422, by_superuser.text
+    assert by_superuser.json()["details"]["reason"] == "role_root_mismatch"
+    async with auth.get_session() as session:
+        assert not await auth.permission_service.check_permission(
+            session, user_a.id, "membership:create_tree", entity_id=world["child_b"].id
+        )
+
+    # Positive: the tenant's own direct role can still be suspended and
+    # reactivated by the tenant admin.
+    own_path = f"/v1/users/{user_a.id}/role-memberships/{own_membership.id}"
+    assert (await client.patch(own_path, headers=scoped, json={"status": "suspended"})).status_code == 200
+    own_again = await client.patch(own_path, headers=scoped, json={"status": "active"})
+    assert own_again.status_code == 200, own_again.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_grant_containment_runs_where_the_role_takes_effect(client, auth_instance, world):
+    """SEC-2 for a direct org role is evaluated at its root, not flat."""
+    auth = auth_instance
+    async with auth.get_session() as session:
+        # A team-level manager: user:update and lead:read only through a
+        # membership at child_a, so flat containment would count lead:read.
+        manager = await _user(auth, session, prefix="team-manager", root_entity_id=world["root_a"].id)
+        manager_role = await _role(
+            auth, session, permissions=["user:read", "user:update", "lead:read"], root_entity_id=world["root_a"].id
+        )
+        await auth.membership_service.add_member(
+            session, entity_id=world["child_a"].id, user_id=manager.id, role_ids=[manager_role.id]
+        )
+        org_lead_reader = await _role(auth, session, permissions=["lead:read"], root_entity_id=world["root_a"].id)
+        await session.commit()
+
+    manager_headers = _headers(auth, manager.id)
+    # Negative: the direct role would grant lead:read across the whole tenant,
+    # but the manager holds it only at its team.
+    refused = await client.post(
+        f"/v1/users/{world['user_a'].id}/roles",
+        headers=manager_headers,
+        json={"role_id": str(org_lead_reader.id)},
+    )
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["details"]["missing_permissions"] == ["lead:read"]
+
+    # Positive: the same role held at the tenant root covers the whole tree,
+    # so an org-level manager may grant it.
+    async with auth.get_session() as session:
+        org_manager = await _user(auth, session, prefix="org-manager", root_entity_id=world["root_a"].id)
+        await auth.membership_service.add_member(
+            session, entity_id=world["root_a"].id, user_id=org_manager.id, role_ids=[manager_role.id]
+        )
+        await session.commit()
+    allowed = await client.post(
+        f"/v1/users/{world['user_a'].id}/roles",
+        headers=_headers(auth, org_manager.id),
+        json={"role_id": str(org_lead_reader.id)},
+    )
+    assert allowed.status_code == 201, allowed.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoped_admin_cannot_take_over_accounts_with_dormant_system_wide_grants(client, auth_instance, world):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import update
+
+    from outlabs_auth.models.sql.enums import DefinitionStatus
+    from outlabs_auth.models.sql.role import Role
+    from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+
+    auth = auth_instance
+    now = datetime.now(timezone.utc)
+    accounts: dict[str, Any] = {}
+    async with auth.get_session() as session:
+        inactive_role = await _role(auth, session, permissions=["user:read"], is_global=True)
+        for state in ("scheduled", "suspended", "expired", "revoked", "inactive_definition"):
+            account = await _user(auth, session, prefix=f"dormant-{state}", root_entity_id=world["root_a"].id)
+            role_id = inactive_role.id if state == "inactive_definition" else world["system_admin_role"].id
+            membership = await auth.role_service.assign_role_to_user(
+                session,
+                user_id=account.id,
+                role_id=role_id,
+                valid_from=now + timedelta(hours=1) if state == "scheduled" else None,
+            )
+            if state == "suspended":
+                membership.status = MembershipStatus.SUSPENDED
+            elif state == "expired":
+                membership.valid_from = now - timedelta(days=2)
+                membership.valid_until = now - timedelta(days=1)
+            elif state == "revoked":
+                await auth.role_service.revoke_role_from_user(session, user_id=account.id, role_id=role_id)
+            accounts[state] = (account, membership)
+        await session.execute(
+            update(Role).where(Role.id == inactive_role.id).values(status=DefinitionStatus.INACTIVE)
+        )
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    for state, (account, _) in accounts.items():
+        # None of them is global right now, so the tenant admin can read them ...
+        assert (await client.get(f"/v1/users/{account.id}", headers=scoped)).status_code == 200, state
+        # ... but every mutation is refused.
+        for method, path, body in (
+            ("PATCH", f"/v1/users/{account.id}/password", {"new_password": "Takeover123!x"}),
+            ("PATCH", f"/v1/users/{account.id}", {"email": f"takeover-{_suffix()}@example.com"}),
+            ("PATCH", f"/v1/users/{account.id}/status", {"status": "suspended"}),
+        ):
+            response = await client.request(method, path, headers=scoped, json=body)
+            assert response.status_code == 403, (state, path, response.status_code, response.text)
+
+    # The reviewer's chain: the scheduled grant activates, and the password the
+    # tenant admin tried to set never took effect.
+    scheduled_account, scheduled_membership = accounts["scheduled"]
+    async with auth.get_session() as session:
+        await session.execute(
+            update(UserRoleMembership)
+            .where(UserRoleMembership.id == scheduled_membership.id)
+            .values(valid_from=now - timedelta(minutes=1))
+        )
+        await session.commit()
+    login = await client.post("/v1/auth/login", json={"email": scheduled_account.email, "password": "Takeover123!x"})
+    assert login.status_code == 401, login.text
+
+    # Positive: ordinary in-tree accounts stay manageable by the tenant admin,
+    # and global actors still manage the dormant global accounts.
+    ordinary = await client.patch(
+        f"/v1/users/{world['user_a'].id}/password", headers=scoped, json={"new_password": "Rotated123!x"}
+    )
+    assert ordinary.status_code == 204, ordinary.text
+    for headers in (_headers(auth, world["global_admin"].id), _headers(auth, world["superuser"].id)):
+        by_global = await client.patch(
+            f"/v1/users/{accounts['suspended'][0].id}/password", headers=headers, json={"new_password": "Global123!x"}
+        )
+        assert by_global.status_code == 204, by_global.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_permission_catalog_writes_need_a_global_actor(client, auth_instance, world):
+    auth = auth_instance
+    catalog_permissions = ("permission:create", "permission:update", "permission:delete")
+    async with auth.get_session() as session:
+        for name in catalog_permissions:
+            await auth.permission_service.create_permission(session, name=name, display_name=name)
+        tenant_catalog_role = await _role(
+            auth, session, permissions=[*catalog_permissions, "permission:read"], root_entity_id=world["root_a"].id
+        )
+        await auth.role_service.assign_role_to_user(
+            session, user_id=world["scoped_admin"].id, role_id=tenant_catalog_role.id
+        )
+        catalog_admin = await _user(auth, session, prefix="catalog-admin", root_entity_id=world["root_a"].id)
+        global_catalog_role = await _role(
+            auth, session, permissions=[*catalog_permissions, "permission:read"], is_global=True
+        )
+        await auth.role_service.assign_role_to_user(
+            session, user_id=catalog_admin.id, role_id=global_catalog_role.id
+        )
+        lead_read = await auth.permission_service.get_permission_by_name(session, "lead:read")
+        lead_delete = await auth.permission_service.get_permission_by_name(session, "lead:delete")
+        await session.commit()
+
+    super_headers = _headers(auth, world["superuser"].id)
+    condition = await client.post(
+        f"/v1/permissions/{lead_read.id}/conditions",
+        headers=super_headers,
+        json={"attribute": "user.department", "operator": "equals", "value": "sales", "value_type": "string"},
+    )
+    assert condition.status_code == 201, condition.text
+    condition_id = condition.json()["id"]
+    group = await client.post(
+        f"/v1/permissions/{lead_read.id}/condition-groups", headers=super_headers, json={"operator": "AND"}
+    )
+    assert group.status_code == 201, group.text
+    group_id = group.json()["id"]
+
+    async with auth.get_session() as session:
+        tenant_b_before = await auth.permission_service.check_permission(
+            session, world["user_b"].id, "lead:read", entity_id=world["child_b"].id
+        )
+
+    # Negative: a tenant-scoped holder of permission:* gets 403 on every write
+    # to the shared catalog.
+    scoped = _headers(auth, world["scoped_admin"].id)
+    base = f"/v1/permissions/{lead_read.id}"
+    for method, path, body in (
+        ("POST", "/v1/permissions/", {"name": f"rogue:{_suffix()}", "display_name": "Rogue"}),
+        ("PATCH", base, {"status": "inactive"}),
+        ("DELETE", f"/v1/permissions/{lead_delete.id}", None),
+        ("POST", f"{base}/conditions", {"attribute": "user.team", "operator": "equals", "value": "y"}),
+        ("PATCH", f"{base}/conditions/{condition_id}", {"value": "everyone"}),
+        ("DELETE", f"{base}/conditions/{condition_id}", None),
+        ("POST", f"{base}/condition-groups", {"operator": "OR"}),
+        ("PATCH", f"{base}/condition-groups/{group_id}", {"operator": "OR"}),
+        ("DELETE", f"{base}/condition-groups/{group_id}", None),
+    ):
+        response = await client.request(method, path, headers=scoped, json=body)
+        assert response.status_code == 403, (method, path, response.status_code, response.text)
+
+    async with auth.get_session() as session:
+        unchanged = await auth.permission_service.get_permission_by_id(session, lead_read.id)
+        assert str(getattr(unchanged.status, "value", unchanged.status)) == "active"
+        still_there = await auth.permission_service.get_permission_by_id(session, lead_delete.id)
+        assert still_there is not None
+        assert str(getattr(still_there.status, "value", still_there.status)) == "active"
+        assert await auth.permission_service.check_permission(
+            session, world["user_b"].id, "lead:read", entity_id=world["child_b"].id
+        ) == tenant_b_before
+    conditions = await client.get(f"{base}/conditions", headers=scoped)
+    assert conditions.status_code == 200, conditions.text  # reads are unchanged
+    assert [row["id"] for row in conditions.json()] == [condition_id]
+    assert conditions.json()[0]["value"] == "sales"
+
+    # Positive: a global catalog admin (system-wide role) can write.
+    catalog = _headers(auth, catalog_admin.id)
+    created = await client.post(
+        "/v1/permissions/", headers=catalog, json={"name": f"report:{_suffix()}", "display_name": "Report"}
+    )
+    assert created.status_code == 201, created.text
+    updated = await client.patch(
+        f"/v1/permissions/{created.json()['id']}", headers=catalog, json={"display_name": "Reports"}
+    )
+    assert updated.status_code == 200, updated.text
+    cond_patch = await client.patch(f"{base}/conditions/{condition_id}", headers=catalog, json={"value": "support"})
+    assert cond_patch.status_code == 200, cond_patch.text
+    assert (await client.delete(f"{base}/condition-groups/{group_id}", headers=catalog)).status_code == 204
+    assert (await client.delete(f"{base}/conditions/{condition_id}", headers=catalog)).status_code == 204
+    assert (await client.delete(f"/v1/permissions/{created.json()['id']}", headers=catalog)).status_code == 204

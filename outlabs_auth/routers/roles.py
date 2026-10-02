@@ -30,7 +30,7 @@ from outlabs_auth.schemas.abac import (
     parse_uuid,
 )
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
-from outlabs_auth.routers._scope import entity_scope_guard, resolve_principal_scope
+from outlabs_auth.routers._scope import entity_scope_guard, resolve_principal_scope, role_visible_in_scope
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.definition_history import (
@@ -153,22 +153,8 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         return cast(Role, role)
 
     def _role_is_visible_in_scope(role: Role, scope: dict[str, Any]) -> bool:
-        if scope.get("is_global"):
-            return True
-
-        if _role_is_system_wide(role):
-            return False
-
-        entity_ids = set(scope.get("entity_ids") or [])
-        root_entity_ids = set(scope.get("root_entity_ids") or [])
-
-        if role.scope_entity_id is not None:
-            return str(role.scope_entity_id) in entity_ids
-
-        if role.root_entity_id is not None:
-            return str(role.root_entity_id) in root_entity_ids
-
-        return False
+        # One predicate for role reads and direct grants (DD-061).
+        return role_visible_in_scope(role, scope)
 
     async def _require_role_visibility(
         session: AsyncSession,
@@ -210,7 +196,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
             )
 
         if data.scope_entity_id:
-            if data.scope_entity_id in set(scope.get("entity_ids") or []):
+            if str(data.scope_entity_id) in {str(value) for value in (scope.get("entity_ids") or [])}:
                 return scope
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -218,7 +204,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
             )
 
         if data.root_entity_id:
-            if data.root_entity_id in set(scope.get("root_entity_ids") or []):
+            if str(data.root_entity_id) in {str(value) for value in (scope.get("root_entity_ids") or [])}:
                 return scope
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

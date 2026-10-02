@@ -26,6 +26,7 @@ from outlabs_auth.core.exceptions import PermissionDeniedError
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.role import Role
+from outlabs_auth.services.role import require_direct_role_root_match
 
 
 def _global_scope(source: str) -> dict[str, Any]:
@@ -300,14 +301,111 @@ def role_is_system_wide(role: Any) -> bool:
     )
 
 
-async def user_holds_global_scope(auth: Any, session: AsyncSession, user: Any) -> bool:
-    """Whether a user spans every tree: superuser or active direct system-wide role (DD-056)."""
+async def user_is_global_account(auth: Any, session: AsyncSession, user: Any) -> bool:
+    """Whether only global actors may modify this account (DD-061 decision 12).
+
+    True for a superuser and for any holder of a direct system-wide role row,
+    whatever its state: active, scheduled (``valid_from`` in the future),
+    suspended, expired or revoked, and whatever the role definition's status.
+    A grant that is not active *yet* becomes active without anyone looking at
+    the account again (time passes, or a global admin reactivates the grant or
+    the role), so a tenant admin who could reset its password or email today
+    would inherit global scope later.
+    """
     if bool(getattr(user, "is_superuser", False)):
         return True
     if not auth.config.enable_entity_hierarchy:
         return False
-    scope = await resolve_user_scope(auth, session, user)
-    return bool(scope.get("is_global"))
+    return bool(await auth.access_scope_service.user_has_system_wide_role_grant(session, user.id))
+
+
+def role_visible_in_scope(role: Any, scope: dict[str, Any]) -> bool:
+    """DD-056 role visibility: the predicate the roles router uses for reads.
+
+    Global actors see every role. Others see an entity-local role whose scope
+    entity is in their scope and an org-scoped role rooted at their own root;
+    never a system-wide role (a platform object handled by
+    :func:`require_global_actor_for_system_wide_roles`) or an unrooted
+    non-global role.
+    """
+    if scope.get("is_global"):
+        return True
+    if role_is_system_wide(role):
+        return False
+    scope_entity_id = getattr(role, "scope_entity_id", None)
+    if scope_entity_id is not None:
+        return str(scope_entity_id) in scope_entity_ids(scope)
+    root_entity_id = getattr(role, "root_entity_id", None)
+    if root_entity_id is not None:
+        return str(root_entity_id) in {str(value) for value in (scope.get("root_entity_ids") or [])}
+    return False
+
+
+def role_not_found() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+
+async def _resolve_grantor_scope(
+    auth: Any,
+    session: AsyncSession,
+    *,
+    actor_user: Optional[Any],
+    auth_result: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    if actor_user is not None:
+        if bool(getattr(actor_user, "is_superuser", False)):
+            return _global_scope("superuser")
+        return await resolve_user_scope(auth, session, actor_user)
+    return await resolve_principal_scope(auth, session, auth_result)
+
+
+async def require_direct_role_grants_in_scope(
+    auth: Any,
+    session: AsyncSession,
+    *,
+    roles: Iterable[Any],
+    actor_user: Optional[Any],
+    auth_result: Optional[dict[str, Any]] = None,
+    target_root_entity_id: Any = None,
+    check_target_root: bool = True,
+) -> None:
+    """Tenant rules for granting roles *directly* (``UserRoleMembership``), DD-061.
+
+    Applies to ``POST /users/{id}/roles``, ``POST /auth/invite`` without an
+    entity and the reactivation or widening of a direct role membership, when
+    tenant scope is enforced:
+
+    1. a system-wide role needs a global actor (**403**,
+       ``details.system_wide_role_ids``);
+    2. any other role must be visible in the actor's scope — the roles
+       router's read predicate — otherwise **404**, exactly like a nonexistent
+       role, so another tenant's role IDs reveal nothing and grant nothing;
+    3. an org-scoped role must belong to the target user's root
+       (**422**, ``details.reason = role_root_mismatch``), for every actor.
+
+    SEC-2 containment at the role's entity context is a separate step
+    (:func:`outlabs_auth.routers._authz_utils.require_can_delegate_direct_roles`).
+    """
+    if not scope_enforced(auth):
+        return
+    role_list = list(roles)
+    if not role_list:
+        return
+    await require_global_actor_for_system_wide_roles(
+        auth,
+        session,
+        actor_user=actor_user,
+        role_ids=[role.id for role in role_list],
+        auth_result=auth_result,
+    )
+    scope = await _resolve_grantor_scope(auth, session, actor_user=actor_user, auth_result=auth_result)
+    if not scope.get("is_global"):
+        for role in role_list:
+            if not role_is_system_wide(role) and not role_visible_in_scope(role, scope):
+                raise role_not_found()
+    if check_target_root:
+        for role in role_list:
+            require_direct_role_root_match(auth.config, role, target_root_entity_id)
 
 
 async def require_entity_visible_or_404(

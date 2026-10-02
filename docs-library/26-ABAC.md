@@ -43,7 +43,7 @@ Same shape on both catalogs ([25](./25-Roles-and-Permissions.md)):
 
 | Attach point | Paths | Auth |
 |--------------|-------|------|
-| Permission | `/v1/permissions/{id}/condition-groups` + `/conditions` | `permission:read` / `permission:update` |
+| Permission | `/v1/permissions/{id}/condition-groups` + `/conditions` | `permission:read` / `permission:update`; writes also need a global actor on EnterpriseRBAC (the catalog is shared by every tenant, DD-061) |
 | Role | `/v1/roles/{id}/condition-groups` + `/conditions` | `role:read` / `role:update` |
 
 **Group:** `operator` `AND` | `OR`, optional description.  

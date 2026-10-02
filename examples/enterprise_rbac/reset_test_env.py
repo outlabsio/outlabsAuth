@@ -1246,6 +1246,7 @@ async def reset_database():
                 "persona": "Operational team lead",
                 "notes": "Org-scoped team-lead baseline plus the SF Residential membership and its auto-assigned default role.",
                 "is_superuser": False,
+                "root_entity_key": "org",
                 "direct_roles": ["acme_team_lead_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_residential", "role_names": ["team_lead"]},
@@ -1259,6 +1260,7 @@ async def reset_database():
                 "persona": "Residential agent",
                 "notes": "Receives the auto-assigned SF team default role on the residential team.",
                 "is_superuser": False,
+                "root_entity_key": "org",
                 "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_residential", "role_names": ["agent"]},
@@ -1272,6 +1274,7 @@ async def reset_database():
                 "persona": "Commercial agent",
                 "notes": "Operational user outside the residential auto-assignment scope.",
                 "is_superuser": False,
+                "root_entity_key": "org",
                 "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_commercial", "role_names": ["agent"]},

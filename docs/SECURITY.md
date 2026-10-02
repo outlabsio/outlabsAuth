@@ -91,8 +91,15 @@ The core trust boundaries are:
   tenant-scoped admins, and new accounts stay inside the creator's tenant.
   Tenant admins cannot pull an account from outside their tenant into it,
   invite into another tenant's entity, or mutate an in-tree global
-  administrator; a personal API key carries its owner's scope, never global
-  scope on its own.
+  administrator — including an account whose system-wide grant is scheduled,
+  suspended, expired or revoked; a personal API key carries its owner's scope,
+  never global scope on its own.
+- Direct role grants are tenant-bound: another tenant's role answers 404 on
+  assign, invite and reactivation, a direct org-scoped role only goes to users
+  rooted in its organization (for every actor), and containment is checked
+  where the role takes effect.
+- The permission catalog and its ABAC conditions are shared by every tenant
+  and are written by global actors only.
 - In entity-context checks a directly assigned org-scoped role only reaches
   its own organization's tree (DD-054 matrix, enforced since 0.1.0a35), so a
   tenant role cannot authorize library or host routes in another tenant.

@@ -43,14 +43,15 @@ from outlabs_auth.core.exceptions import (
 )
 from outlabs_auth.routers._authz_utils import (
     lifecycle_update_grants_access,
-    require_can_delegate_permissions,
+    require_can_delegate_direct_roles,
 )
 from outlabs_auth.routers._scope import (
-    require_global_actor_for_system_wide_roles,
+    require_direct_role_grants_in_scope,
     resolve_root_for_scoped_create,
     resolve_user_scope,
+    role_not_found,
     target_user_in_scope,
-    user_holds_global_scope,
+    user_is_global_account,
 )
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
@@ -182,14 +183,15 @@ def get_users_router(
                 detail="Only global administrators can modify a superuser account",
             )
 
-        # DD-061: the superuser-target guard also covers holders of an active
-        # direct system-wide role. They span every tree, so a tenant admin who
-        # could reset their password, email, status or grants would take over
-        # global scope.
-        if for_mutation and await user_holds_global_scope(auth, session, target_user):
+        # DD-061: the superuser-target guard also covers every holder of a
+        # direct system-wide role row — active, scheduled, suspended, expired
+        # or revoked. Such a grant can become active later without anyone
+        # reviewing the account again, so a tenant admin who could reset its
+        # password, email, status or grants would inherit global scope.
+        if for_mutation and await user_is_global_account(auth, session, target_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only global administrators can modify a global administrator account",
+                detail="Only global administrators can modify an account that holds a system-wide role",
             )
 
     async def _get_target_user_or_404(
@@ -1638,29 +1640,32 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+            target_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             # Validate role exists
             role = await auth.role_service.get_role_by_id(session, UUID(data.role_id))
             if not role:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+                raise role_not_found()
 
+            # DD-056/DD-061 tenant rules for a direct grant: a system-wide role
+            # needs a global actor (403); another tenant's role answers 404 like
+            # a missing one; an org-scoped role must belong to the target's root
+            # (422).
+            await require_direct_role_grants_in_scope(
+                auth,
+                session,
+                roles=[role],
+                actor_user=actor_user,
+                target_root_entity_id=target_user.root_entity_id,
+            )
             # SEC-2: assigning a role grants its permissions — the actor must already
-            # hold every permission the role carries (superusers bypass naturally).
-            role_permission_names = await auth.role_service.get_role_permission_names(session, role.id)
-            await require_can_delegate_permissions(
+            # hold every permission the role carries, at the entity context where
+            # the direct role takes effect (superusers bypass naturally).
+            await require_can_delegate_direct_roles(
                 session,
                 auth=auth,
                 actor_user_id=UUID(obs.user_id),
-                permission_names=role_permission_names,
-            )
-            # DD-056: a direct system-wide role makes the holder global; only a
-            # global actor may hand out global scope.
-            await require_global_actor_for_system_wide_roles(
-                auth,
-                session,
-                actor_user=actor_user,
-                role_ids=[role.id],
+                roles=[role],
             )
 
             # Assign role
@@ -1699,8 +1704,9 @@ def get_users_router(
 
         except HTTPException:
             raise
-        except PermissionDeniedError:
-            # Delegation containment (SEC-2) — surface as 403, not a logged 500.
+        except OutlabsAuthException:
+            # Delegation containment (SEC-2, 403) and assignment validation
+            # (422) — surface with their own status, not a logged 500.
             raise
         except Exception as e:
             obs.log_500_error(e, target_user_id=str(user_id), role_id=data.role_id)
@@ -1803,7 +1809,7 @@ def get_users_router(
         """Update a direct role membership for a user."""
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+            target_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             fields_set = data.model_fields_set
             if not fields_set:
@@ -1827,22 +1833,24 @@ def get_users_router(
                 next_valid_from=data.valid_from if "valid_from" in fields_set else current_membership.valid_from,
                 next_valid_until=(data.valid_until if "valid_until" in fields_set else current_membership.valid_until),
             ):
-                # SEC-2: reactivating (or extending) a direct role re-grants its
-                # permissions, so it needs the same containment as assigning it.
-                role_permission_names = await auth.role_service.get_role_permission_names(
-                    session, current_membership.role_id
+                # Reactivating (or extending) a direct role re-grants it, so it
+                # needs the same tenant rules and SEC-2 containment as assigning
+                # it (DD-061 decision 6).
+                granted_role = await auth.role_service.get_role_by_id(session, current_membership.role_id)
+                if not granted_role:
+                    raise role_not_found()
+                await require_direct_role_grants_in_scope(
+                    auth,
+                    session,
+                    roles=[granted_role],
+                    actor_user=actor_user,
+                    target_root_entity_id=target_user.root_entity_id,
                 )
-                await require_can_delegate_permissions(
+                await require_can_delegate_direct_roles(
                     session,
                     auth=auth,
                     actor_user_id=actor_user.id,
-                    permission_names=role_permission_names,
-                )
-                await require_global_actor_for_system_wide_roles(
-                    auth,
-                    session,
-                    actor_user=actor_user,
-                    role_ids=[current_membership.role_id],
+                    roles=[granted_role],
                 )
 
             membership = await auth.role_service.update_user_role_membership(

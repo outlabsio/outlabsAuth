@@ -33,10 +33,10 @@ app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/` | `permission:read` | Paginated. Query: `page`, `limit`, `resource` |
-| `POST` | `/` | `permission:create` | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate). `is_system` must be false (422 otherwise) — see [System definitions](#system-definitions) |
+| `POST` | `/` | `permission:create` + global actor (Enterprise) | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate). `is_system` must be false (422 otherwise) — see [System definitions](#system-definitions) |
 | `GET` | `/{permission_id}` | `permission:read` | One permission |
-| `PATCH` | `/{permission_id}` | `permission:update` | Display/status/tags — **not** rename. System permissions rejected |
-| `DELETE` | `/{permission_id}` | `permission:delete` | System permissions rejected |
+| `PATCH` | `/{permission_id}` | `permission:update` + global actor (Enterprise) | Display/status/tags — **not** rename. System permissions rejected |
+| `DELETE` | `/{permission_id}` | `permission:delete` + global actor (Enterprise) | System permissions rejected |
 | `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`); optional `entity_id` |
 | `GET` | `/user/{user_id}` | `permission:read` + target in tenant scope | Another user’s permission names; optional `entity_id`. Out-of-scope users → 404 |
 | `POST` | `/check` | `permission:check` + target in tenant scope | Batch check; optional `entity_id` for entity/tree context |
@@ -57,6 +57,13 @@ For effective permissions **with sources** (role vs membership), use
 
 ABAC condition groups/conditions also hang off `/{permission_id}/…` when you
 use ABAC — same pattern as roles below.
+
+> **The catalog is shared by every tenant.** On EnterpriseRBAC with
+> `enforce_user_scope` (the default), creating, updating or deleting a
+> permission, and every write to its conditions or condition groups, needs a
+> global actor — a superuser, a holder of a direct system-wide role, a service
+> token or an unanchored integration principal. A tenant-scoped holder of
+> `permission:*` gets **403** (DD-061). Reads are unchanged.
 
 ### System definitions
 
