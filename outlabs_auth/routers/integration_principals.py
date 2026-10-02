@@ -24,6 +24,7 @@ from outlabs_auth.schemas.api_key import (
     ApiKeyResponse,
     SystemIntegrationApiKeyCreateRequest,
     SystemIntegrationApiKeyUpdateRequest,
+    SystemIntegrationGrantableScopesResponse,
 )
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.integration_principal import (
@@ -108,6 +109,37 @@ def get_integration_principals_router(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
         return api_key
 
+    async def _grantable_scopes_response(
+        session: AsyncSession,
+        auth_result: dict,
+        *,
+        scope_kind: IntegrationPrincipalScopeKind,
+        anchor_entity_id: Optional[UUID],
+    ) -> SystemIntegrationGrantableScopesResponse:
+        actor_user_id = _actor_user_id(auth_result)
+        policy_service = getattr(auth, "api_key_policy_service", None)
+        if policy_service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key policy service is unavailable",
+            )
+        try:
+            grantable_scopes = await policy_service.calculate_system_integration_grantable_scopes(
+                session,
+                actor_user_id=actor_user_id,
+                anchor_entity_id=anchor_entity_id,
+                scope_kind=scope_kind,
+            )
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
+        return SystemIntegrationGrantableScopesResponse(
+            actor_user_id=str(actor_user_id),
+            scope_kind=scope_kind.value,
+            anchor_entity_id=str(anchor_entity_id) if anchor_entity_id else None,
+            system_allowed_action_prefixes=policy_service.get_system_allowed_action_prefixes(),
+            grantable_scopes=grantable_scopes,
+        )
+
     @router.get(
         "/entities/{entity_id}/integration-principals",
         response_model=PaginatedResponse[IntegrationPrincipalResponse],
@@ -169,6 +201,27 @@ def get_integration_principals_router(
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
         return await _to_principal_response(session, principal)
+
+    @router.get(
+        "/entities/{entity_id}/integration-principals/grantable-scopes",
+        response_model=SystemIntegrationGrantableScopesResponse,
+        summary="Get grantable scopes for entity integration principals",
+        description=(
+            "Scopes the caller may grant to an integration principal (or its system keys) "
+            "anchored at this entity, under the system-integration policy."
+        ),
+    )
+    async def get_entity_integration_principal_grantable_scopes(
+        entity_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.require_tree_permission("api_key:create", "entity_id", source="path")),
+    ):
+        return await _grantable_scopes_response(
+            session,
+            auth_result,
+            scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+            anchor_entity_id=entity_id,
+        )
 
     @router.get(
         "/entities/{entity_id}/integration-principals/{principal_id}",
@@ -458,6 +511,26 @@ def get_integration_principals_router(
         return await _to_principal_response(session, principal)
 
     @router.get(
+        "/system/integration-principals/grantable-scopes",
+        response_model=SystemIntegrationGrantableScopesResponse,
+        summary="Get grantable scopes for platform-global integration principals",
+        description=(
+            "Scopes the caller may grant to a platform-global integration principal (or its "
+            "system keys) under the system-integration policy."
+        ),
+    )
+    async def get_system_integration_principal_grantable_scopes(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_superuser()),
+    ):
+        return await _grantable_scopes_response(
+            session,
+            auth_result,
+            scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+            anchor_entity_id=None,
+        )
+
+    @router.get(
         "/system/integration-principals/{principal_id}",
         response_model=IntegrationPrincipalResponse,
         summary="Get platform-global integration principal",
@@ -742,6 +815,37 @@ def _get_platform_global_integration_principals_router(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
         return api_key
 
+    async def _grantable_scopes_response(
+        session: AsyncSession,
+        auth_result: dict,
+        *,
+        scope_kind: IntegrationPrincipalScopeKind,
+        anchor_entity_id: Optional[UUID],
+    ) -> SystemIntegrationGrantableScopesResponse:
+        actor_user_id = _actor_user_id(auth_result)
+        policy_service = getattr(auth, "api_key_policy_service", None)
+        if policy_service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key policy service is unavailable",
+            )
+        try:
+            grantable_scopes = await policy_service.calculate_system_integration_grantable_scopes(
+                session,
+                actor_user_id=actor_user_id,
+                anchor_entity_id=anchor_entity_id,
+                scope_kind=scope_kind,
+            )
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
+        return SystemIntegrationGrantableScopesResponse(
+            actor_user_id=str(actor_user_id),
+            scope_kind=scope_kind.value,
+            anchor_entity_id=str(anchor_entity_id) if anchor_entity_id else None,
+            system_allowed_action_prefixes=policy_service.get_system_allowed_action_prefixes(),
+            grantable_scopes=grantable_scopes,
+        )
+
     @router.get(
         "/system/integration-principals",
         response_model=PaginatedResponse[IntegrationPrincipalResponse],
@@ -799,6 +903,26 @@ def _get_platform_global_integration_principals_router(
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
         return await _to_principal_response(session, principal)
+
+    @router.get(
+        "/system/integration-principals/grantable-scopes",
+        response_model=SystemIntegrationGrantableScopesResponse,
+        summary="Get grantable scopes for platform-global integration principals",
+        description=(
+            "Scopes the caller may grant to a platform-global integration principal (or its "
+            "system keys) under the system-integration policy."
+        ),
+    )
+    async def get_system_integration_principal_grantable_scopes(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("api_key:create")),
+    ):
+        return await _grantable_scopes_response(
+            session,
+            auth_result,
+            scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+            anchor_entity_id=None,
+        )
 
     @router.get(
         "/system/integration-principals/{principal_id}",

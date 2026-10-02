@@ -31,6 +31,10 @@ from outlabs_auth.observability import (
 )
 from outlabs_auth.response_builders import build_user_response_async
 from outlabs_auth.routers._authz_utils import require_can_delegate_roles
+from outlabs_auth.routers._scope import (
+    require_global_actor_for_system_wide_roles,
+    resolve_root_for_scoped_create,
+)
 from outlabs_auth.routers.capabilities import build_auth_config_response, mark_auth_surface
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
@@ -156,6 +160,14 @@ def get_auth_router(
 
         Triggers on_after_register hook.
         """
+        if not auth.config.enable_registration:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "registration_disabled",
+                    "message": "Self-registration is disabled on this server.",
+                },
+            )
         try:
             user = await auth.user_service.create_user(
                 session,
@@ -872,6 +884,32 @@ def get_auth_router(
                     entity_id=target_entity_id,
                 )
 
+            invite_root_entity_id = None
+            if target_entity_id is None:
+                # Without an entity the role_ids become direct assignments; a
+                # direct system-wide role makes the invitee global (DD-056), so
+                # only a global actor may grant it.
+                if role_ids:
+                    await require_global_actor_for_system_wide_roles(
+                        auth,
+                        session,
+                        actor_user=actor_user,
+                        role_ids=role_ids,
+                    )
+                # DD-056 creation rule: a tenant-scoped inviter places the
+                # invitee in its own tenant instead of outside every tree.
+                invite_root_entity_id = await resolve_root_for_scoped_create(
+                    auth,
+                    session,
+                    actor_user=actor_user,
+                    auth_result=getattr(
+                        getattr(getattr(obs, "request", None), "state", None),
+                        "_outlabs_auth_result",
+                        None,
+                    ),
+                    requested_root_entity_id=None,
+                )
+
             user, plain_token = await auth.user_service.invite_user(
                 session,
                 email=data.email,
@@ -879,7 +917,7 @@ def get_auth_router(
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
                 invited_by_id=actor_user_id,
-                root_entity_id=None,
+                root_entity_id=invite_root_entity_id,
             )
 
             # If entity_id is provided, roles are applied through the entity

@@ -142,6 +142,13 @@ async def verify_password_dummy_async() -> None:
     await asyncio.to_thread(verify_password, "outlabs-timing-equalizer-probe", _get_dummy_password_hash())
 
 
+# The exact characters that satisfy ``require_special_char``. Published in
+# /auth/config (password_policy.special_characters) so UIs can validate
+# client-side with the same rule instead of discovering it by trial and error.
+PASSWORD_SPECIAL_CHARACTERS = '!@#$%^&*(),.?":{}|<>\\'
+PASSWORD_MAX_LENGTH = 128
+
+
 def validate_password_strength(
     password: str,
     min_length: int = 8,
@@ -187,7 +194,7 @@ def validate_password_strength(
         return False, "Password must contain at least one digit"
 
     # Check special character
-    if require_special_char and not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+    if require_special_char and not any(char in PASSWORD_SPECIAL_CHARACTERS for char in password):
         return False, "Password must contain at least one special character"
 
     return True, None

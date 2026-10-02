@@ -41,6 +41,13 @@ class UserResponse(BaseModel):
     suspended_until: Optional[datetime] = None
     locked_until: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
+    has_password: bool = Field(
+        default=False,
+        description=(
+            "Whether the account has a usable password (OAuth-only, magic-link-only and "
+            "invited accounts do not). Lets UIs offer 'set a password' instead of 'change password'."
+        ),
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -55,6 +62,21 @@ class UserUpdateRequest(BaseModel):
         default=None,
         description="E.164 WhatsApp/SMS delivery number. Send null or empty to clear.",
         max_length=20,
+    )
+
+
+class SelfUserUpdateRequest(UserUpdateRequest):
+    """Self-service profile update (PATCH /users/me).
+
+    Changing ``email`` is a credential-level change: it is rejected unless the
+    host enables ``allow_self_service_email_change``, and then requires
+    ``current_password`` (re-authentication).
+    """
+
+    current_password: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Current password; required only when changing email.",
     )
 
 

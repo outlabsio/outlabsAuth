@@ -222,6 +222,22 @@ class AuthConfig(BaseModel):
         default=True,
         description="Enable user invitation system (invite by email, set password later)",
     )
+    enable_registration: bool = Field(
+        default=True,
+        description=(
+            "Allow public self-registration (POST /auth/register and new-account creation "
+            "from OAuth sign-in). Disable for invite-only or admin-provisioned deployments; "
+            "advertised as registration_mode in /auth/config."
+        ),
+    )
+    allow_self_service_email_change: bool = Field(
+        default=False,
+        description=(
+            "Allow users to change their own email via PATCH /users/me. Disabled by default: "
+            "an email change combined with password recovery can turn a stolen session into "
+            "an account takeover. When enabled, the request must carry current_password."
+        ),
+    )
     invite_token_expire_days: int = Field(
         default=7,
         description="Number of days before an invite token expires",

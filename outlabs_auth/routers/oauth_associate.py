@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import OutlabsAuthException
 from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.security import generate_nonce, generate_pkce_pair
@@ -79,6 +80,31 @@ def _build_success_redirect(base_url: str, *, provider: str) -> str:
     return f"{base_url}{separator}{urlencode({'linked': provider})}"
 
 
+def _build_link_error_redirect(base_url: str, *, provider: str, error_code: str) -> str:
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}{urlencode({'link_error': error_code, 'provider': provider})}"
+
+
+def _associate_error_code(exc: BaseException) -> str:
+    """Stable, non-sensitive code for a failed account-link callback."""
+    if isinstance(exc, HTTPException):
+        detail = str(exc.detail or "").lower()
+        if "already linked to another user" in detail:
+            return "already_linked"
+        if "different account for this provider" in detail:
+            return "provider_conflict"
+        if "state" in detail or "binding" in detail or "authenticated user id" in detail:
+            return "invalid_state"
+        if "user not found" in detail:
+            return "auth"
+        if "cancel" in detail:
+            return "cancelled"
+        return "provider"
+    if isinstance(exc, OutlabsAuthException):
+        return "auth"
+    return "provider"
+
+
 def get_oauth_associate_router(
     oauth_client: Any,
     auth: Any,
@@ -89,6 +115,7 @@ def get_oauth_associate_router(
     success_redirect_url: Optional[str] = None,
     requires_verification: bool = False,
     cookie_secure: bool = True,
+    error_redirect_url: Optional[str] = None,
 ) -> APIRouter:
     """
     Generate OAuth account association router for authenticated users.
@@ -97,6 +124,14 @@ def get_oauth_associate_router(
     the signed one-time state + browser binding cookie (Google/GitHub will not
     send the SPA Bearer token on redirect). When ``success_redirect_url`` is
     set, successful callbacks redirect to the SPA instead of returning JSON.
+
+    Failures redirect back to the SPA as well whenever a landing URL is known
+    (the state-bound profile's association landing, else ``error_redirect_url``,
+    else ``success_redirect_url``) with
+    ``?link_error=<code>&provider=<name>``. Codes: ``cancelled``,
+    ``provider``, ``invalid_state``, ``already_linked``,
+    ``provider_conflict``, ``auth``. Without any landing URL the callback keeps
+    answering JSON errors (API clients).
     """
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
@@ -207,30 +242,56 @@ def get_oauth_associate_router(
         error: Optional[str] = Query(default=None),
         access_token_state: Optional[tuple[dict[str, Any], str]] = Depends(_no_injected_callback_state),
     ) -> Union[SocialAccountResponse, RedirectResponse]:
+        # Until the signed state is decoded only construction-time landings are
+        # trusted; the profile-bound landing is added once the state verifies.
+        error_landing_url = error_redirect_url or success_redirect_url
+
+        def _maybe_error_redirect(exc: BaseException) -> RedirectResponse:
+            if not error_landing_url:
+                raise exc
+            return RedirectResponse(
+                url=_build_link_error_redirect(
+                    error_landing_url,
+                    provider=oauth_client.name,
+                    error_code=_associate_error_code(exc),
+                ),
+                status_code=status.HTTP_302_FOUND,
+            )
+
         token: Optional[dict[str, Any]] = None
         if access_token_state is not None:
             token, state = access_token_state
         elif error or not code or not state:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth provider authorization failed",
+            return _maybe_error_redirect(
+                HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "OAuth provider authorization was cancelled"
+                        if error == "access_denied"
+                        else "OAuth provider authorization failed"
+                    ),
+                )
             )
 
         try:
             state_data = decode_state_token(state, state_secret)
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid OAuth state token",
+            return _maybe_error_redirect(
+                HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid OAuth state token",
+                )
             )
 
         user_id = state_data.get("sub")
         try:
             user_uuid = UUID(str(user_id))
         except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid authenticated user ID",
+            return _maybe_error_redirect(
+                HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid authenticated user ID",
+                )
             )
 
         # The app claim rode inside the SIGNED state, so it is trusted here:
@@ -240,7 +301,37 @@ def get_oauth_associate_router(
             auth, state_app, flow=FrontendFlow.OAUTH_ASSOCIATE
         )
         effective_success_url = profile_success_url or success_redirect_url
+        error_landing_url = profile_success_url or error_redirect_url or success_redirect_url
 
+        try:
+            return await _complete_association(
+                request=request,
+                response=response,
+                session=session,
+                code=code,
+                state=state,
+                token=token,
+                user_uuid=user_uuid,
+                state_app=state_app,
+                effective_success_url=effective_success_url,
+                injected_token=access_token_state is not None,
+            )
+        except (HTTPException, OutlabsAuthException) as exc:
+            return _maybe_error_redirect(exc)
+
+    async def _complete_association(
+        *,
+        request: Request,
+        response: Response,
+        session: AsyncSession,
+        code: Optional[str],
+        state: str,
+        token: Optional[dict[str, Any]],
+        user_uuid: UUID,
+        state_app: Optional[str],
+        effective_success_url: Optional[str],
+        injected_token: bool,
+    ) -> Union[SocialAccountResponse, RedirectResponse]:
         state_record = await consume_oauth_state(
             session=session,
             request=request,
@@ -276,7 +367,7 @@ def get_oauth_associate_router(
         await validate_oidc_nonce(
             oauth_client,
             token,
-            state_record.nonce if access_token_state is None else None,
+            state_record.nonce if not injected_token else None,
         )
 
         user_info = await get_oauth_user_info(oauth_client, token)

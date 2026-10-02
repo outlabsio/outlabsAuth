@@ -27,6 +27,13 @@ class MembershipResponse(BaseModel):
     revocation_reason: Optional[str] = None
     is_currently_valid: bool
     can_grant_permissions: bool
+    entity_name: Optional[str] = Field(
+        default=None, description="Entity system name (when the entity is loaded, e.g. /memberships/me)."
+    )
+    entity_display_name: Optional[str] = Field(default=None, description="Entity display name (when loaded).")
+    entity_type: Optional[str] = Field(default=None, description="Entity type (when loaded).")
+    role_names: List[str] = Field(default_factory=list, description="Names of the roles granted by this membership.")
+    updated_at: Optional[datetime] = Field(default=None, description="Last modification time, when known.")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +57,7 @@ class EntityMemberResponse(BaseModel):
     joined_at: datetime
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -370,7 +370,7 @@ async def test_permissions_router_callback_list_and_abac_paths(
                 permission_id=permission.id,
                 data=AbacConditionCreateRequest(
                     attribute="user.department",
-                    operator="eq",
+                    operator="equals",
                     value="finance",
                 ),
                 session=session,
@@ -410,7 +410,7 @@ async def test_permissions_router_callback_list_and_abac_paths(
             return SimpleNamespace(
                 id=uuid.uuid4(),
                 attribute="user.department",
-                operator="eq",
+                operator="equals",
                 value="finance",
                 value_type="string",
                 description="condition created",
@@ -432,7 +432,7 @@ async def test_permissions_router_callback_list_and_abac_paths(
             permission_id=permission.id,
             data=AbacConditionCreateRequest(
                 attribute="user.department",
-                operator="eq",
+                operator="equals",
                 value="finance",
             ),
             session=session,
@@ -566,7 +566,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
             permission.id,
             condition_group_id=group.id,
             attribute="user.department",
-            operator="eq",
+            operator="equals",
             value="finance",
             value_type="string",
             description="condition listed",
@@ -652,7 +652,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
                 permission_id=permission.id,
                 data=AbacConditionCreateRequest(
                     attribute="user.department",
-                    operator="eq",
+                    operator="equals",
                     value="finance",
                 ),
                 session=session,
@@ -675,7 +675,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
             return SimpleNamespace(
                 id=condition.id,
                 attribute="resource.region",
-                operator="eq",
+                operator="equals",
                 value="latam",
                 value_type="string",
                 description="condition updated",
@@ -688,7 +688,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
             condition_id=condition.id,
             data=AbacConditionUpdateRequest(
                 attribute="resource.region",
-                operator="eq",
+                operator="equals",
                 value="latam",
                 description="condition updated",
             ),

@@ -15,7 +15,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Mapping, Optional, Tuple, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -298,6 +298,9 @@ class AuthService:
         await enforce_sign_in_gate(getattr(self, "frontend_resolver", None), session, user, app=app)
 
         family_expires_at = self._new_family_expiry(login_recorded_at)
+        # The session family id doubles as the access token's ``sid`` claim so
+        # session lists can mark the caller's own session (is_current).
+        family_id = uuid4()
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -307,6 +310,7 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=app,
             session_expires_at=family_expires_at,
+            additional_claims={"sid": str(family_id)},
         )
         phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
 
@@ -316,6 +320,7 @@ class AuthService:
             refresh_token_hash = self._hash_token(refresh_token_value)
             refresh_token_model = RefreshToken(
                 user_id=user.id,
+                family_id=family_id,
                 token_hash=refresh_token_hash,
                 expires_at=self._refresh_row_expiry(login_recorded_at, family_expires_at),
                 family_expires_at=family_expires_at,
@@ -411,6 +416,7 @@ class AuthService:
         user.last_login = login_recorded_at
 
         family_expires_at = self._new_family_expiry(login_recorded_at)
+        family_id = uuid4()
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -420,12 +426,14 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=app,
             session_expires_at=family_expires_at,
+            additional_claims={"sid": str(family_id)},
         )
 
         if self.config.store_refresh_tokens:
             refresh_token_hash = self._hash_token(refresh_token_value)
             refresh_token_model = RefreshToken(
                 user_id=user.id,
+                family_id=family_id,
                 token_hash=refresh_token_hash,
                 expires_at=self._refresh_row_expiry(login_recorded_at, family_expires_at),
                 family_expires_at=family_expires_at,
@@ -739,6 +747,7 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=azp,
             session_expires_at=family_expires_at,
+            additional_claims=({"sid": str(token_model.family_id)} if token_model is not None else None),
         )
 
         # Store the replacement before revoking the old token so the lineage is
@@ -845,6 +854,8 @@ class AuthService:
         session: AsyncSession,
         user_id: UUID,
         reason: str = "Revoke all sessions",
+        *,
+        exclude_family_id: Optional[UUID] = None,
     ) -> int:
         """
         Revoke all refresh tokens for a user.
@@ -853,6 +864,8 @@ class AuthService:
             session: Database session
             user_id: User UUID
             reason: Revocation reason
+            exclude_family_id: Keep this session family (the caller's own
+                session for "sign out other devices")
 
         Returns:
             Number of tokens revoked
@@ -865,6 +878,8 @@ class AuthService:
             cast(Any, RefreshToken.user_id) == user_id,
             cast(Any, RefreshToken.is_revoked).is_(False),
         )
+        if exclude_family_id is not None:
+            stmt = stmt.where(cast(Any, RefreshToken.family_id) != exclude_family_id)
         result = await session.execute(stmt)
         tokens = result.scalars().all()
 

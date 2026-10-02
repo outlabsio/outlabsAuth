@@ -11,6 +11,7 @@ from functools import lru_cache
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from dateutil import parser as date_parser  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
 from outlabs_auth.models.sql.condition import Condition, ConditionGroup
 from outlabs_auth.models.sql.enums import ConditionOperator
@@ -79,12 +80,14 @@ class PolicyEvaluationEngine:
         if condition.operator == ConditionOperator.NOT_EXISTS:
             return attribute_value is None
 
-        # Handle boolean checks
+        # Handle boolean checks. Fail closed: a missing attribute satisfies
+        # neither IS_TRUE nor IS_FALSE (it used to satisfy IS_FALSE, so a
+        # caller that omitted e.g. resource.locked was treated as unlocked).
         if condition.operator == ConditionOperator.IS_TRUE:
-            return bool(attribute_value) is True
+            return attribute_value is not None and bool(attribute_value) is True
 
         if condition.operator == ConditionOperator.IS_FALSE:
-            return bool(attribute_value) is False
+            return attribute_value is not None and bool(attribute_value) is False
 
         # For all other operators, if attribute doesn't exist, condition fails
         if attribute_value is None:
@@ -219,11 +222,12 @@ class PolicyEvaluationEngine:
             )
 
         if operator == ConditionOperator.NOT_IN:
-            # Check if attribute_value is NOT in the expected_value list
+            # Check if attribute_value is NOT in the expected_value list.
+            # A misconfigured (non-list) value fails closed.
             return (
                 attribute_value not in expected_value
                 if isinstance(expected_value, list)
-                else True
+                else False
             )
 
         if operator == ConditionOperator.CONTAINS:
@@ -235,11 +239,12 @@ class PolicyEvaluationEngine:
             )
 
         if operator == ConditionOperator.NOT_CONTAINS:
-            # Check if attribute_value (list) does NOT contain expected_value
+            # Check if attribute_value (list) does NOT contain expected_value.
+            # A non-collection attribute cannot be checked and fails closed.
             return (
                 expected_value not in attribute_value
                 if isinstance(attribute_value, (list, tuple, set))
-                else True
+                else False
             )
 
         # String operations
@@ -392,16 +397,7 @@ class PolicyEvaluationEngine:
         # Ungrouped conditions are always AND-ed
         ungrouped = grouped.pop(None, [])
         for cond in ungrouped:
-            if not self.evaluate_condition(
-                Condition(
-                    attribute=cond.attribute,
-                    operator=cond.operator,
-                    value=self._parse_value(
-                        cond.value, getattr(cond, "value_type", "string")
-                    ),
-                ),
-                context,
-            ):
+            if not self._evaluate_stored_condition(cond, context):
                 return False
 
         # Grouped conditions. Generator + all/any short-circuits: an AND group
@@ -412,24 +408,30 @@ class PolicyEvaluationEngine:
             if op not in ("AND", "OR"):
                 raise ValueError(f"Unknown logical operator: {op}")
 
-            evaluations = (
-                self.evaluate_condition(
-                    Condition(
-                        attribute=cond.attribute,
-                        operator=cond.operator,
-                        value=self._parse_value(
-                            cond.value, getattr(cond, "value_type", "string")
-                        ),
-                    ),
-                    context,
-                )
-                for cond in conds
-            )
+            evaluations = (self._evaluate_stored_condition(cond, context) for cond in conds)
             group_passes = all(evaluations) if op == "AND" else any(evaluations)
             if not group_passes:
                 return False
 
         return True
+
+    def _evaluate_stored_condition(self, cond: Any, context: Dict[str, Any]) -> bool:
+        """Evaluate one stored condition row, failing closed on bad data.
+
+        A row that cannot be interpreted (unknown operator, unsupported
+        attribute context, a value that does not parse as its value_type)
+        never grants: it evaluates to False instead of raising a 500 from the
+        middle of an authorization check.
+        """
+        try:
+            condition = Condition(
+                attribute=cond.attribute,
+                operator=cond.operator,
+                value=self._parse_value(cond.value, getattr(cond, "value_type", "string")),
+            )
+            return self.evaluate_condition(condition, context)
+        except (ValidationError, ValueError, TypeError):
+            return False
 
     def _parse_value(self, raw: Any, value_type: str) -> Any:
         if raw is None:

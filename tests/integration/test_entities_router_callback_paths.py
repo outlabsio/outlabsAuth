@@ -7,6 +7,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.routers import get_entities_router
 from outlabs_auth.schemas.entity import EntityCreateRequest, EntityMoveRequest, EntityUpdateRequest
@@ -42,12 +43,15 @@ async def entities_router(auth_instance: EnterpriseRBAC):
 
 
 async def _create_user(auth: EnterpriseRBAC, session, *, email_prefix: str):
+    # Handlers are called directly (bypassing the permission dependency), but
+    # DD-061 tenant scoping still applies: use a global actor.
     return await auth.user_service.create_user(
         session=session,
         email=f"{email_prefix}-{_suffix()}@example.com",
         password="TestPass123!",
         first_name="Entity",
         last_name="Actor",
+        is_superuser=True,
     )
 
 
@@ -218,11 +222,12 @@ async def test_entities_router_callback_list_and_crud_paths(
 
         delete_spy = AsyncMock(return_value=True)
         monkeypatch.setattr(auth_instance.entity_service, "delete_entity", delete_spy)
+        # A trusted service token has no user id (and global scope, DD-061).
         response = await delete_entity(
             entity_id=dept.id,
             cascade=True,
             session=session,
-            auth_result={},
+            auth_result={"source": "service_token"},
         )
         assert response is None
         assert delete_spy.await_args.kwargs["deleted_by_id"] is None
@@ -270,13 +275,14 @@ async def test_entities_router_callback_move_descendants_and_members_paths(
             parent_id=current_parent.id,
         )
 
-        moved_to_root = await move_entity(
-            entity_id=node.id,
-            data=EntityMoveRequest(new_parent_id=None),
-            session=session,
-            auth_result={"user_id": str(actor.id)},
-        )
-        assert moved_to_root.parent_entity_id is None
+        # Promotion to the root level must satisfy root-type rules (F-076).
+        with pytest.raises(InvalidInputError, match="not allowed for structural root entities"):
+            await move_entity(
+                entity_id=node.id,
+                data=EntityMoveRequest(new_parent_id=None),
+                session=session,
+                auth_result={"user_id": str(actor.id)},
+            )
 
         async def _deny_create_under_parent(*args, **kwargs):
             return False

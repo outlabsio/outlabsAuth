@@ -9,7 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -35,7 +35,7 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembershipRole,
 )
 from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHistory
-from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope, UserStatus
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services import request_cache
@@ -648,6 +648,7 @@ class MembershipService(BaseService[EntityMembership]):
         page: int = 1,
         limit: int = 50,
         active_only: bool = True,
+        search: Optional[str] = None,
     ) -> Tuple[List[EntityMembership], int]:
         """
         Get members of entity with user details and roles eager loaded.
@@ -658,6 +659,7 @@ class MembershipService(BaseService[EntityMembership]):
             page: Page number (1-indexed)
             limit: Results per page
             active_only: Only return active memberships
+            search: Optional case-insensitive match on member email / name
 
         Returns:
             Tuple[List[EntityMembership], int]: (memberships with user+roles, total_count)
@@ -666,18 +668,36 @@ class MembershipService(BaseService[EntityMembership]):
         filters: list[Any] = [cast(Any, EntityMembership.entity_id) == entity_id]
         if active_only:
             filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
+        if search:
+            pattern = f"%{search}%"
+            filters.append(
+                cast(Any, EntityMembership.user_id).in_(
+                    select(cast(Any, User.id)).where(
+                        or_(
+                            cast(Any, User.email).ilike(pattern),
+                            cast(Any, User.first_name).ilike(pattern),
+                            cast(Any, User.last_name).ilike(pattern),
+                        )
+                    )
+                )
+            )
 
         # Get total count
         count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
         count_result = await session.execute(count_stmt)
         total_count = count_result.scalar() or 0
 
-        # Get paginated results with user AND roles eager loaded
+        # Get paginated results with user AND roles eager loaded. A stable order
+        # keeps pages disjoint across requests.
         skip = (page - 1) * limit
         stmt = (
             select(EntityMembership)
             .where(*filters)
             .options(*self._membership_roles_user_options())
+            .order_by(
+                cast(Any, EntityMembership.joined_at).asc(),
+                cast(Any, EntityMembership.id).asc(),
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -1215,8 +1235,17 @@ class MembershipService(BaseService[EntityMembership]):
         limit: int = 20,
         search: Optional[str] = None,
         root_entity_id: Optional[UUID] = None,
+        scope_root_entity_ids: Optional[Sequence[UUID]] = None,
+        status: Optional[UserStatus] = None,
+        include_deleted: bool = False,
     ) -> Tuple[List[OrphanedUserRecord], int]:
-        """List users with no active memberships but historical assignment rows."""
+        """List users with no active memberships but historical assignment rows.
+
+        Soft-deleted accounts are excluded unless ``status=deleted`` or
+        ``include_deleted`` is requested. ``scope_root_entity_ids`` limits the
+        result to users rooted inside a tenant-scoped actor's scope (DD-056):
+        an orphan keeps its ``root_entity_id``, so its tenant can still find it.
+        """
         active_memberships = (
             select(func.count(cast(Any, EntityMembership.id)))
             .where(
@@ -1236,6 +1265,14 @@ class MembershipService(BaseService[EntityMembership]):
         filters: list[Any] = [active_memberships == 0, any_memberships > 0]
         if root_entity_id is not None:
             filters.append(cast(Any, User.root_entity_id) == root_entity_id)
+        if scope_root_entity_ids is not None:
+            if not scope_root_entity_ids:
+                return [], 0
+            filters.append(cast(Any, User.root_entity_id).in_(list(scope_root_entity_ids)))
+        if status is not None:
+            filters.append(cast(Any, User.status) == status)
+        elif not include_deleted:
+            filters.append(cast(Any, User.status) != UserStatus.DELETED)
         if search:
             pattern = f"%{search}%"
             filters.append(

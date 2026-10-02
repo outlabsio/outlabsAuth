@@ -14,8 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
-from outlabs_auth.routers._authz_utils import require_can_delegate_roles
+from outlabs_auth.routers._authz_utils import (
+    lifecycle_update_grants_access,
+    require_can_delegate_roles,
+)
+from outlabs_auth.routers._scope import get_visible_user_or_404
 from outlabs_auth.routers.capabilities import mark_auth_surface
+from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.membership import (
     EntityMemberResponse,
     MembershipCreateRequest,
@@ -45,7 +50,8 @@ def get_memberships_router(
         GET /me - Get current user's memberships
         POST / - Add user to entity
         GET /entity/{entity_id} - Get all members of an entity
-        GET /user/{user_id} - Get all entities for a user
+        GET /entity/{entity_id}/members - Paginated members with details and total
+        GET /user/{user_id} - Get all entities for a user (DD-056 target scope)
         PATCH /{entity_id}/{user_id} - Update user's roles in entity
         DELETE /{entity_id}/{user_id} - Remove user from entity
 
@@ -75,8 +81,17 @@ def get_memberships_router(
     def serialize_membership(membership: EntityMembership) -> MembershipResponse:
         """Convert membership model into a stable API response."""
         role_ids = sorted(str(role.id) for role in membership.roles)
+        # Read relationship/timestamp state only when already loaded: touching
+        # an unloaded attribute would trigger a lazy load outside the greenlet.
+        loaded_state = getattr(membership, "__dict__", {})
+        entity = loaded_state.get("entity")
 
         return MembershipResponse(
+            entity_name=getattr(entity, "name", None),
+            entity_display_name=getattr(entity, "display_name", None),
+            entity_type=getattr(entity, "entity_type", None),
+            role_names=sorted(role.name for role in membership.roles),
+            updated_at=loaded_state.get("updated_at"),
             id=str(membership.id),
             entity_id=str(membership.entity_id),
             user_id=str(membership.user_id),
@@ -217,30 +232,75 @@ def get_memberships_router(
             limit=limit,
             active_only=not include_inactive,
         )
-        return [
-            EntityMemberResponse(
-                id=str(m.id),
-                user_id=str(m.user_id),
-                user_email=m.user.email if m.user else "",
-                user_first_name=m.user.first_name if m.user else None,
-                user_last_name=m.user.last_name if m.user else None,
-                user_status=(getattr(m.user.status, "value", m.user.status) if m.user else "unknown"),
-                roles=[
-                    RoleSummary(
-                        id=str(r.id),
-                        name=r.name,
-                        display_name=r.display_name,
-                    )
-                    for r in m.roles
-                ],
-                status=getattr(m.status, "value", m.status),
-                effective_status=resolve_effective_status(m),
-                joined_at=m.joined_at,
-                valid_from=m.valid_from,
-                valid_until=m.valid_until,
-            )
-            for m in memberships
-        ]
+        return [serialize_entity_member(m) for m in memberships]
+
+    def serialize_entity_member(m: EntityMembership) -> EntityMemberResponse:
+        return EntityMemberResponse(
+            id=str(m.id),
+            user_id=str(m.user_id),
+            user_email=m.user.email if m.user else "",
+            user_first_name=m.user.first_name if m.user else None,
+            user_last_name=m.user.last_name if m.user else None,
+            user_status=(getattr(m.user.status, "value", m.user.status) if m.user else "unknown"),
+            roles=[
+                RoleSummary(
+                    id=str(r.id),
+                    name=r.name,
+                    display_name=r.display_name,
+                )
+                for r in m.roles
+            ],
+            status=getattr(m.status, "value", m.status),
+            effective_status=resolve_effective_status(m),
+            joined_at=m.joined_at,
+            valid_from=m.valid_from,
+            valid_until=m.valid_until,
+            updated_at=getattr(m, "__dict__", {}).get("updated_at"),
+        )
+
+    @router.get(
+        "/entity/{entity_id}/members",
+        response_model=PaginatedResponse[EntityMemberResponse],
+        summary="Page entity members with details",
+        description=(
+            "Paginated members of an entity with user details, roles and a total count "
+            "(requires membership:read permission on the entity tree). Supersedes the bare-list "
+            "/entity/{entity_id}/details for UIs that need totals and server-side search."
+        ),
+    )
+    async def page_entity_members_with_details(
+        entity_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        include_inactive: bool = Query(
+            False,
+            description="Include suspended, revoked, pending, and expired memberships",
+        ),
+        search: Optional[str] = Query(
+            None,
+            min_length=1,
+            max_length=200,
+            description="Case-insensitive match on member email, first name or last name",
+        ),
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id", source="path")),
+    ):
+        memberships, total = await auth.membership_service.get_entity_members_with_users(
+            session=session,
+            entity_id=entity_id,
+            page=page,
+            limit=limit,
+            active_only=not include_inactive,
+            search=search,
+        )
+        pages = (total + limit - 1) // limit if total > 0 else 0
+        return PaginatedResponse(
+            items=[serialize_entity_member(m) for m in memberships],
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+        )
 
     @router.get(
         "/user/{user_id}",
@@ -259,7 +319,12 @@ def get_memberships_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:read")),
     ):
-        """Get all entity memberships for a user."""
+        """Get all entity memberships for a user.
+
+        DD-056: the target user must be inside the caller's tenant scope
+        (404 otherwise, exactly like a nonexistent user).
+        """
+        await get_visible_user_or_404(auth, session, auth_result, user_id)
         memberships, _ = await auth.membership_service.get_user_entities(
             session=session,
             user_id=user_id,
@@ -294,6 +359,26 @@ def get_memberships_router(
                 role_ids=role_ids,
                 entity_id=entity_id,
             )
+        elif fields_set & {"status", "valid_from", "valid_until"}:
+            # SEC-2: reactivating a suspended membership (or widening its window)
+            # re-grants every role it carries, so it needs the same containment
+            # as adding those roles.
+            current = await auth.membership_service.get_member(session, entity_id, user_id)
+            if current is not None and lifecycle_update_grants_access(
+                current_status=current.status,
+                current_valid_from=current.valid_from,
+                current_valid_until=current.valid_until,
+                next_status=data.status if "status" in fields_set else current.status,
+                next_valid_from=data.valid_from if "valid_from" in fields_set else current.valid_from,
+                next_valid_until=data.valid_until if "valid_until" in fields_set else current.valid_until,
+            ):
+                await require_can_delegate_roles(
+                    session,
+                    auth=auth,
+                    actor_user_id=UUID(auth_result["user_id"]),
+                    role_ids=[role.id for role in current.roles],
+                    entity_id=entity_id,
+                )
 
         membership = await auth.membership_service.update_membership(
             session=session,

@@ -627,6 +627,7 @@ class OutlabsAuth:
             )
             self.entity_service.membership_service = self.membership_service
             self.entity_service.role_service = self.role_service
+            self.entity_service.user_audit_service = self.user_audit_service
 
         # API Key service
         self.api_key_service = APIKeyService(

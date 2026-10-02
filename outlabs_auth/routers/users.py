@@ -4,18 +4,17 @@ Users router factory.
 Provides ready-to-use user management routes (DD-041).
 """
 
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, UserStatus
+from outlabs_auth.models.sql.enums import DefinitionStatus, UserStatus
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
@@ -34,6 +33,7 @@ from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSo
 from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 from outlabs_auth.core.exceptions import (
+    InvalidCredentialsError,
     InvalidInputError,
     MembershipNotFoundError,
     OutlabsAuthException,
@@ -41,17 +41,28 @@ from outlabs_auth.core.exceptions import (
     TokenExpiredError,
     TokenInvalidError,
 )
-from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
+from outlabs_auth.routers._authz_utils import (
+    lifecycle_update_grants_access,
+    require_can_delegate_permissions,
+)
+from outlabs_auth.routers._scope import (
+    require_global_actor_for_system_wide_roles,
+    resolve_root_for_scoped_create,
+    resolve_user_scope,
+    target_user_in_scope,
+)
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
     ChangePasswordRequest,
     PhoneVerifyCodeRequest,
+    SelfUserUpdateRequest,
     UserCreateRequest,
     UserResponse,
     UserStatusUpdateRequest,
     UserSuperuserUpdateRequest,
     UserUpdateRequest,
 )
+from outlabs_auth.utils.validation import validate_email
 from outlabs_auth.utils.rate_limit import (
     check_phone_verify_confirm_rate_limit,
     check_phone_verify_request_rate_limit,
@@ -132,49 +143,14 @@ def get_users_router(
         return actor_user
 
     async def _resolve_actor_scope(session: AsyncSession, actor_user: Any) -> dict[str, Any]:
-        scope = cast(
-            dict[str, Any],
-            await auth.access_scope_service.resolve_for_auth_result(
-                session,
-                {"source": "jwt", "user_id": str(actor_user.id), "user": actor_user},
-                include_member_user_ids=False,
-            ),
-        )
-        if not auth.config.enable_entity_hierarchy:
-            scope["is_global"] = True
-        return scope
+        return await resolve_user_scope(auth, session, actor_user)
 
     async def _target_user_in_scope(
         session: AsyncSession,
         target_user: Any,
         scope: dict[str, Any],
     ) -> bool:
-        entity_ids = set(scope.get("entity_ids") or [])
-        if not entity_ids:
-            return False
-
-        target_root_entity_id = getattr(target_user, "root_entity_id", None)
-        if target_root_entity_id is not None and str(target_root_entity_id) in entity_ids:
-            return True
-
-        # Evaluated from the target side (DD-056): O(target's memberships),
-        # and covers root-assigned users with no membership rows.
-        now = datetime.now(timezone.utc)
-        stmt = select(cast(Any, EntityMembership.entity_id)).where(
-            cast(Any, EntityMembership.user_id) == target_user.id,
-            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
-            or_(
-                cast(Any, EntityMembership.valid_from).is_(None),
-                cast(Any, EntityMembership.valid_from) <= now,
-            ),
-            or_(
-                cast(Any, EntityMembership.valid_until).is_(None),
-                cast(Any, EntityMembership.valid_until) >= now,
-            ),
-        )
-        result = await session.execute(stmt)
-        target_entity_ids = {str(entity_id) for (entity_id,) in result.all() if entity_id is not None}
-        return bool(target_entity_ids & entity_ids)
+        return await target_user_in_scope(session, target_user, scope)
 
     async def _require_target_user_in_scope(
         session: AsyncSession,
@@ -310,6 +286,25 @@ def get_users_router(
                     detail="Only superusers can create superusers",
                 )
 
+            requested_root_entity_id: Optional[UUID] = None
+            if data.root_entity_id:
+                try:
+                    requested_root_entity_id = UUID(data.root_entity_id)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid root_entity_id: {data.root_entity_id}",
+                    )
+
+            # DD-056 creation rule: a tenant-scoped admin cannot root an account
+            # in another tenant (or leave it outside every tenant).
+            root_entity_id = await resolve_root_for_scoped_create(
+                auth,
+                session,
+                actor_user=actor_user,
+                requested_root_entity_id=requested_root_entity_id,
+            )
+
             user = await auth.user_service.create_user(
                 session,
                 email=data.email,
@@ -317,7 +312,7 @@ def get_users_router(
                 first_name=data.first_name,
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
-                root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
+                root_entity_id=root_entity_id,
             )
 
             # Trigger on_after_register hook
@@ -334,6 +329,8 @@ def get_users_router(
 
             return await build_user_response_async(session, user)
         except HTTPException:
+            raise
+        except OutlabsAuthException:
             raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
@@ -447,7 +444,7 @@ def get_users_router(
         description="Update the authenticated user's profile",
     )
     async def update_me(
-        data: UserUpdateRequest,
+        data: SelfUserUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -459,10 +456,41 @@ def get_users_router(
         """
         Update current user profile.
 
+        Changing ``email`` is disabled unless the host sets
+        ``allow_self_service_email_change``; when enabled it requires
+        ``current_password``. Re-submitting the unchanged address is a no-op
+        and always allowed, so whole-object profile forms keep working.
+
         Triggers on_after_update hook.
         """
         try:
             update_dict = data.model_dump(exclude_unset=True)
+            current_password = update_dict.pop("current_password", None)
+            requested_email = update_dict.get("email")
+            if requested_email is not None:
+                current_user = await auth.user_service.get_user_by_id(session, UUID(obs.user_id))
+                if current_user is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Not authenticated",
+                    )
+                if validate_email(requested_email) == current_user.email:
+                    update_dict.pop("email", None)
+                elif not auth.config.allow_self_service_email_change:
+                    raise PermissionDeniedError(
+                        message=(
+                            "Changing your email address is disabled on this server; "
+                            "ask an administrator to change it"
+                        ),
+                        details={"reason": "self_service_email_change_disabled"},
+                    )
+                elif not current_password:
+                    raise InvalidInputError(
+                        message="current_password is required to change your email address",
+                        details={"reason": "reauthentication_required", "field": "current_password"},
+                    )
+                elif not await auth.auth_service.verify_password(current_user, current_password):
+                    raise InvalidCredentialsError(message="Current password is incorrect")
             user = await auth.user_service.update_user_fields(
                 session,
                 user_id=UUID(obs.user_id),
@@ -477,6 +505,8 @@ def get_users_router(
             await auth.user_service.on_after_update(user, update_dict, None)
             return await build_user_response_async(session, user)
         except HTTPException:
+            raise
+        except OutlabsAuthException:
             raise
         except Exception as e:
             obs.log_500_error(e)
@@ -632,7 +662,16 @@ def get_users_router(
             obs.log_500_error(e)
             raise
 
-    def _serialize_user_session(token: Any) -> UserSessionResponse:
+    def _current_session_family_id(auth_result: Any) -> Optional[str]:
+        """Session family (``sid`` claim) of the access token on this request."""
+        if not isinstance(auth_result, dict) or auth_result.get("source") != "jwt":
+            return None
+        metadata = auth_result.get("metadata")
+        raw_sid = metadata.get("sid") if isinstance(metadata, dict) else None
+        return str(raw_sid) if raw_sid else None
+
+    def _serialize_user_session(token: Any, current_family_id: Optional[str] = None) -> UserSessionResponse:
+        family_id = getattr(token, "family_id", None)
         return UserSessionResponse(
             id=token.id,
             device_name=token.device_name,
@@ -642,6 +681,7 @@ def get_users_router(
             last_used_at=token.last_used_at,
             expires_at=token.expires_at,
             usage_count=int(token.usage_count or 0),
+            is_current=bool(current_family_id and family_id is not None and str(family_id) == current_family_id),
         )
 
     async def _record_admin_session_revoke_audit(
@@ -686,7 +726,8 @@ def get_users_router(
         auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
         tokens = await auth.auth_service.list_user_sessions(session, UUID(str(auth_result["user_id"])))
-        return [_serialize_user_session(token) for token in tokens]
+        current_family_id = _current_session_family_id(auth_result)
+        return [_serialize_user_session(token, current_family_id) for token in tokens]
 
     @router.delete(
         "/me/sessions/{session_id}",
@@ -717,16 +758,34 @@ def get_users_router(
         "/me/sessions",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Revoke all of my sessions",
-        description="Revoke every active refresh-token session for the authenticated user.",
+        description=(
+            "Revoke every active refresh-token session for the authenticated user. "
+            "With keep_current=true, the session that issued this request's access token "
+            "is kept ('sign out other devices')."
+        ),
     )
     async def revoke_all_my_sessions(
+        keep_current: bool = Query(
+            False,
+            description="Keep the calling session (identified by the access token's sid claim)",
+        ),
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
+        current_family_id = _current_session_family_id(auth_result) if keep_current else None
+        if keep_current and current_family_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "keep_current requires a session-bound access token; sign in again "
+                    "to obtain one, or revoke all sessions"
+                ),
+            )
         await auth.auth_service.revoke_all_user_tokens(
             session,
             UUID(str(auth_result["user_id"])),
-            reason="User revoked all sessions",
+            reason="User revoked other sessions" if keep_current else "User revoked all sessions",
+            exclude_family_id=UUID(current_family_id) if current_family_id else None,
         )
         return None
 
@@ -829,13 +888,22 @@ def get_users_router(
         "/orphaned",
         response_model=PaginatedResponse[OrphanedUserResponse],
         summary="List orphaned users",
-        description="List users with no active entity memberships but historical assignments (requires user:read permission)",
+        description=(
+            "List users with no active entity memberships but historical assignments "
+            "(requires user:read permission). Soft-deleted accounts are excluded unless "
+            "status=deleted. Tenant-scoped actors only see orphans rooted inside their scope."
+        ),
     )
     async def list_orphaned_users(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
         search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
         root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
+        user_status: Optional[str] = Query(
+            None,
+            alias="status",
+            description="Filter by account status (default: every status except deleted)",
+        ),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -848,11 +916,27 @@ def get_users_router(
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
 
-            # Orphaned users belong to no tree, so they match only global scopes (DD-056).
+            parsed_status: Optional[UserStatus] = None
+            if user_status is not None:
+                try:
+                    parsed_status = UserStatus(user_status)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"Invalid status: {user_status}. "
+                            f"Must be one of: {', '.join(item.value for item in UserStatus)}"
+                        ),
+                    )
+
+            # DD-056: orphans keep their root_entity_id, so a tenant-scoped actor
+            # sees the orphans rooted inside its scope. Orphans with no root
+            # belong to no tree and match only global scopes.
+            scope_root_entity_ids: Optional[list[UUID]] = None
             if auth.config.enforce_user_scope:
                 scope = await _resolve_actor_scope(session, actor_user)
                 if not scope.get("is_global"):
-                    return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+                    scope_root_entity_ids = [UUID(str(entity_id)) for entity_id in scope.get("entity_ids") or []]
 
             if not getattr(auth, "membership_service", None):
                 return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
@@ -863,6 +947,8 @@ def get_users_router(
                 limit=limit,
                 search=search,
                 root_entity_id=root_entity_id,
+                scope_root_entity_ids=scope_root_entity_ids,
+                status=parsed_status,
             )
 
             user_payloads = await build_user_responses(session, [record.user for record in orphaned_records])
@@ -1557,6 +1643,14 @@ def get_users_router(
                 actor_user_id=UUID(obs.user_id),
                 permission_names=role_permission_names,
             )
+            # DD-056: a direct system-wide role makes the holder global; only a
+            # global actor may hand out global scope.
+            await require_global_actor_for_system_wide_roles(
+                auth,
+                session,
+                actor_user=actor_user,
+                role_ids=[role.id],
+            )
 
             # Assign role
             membership = await auth.role_service.assign_role_to_user(
@@ -1707,6 +1801,39 @@ def get_users_router(
                     detail="No fields provided to update",
                 )
 
+            current_membership_result = await session.execute(
+                select(UserRoleMembership).where(
+                    cast(Any, UserRoleMembership.id) == membership_id,
+                    cast(Any, UserRoleMembership.user_id) == user_id,
+                )
+            )
+            current_membership = current_membership_result.scalar_one_or_none()
+            if current_membership is not None and lifecycle_update_grants_access(
+                current_status=current_membership.status,
+                current_valid_from=current_membership.valid_from,
+                current_valid_until=current_membership.valid_until,
+                next_status=data.status if "status" in fields_set else current_membership.status,
+                next_valid_from=data.valid_from if "valid_from" in fields_set else current_membership.valid_from,
+                next_valid_until=(data.valid_until if "valid_until" in fields_set else current_membership.valid_until),
+            ):
+                # SEC-2: reactivating (or extending) a direct role re-grants its
+                # permissions, so it needs the same containment as assigning it.
+                role_permission_names = await auth.role_service.get_role_permission_names(
+                    session, current_membership.role_id
+                )
+                await require_can_delegate_permissions(
+                    session,
+                    auth=auth,
+                    actor_user_id=actor_user.id,
+                    permission_names=role_permission_names,
+                )
+                await require_global_actor_for_system_wide_roles(
+                    auth,
+                    session,
+                    actor_user=actor_user,
+                    role_ids=[current_membership.role_id],
+                )
+
             membership = await auth.role_service.update_user_role_membership(
                 session,
                 user_id=user_id,
@@ -1733,7 +1860,7 @@ def get_users_router(
 
         except HTTPException:
             raise
-        except (InvalidInputError, MembershipNotFoundError):
+        except (InvalidInputError, MembershipNotFoundError, PermissionDeniedError):
             raise
         except Exception as e:
             obs.log_500_error(
@@ -1754,6 +1881,7 @@ def get_users_router(
     )
     async def list_user_sessions_endpoint(
         user_id: UUID,
+        request: Request,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -1766,7 +1894,12 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             await _get_target_user_or_404(session, user_id, actor_user)
             tokens = await auth.auth_service.list_user_sessions(session, user_id)
-            return [_serialize_user_session(token) for token in tokens]
+            current_family_id = (
+                _current_session_family_id(getattr(request.state, "_outlabs_auth_result", None))
+                if actor_user.id == user_id
+                else None
+            )
+            return [_serialize_user_session(token, current_family_id) for token in tokens]
         except HTTPException:
             raise
         except Exception as e:

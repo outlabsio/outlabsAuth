@@ -13,6 +13,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from outlabs_auth.services.abac_validation import validate_condition_definition, validate_condition_update
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
@@ -807,13 +808,20 @@ class RoleService(BaseService[Role]):
                     },
                 )
 
+        normalized_operator = validate_condition_definition(
+            attribute=attribute,
+            operator=operator,
+            value=value,
+            value_type=value_type,
+        )
+
         previous_snapshot = await self._build_role_definition_snapshot(session, role)
 
         condition = RoleCondition(
             role_id=role_id,
             condition_group_id=condition_group_id,
-            attribute=attribute,
-            operator=operator,
+            attribute=attribute.strip(),
+            operator=cast(Any, normalized_operator.value),
             value=serialize_condition_value(value, value_type),
             value_type=value_type,
             description=description,
@@ -866,15 +874,24 @@ class RoleService(BaseService[Role]):
                     },
                 )
 
+        normalized_operator = validate_condition_update(
+            condition,
+            fields_set=fields_set,
+            attribute=attribute,
+            operator=operator,
+            value=value,
+            value_type=value_type,
+        )
+
         previous_snapshot = await self._build_role_definition_snapshot(session, role)
         previous_condition_snapshot = self._build_role_condition_snapshot(condition)
 
         if "condition_group_id" in fields_set:
             condition.condition_group_id = condition_group_id
         if "attribute" in fields_set and attribute is not None:
-            condition.attribute = attribute
+            condition.attribute = attribute.strip()
         if "operator" in fields_set and operator is not None:
-            condition.operator = cast(Any, operator)
+            condition.operator = cast(Any, normalized_operator.value)
         if "value_type" in fields_set and value_type is not None:
             condition.value_type = value_type
         if "value" in fields_set or "value_type" in fields_set:

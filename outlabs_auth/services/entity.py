@@ -82,6 +82,9 @@ class EntityService(BaseService[Entity]):
         self.role_service: Optional["RoleService"] = None
         self.api_key_service: Optional["APIKeyService"] = None
         self.integration_principal_service: Optional["IntegrationPrincipalService"] = None
+        # Optional retained audit trail for structural changes (entity.created,
+        # entity.updated, entity.moved, entity.archived). Wired by OutlabsAuth.
+        self.user_audit_service: Optional[Any] = None
 
     async def _get_entities_by_ids(
         self,
@@ -106,6 +109,8 @@ class EntityService(BaseService[Entity]):
         parent_id: Optional[UUID] = None,
         description: Optional[str] = None,
         slug: Optional[str] = None,
+        *,
+        created_by_id: Optional[UUID] = None,
         **kwargs,
     ) -> Entity:
         """
@@ -229,6 +234,13 @@ class EntityService(BaseService[Entity]):
             )
 
         await self._invalidate_permission_cache(entity.id)
+        await self._record_entity_audit_event(
+            session,
+            entity,
+            event_type="entity.created",
+            actor_user_id=created_by_id,
+            after=self._entity_audit_snapshot(entity),
+        )
         return entity
 
     async def get_entity(self, session: AsyncSession, entity_id: UUID) -> Entity:
@@ -262,7 +274,14 @@ class EntityService(BaseService[Entity]):
         """
         return await self.get_one(session, Entity.slug == slug)
 
-    async def update_entity(self, session: AsyncSession, entity_id: UUID, **updates) -> Entity:
+    async def update_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        *,
+        changed_by_id: Optional[UUID] = None,
+        **updates,
+    ) -> Entity:
         """
         Update entity.
 
@@ -301,6 +320,8 @@ class EntityService(BaseService[Entity]):
                 slug=entity.slug,
             )
 
+        before_snapshot = self._entity_audit_snapshot(entity)
+
         # Update fields
         for field, value in normalized_updates.items():
             if hasattr(entity, field):
@@ -308,6 +329,21 @@ class EntityService(BaseService[Entity]):
 
         await session.flush()
         await session.refresh(entity)
+
+        after_snapshot = self._entity_audit_snapshot(entity)
+        changed_fields = sorted(
+            field for field in after_snapshot if before_snapshot.get(field) != after_snapshot.get(field)
+        )
+        if changed_fields:
+            await self._record_entity_audit_event(
+                session,
+                entity,
+                event_type="entity.updated",
+                actor_user_id=changed_by_id,
+                before={field: before_snapshot.get(field) for field in changed_fields},
+                after={field: after_snapshot.get(field) for field in changed_fields},
+                metadata={"changed_fields": changed_fields},
+            )
 
         # Log observability
         if self.observability:
@@ -327,6 +363,8 @@ class EntityService(BaseService[Entity]):
         session: AsyncSession,
         entity_id: UUID,
         new_parent_id: Optional[UUID],
+        *,
+        moved_by_id: Optional[UUID] = None,
     ) -> Entity:
         """
         Move (re-parent) an entity to a new parent.
@@ -384,6 +422,22 @@ class EntityService(BaseService[Entity]):
                 child_class=entity.entity_class,
                 child_type=entity.entity_type,
             )
+        else:
+            # Promoting a subtree to a top-level entity must satisfy the same
+            # root-type rules as creating a root (F-076).
+            entity_class = (
+                entity.entity_class
+                if isinstance(entity.entity_class, EntityClass)
+                else EntityClass(str(entity.entity_class))
+            )
+            await self._validate_root_entity_type(
+                session,
+                entity_class=entity_class,
+                entity_type=entity.entity_type,
+            )
+
+        previous_parent_id = entity.parent_id
+        previous_path = entity.path
 
         # Fetch subtree (descendants including self) and their depths-from-root via closure.
         subtree_stmt = (
@@ -495,6 +549,21 @@ class EntityService(BaseService[Entity]):
             )
 
         await self._invalidate_permission_cache(entity.id, scope_global=True)
+        await self._record_entity_audit_event(
+            session,
+            entity,
+            event_type="entity.moved",
+            actor_user_id=moved_by_id,
+            before={
+                "parent_id": str(previous_parent_id) if previous_parent_id else None,
+                "path": previous_path,
+            },
+            after={
+                "parent_id": str(new_parent_id) if new_parent_id else None,
+                "path": entity.path,
+            },
+            metadata={"subtree_size": len(subtree_ids)},
+        )
         return entity
 
     async def delete_entity(
@@ -553,6 +622,10 @@ class EntityService(BaseService[Entity]):
                     deleted_by_id=deleted_by_id,
                 )
 
+        # Resolve the root while closure rows still exist (they are removed below).
+        archive_root_entity_id = await self._resolve_root_entity_id(session, entity)
+        previous_status = entity.status
+
         # Soft delete
         entity.status = "archived"
         await session.flush()
@@ -591,6 +664,17 @@ class EntityService(BaseService[Entity]):
                 archived_by_id=deleted_by_id,
                 reason=archive_reason,
             )
+
+        await self._record_entity_audit_event(
+            session,
+            entity,
+            event_type="entity.archived",
+            actor_user_id=deleted_by_id,
+            before={"status": previous_status},
+            after={"status": "archived"},
+            metadata={"cascade": cascade},
+            root_entity_id=archive_root_entity_id,
+        )
 
         # Delete closure records
         await self._delete_closure_records(session, entity)
@@ -1087,6 +1171,85 @@ class EntityService(BaseService[Entity]):
             return path[0]
 
         return None
+
+    @staticmethod
+    def _entity_audit_snapshot(entity: Entity) -> Dict[str, Any]:
+        """Audit-safe view of the entity fields an administrator can change."""
+
+        def _plain(value: Any) -> Any:
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, UUID):
+                return str(value)
+            return getattr(value, "value", value)
+
+        return {
+            "name": entity.name,
+            "display_name": entity.display_name,
+            "slug": entity.slug,
+            "description": entity.description,
+            "entity_class": _plain(entity.entity_class),
+            "entity_type": entity.entity_type,
+            "parent_id": _plain(entity.parent_id),
+            "status": _plain(entity.status),
+            "valid_from": _plain(entity.valid_from),
+            "valid_until": _plain(entity.valid_until),
+            "allowed_child_classes": list(entity.allowed_child_classes or []),
+            "allowed_child_types": list(entity.allowed_child_types or []),
+            "max_members": entity.max_members,
+            "child_name_pattern": entity.child_name_pattern,
+            "child_display_name_pattern": entity.child_display_name_pattern,
+            "child_slug_pattern": entity.child_slug_pattern,
+            "child_naming_guidance": entity.child_naming_guidance,
+        }
+
+    async def _resolve_root_entity_id(self, session: AsyncSession, entity: Entity) -> Optional[UUID]:
+        if entity.parent_id is None:
+            return entity.id
+        stmt = (
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity.id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return cast(Optional[UUID], result.scalar_one_or_none())
+
+    async def _record_entity_audit_event(
+        self,
+        session: AsyncSession,
+        entity: Entity,
+        *,
+        event_type: str,
+        actor_user_id: Optional[UUID] = None,
+        before: Optional[Dict[str, Any]] = None,
+        after: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        root_entity_id: Optional[UUID] = None,
+    ) -> None:
+        """Append a retained ``entity`` audit event (no-op without an audit service)."""
+        if self.user_audit_service is None:
+            return
+        resolved_root_entity_id = root_entity_id or await self._resolve_root_entity_id(session, entity)
+        await self.user_audit_service.record_event(
+            session,
+            event_category="entity",
+            event_type=event_type,
+            event_source=f"entity_service.{event_type.split('.', 1)[-1]}",
+            subject_user_id=None,
+            subject_email_snapshot="",
+            actor_user_id=actor_user_id,
+            root_entity_id=resolved_root_entity_id,
+            entity_id=entity.id,
+            before=before,
+            after=after,
+            metadata={
+                "entity_name": entity.name,
+                "entity_display_name": entity.display_name,
+                "entity_type": entity.entity_type,
+                **(metadata or {}),
+            },
+        )
 
     def _generate_slug(self, name: str) -> str:
         """

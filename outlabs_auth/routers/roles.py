@@ -32,12 +32,36 @@ from outlabs_auth.schemas.abac import (
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.definition_history import (
+    DefinitionHistoryEventResponse,
+    role_history_event_response,
+)
 from outlabs_auth.schemas.role import (
     RoleCreateRequest,
     RoleResponse,
     RoleScopeEnum,
     RoleUpdateRequest,
 )
+
+
+def _normalize_entity_types(values: Any) -> set[str]:
+    return {str(value).strip().lower() for value in (values or []) if value and str(value).strip()}
+
+
+def _assignable_at_types_widen(current: Any, proposed: Any) -> bool:
+    """Whether changing ``assignable_at_types`` makes a role assignable in more places.
+
+    An empty list means *assignable everywhere* (the widest reach), so clearing
+    a restricted list widens authority even though ``[]`` is a subset of every
+    set. Adding a type outside the current list widens it too.
+    """
+    current_types = _normalize_entity_types(current)
+    proposed_types = _normalize_entity_types(proposed)
+    if not current_types:
+        return False
+    if not proposed_types:
+        return True
+    return not proposed_types.issubset(current_types)
 
 
 def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None) -> APIRouter:
@@ -370,6 +394,44 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         permission_names = await auth.role_service.get_role_permission_names(session, role.id)
         return await build_role_response(session, role, permission_names)
 
+    @router.get(
+        "/{role_id}/history",
+        response_model=PaginatedResponse[DefinitionHistoryEventResponse],
+        summary="Get role definition history",
+        description=(
+            "Append-only history of changes to this role's definition: who changed what, "
+            "with before/after snapshots (requires role:read permission and role visibility)."
+        ),
+    )
+    async def get_role_history(
+        role_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        event_type: Optional[str] = Query(None, description="Filter by event type"),
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("role:read")),
+    ):
+        role = await _get_role_or_404(session, role_id)
+        await _require_role_visibility(session, auth_result, role)
+        history_service = getattr(auth, "role_history_service", None)
+        if history_service is None:
+            return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+        events, total = await history_service.list_role_events(
+            session,
+            role_id,
+            page=page,
+            limit=limit,
+            event_type=event_type,
+        )
+        pages = (total + limit - 1) // limit if total > 0 else 0
+        return PaginatedResponse(
+            items=[role_history_event_response(event) for event in events],
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+        )
+
     @router.patch(
         "/{role_id}",
         response_model=RoleResponse,
@@ -404,8 +466,9 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
                 update_dict.get("scope") == RoleScopeEnum.HIERARCHY and current_role.scope == RoleScope.ENTITY_ONLY,
                 update_dict.get("is_auto_assigned") is True and not current_role.is_auto_assigned,
                 "assignable_at_types" in update_dict
-                and not set(update_dict.get("assignable_at_types") or []).issubset(
-                    set(current_role.assignable_at_types or [])
+                and _assignable_at_types_widen(
+                    current_role.assignable_at_types,
+                    update_dict.get("assignable_at_types"),
                 ),
             )
         )
