@@ -38,7 +38,7 @@ dependencies = [
     "click>=8.4.2",
     # Authentication & Security
     "pwdlib[argon2,bcrypt]>=0.2.0",
-    "pyjwt[crypto]>=2.13.0", # [crypto] required for ES256 (Apple Sign In) and RS256
+    "pyjwt[crypto]>=2.15.1", # [crypto] required for ES256 (Apple Sign In) and RS256
     "cryptography>=48.0.1",
     "python-multipart>=0.0.31",
     "email-validator>=2.0.0",
