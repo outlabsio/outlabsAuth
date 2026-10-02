@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Security
+
+- Require `pyjwt[crypto]>=2.15.1`. PyJWT 2.13.0 and earlier are affected by PYSEC-2026-4140 to
+  PYSEC-2026-4152. These include an uncaught `RecursionError` in `jwt.decode()` on a deeply nested
+  token header, raw-token revocation bypass through non-canonical signature segments, HMAC versus
+  asymmetric key-confusion guard bypasses, and `PyJWKClient` JWKS fetching issues. Consumers should
+  also upgrade their own locked `pyjwt` to 2.15.1 without waiting for the next release.
+- Lock `urllib3` 2.8.0 (PYSEC-2026-4175 to PYSEC-2026-4177). It reaches the OAuth, notification and
+  stress dependency graphs transitively, so it is a lock-only change; consumers should refresh their
+  own lock too.
+
 ## [0.1.0a34] - 2026-08-23
 
 ### Fixed
