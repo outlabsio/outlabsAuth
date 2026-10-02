@@ -31,10 +31,21 @@ from outlabs_auth import (
     Role,
     UserStatus,
 )
+from outlabs_auth.bootstrap import get_system_permission_catalog
 from outlabs_auth.cli import run_migrations
-from outlabs_auth.models.sql.enums import ConditionOperator, EntityClass, RoleScope
+from outlabs_auth.models.sql.enums import (
+    APIKeyKind,
+    APIKeyStatus,
+    ConditionOperator,
+    DefinitionStatus,
+    EntityClass,
+    IntegrationPrincipalScopeKind,
+    IntegrationPrincipalStatus,
+    RoleScope,
+)
 from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition, RolePermission
+from outlabs_auth.schemas.abac import serialize_condition_value
 
 # Configuration
 DATABASE_URL = os.getenv(
@@ -119,280 +130,71 @@ async def reset_database():
             await session.commit()
             print("Test data cleared\n")
 
-        # Create permissions
+        # Create permissions: the library-owned catalog first (exactly what
+        # seed_system_records() installs in production), then the example's
+        # own vocabulary. Keeping the library catalog verbatim means every
+        # library route permission (membership:delete, entity:create_tree,
+        # permission:check, ...) can be granted without hand-creating it.
         print("Creating permissions...")
         permissions_data = [
-            # User permissions
             {
-                "name": "user:read",
-                "display_name": "User Read",
-                "resource": "user",
-                "action": "read",
-            },
-            {
-                "name": "user:read_tree",
-                "display_name": "User Read Tree",
-                "resource": "user",
-                "action": "read_tree",
-            },
-            {
-                "name": "user:create",
-                "display_name": "User Create",
-                "resource": "user",
-                "action": "create",
-            },
-            {
-                "name": "user:update",
-                "display_name": "User Update",
-                "resource": "user",
-                "action": "update",
-            },
-            {
-                "name": "user:delete",
-                "display_name": "User Delete",
-                "resource": "user",
-                "action": "delete",
-            },
-            {
-                "name": "user:manage",
-                "display_name": "User Manage",
-                "resource": "user",
-                "action": "manage",
-            },
-            # Role permissions
-            {
-                "name": "role:read",
-                "display_name": "Role Read",
-                "resource": "role",
-                "action": "read",
-            },
-            {
-                "name": "role:create",
-                "display_name": "Role Create",
-                "resource": "role",
-                "action": "create",
-            },
-            {
-                "name": "role:update",
-                "display_name": "Role Update",
-                "resource": "role",
-                "action": "update",
-            },
-            {
-                "name": "role:delete",
-                "display_name": "Role Delete",
-                "resource": "role",
-                "action": "delete",
-            },
-            # Permission permissions
-            {
-                "name": "permission:read",
-                "display_name": "Permission Read",
-                "resource": "permission",
-                "action": "read",
-            },
-            {
-                "name": "permission:create",
-                "display_name": "Permission Create",
-                "resource": "permission",
-                "action": "create",
-            },
-            {
-                "name": "permission:update",
-                "display_name": "Permission Update",
-                "resource": "permission",
-                "action": "update",
-            },
-            {
-                "name": "permission:delete",
-                "display_name": "Permission Delete",
-                "resource": "permission",
-                "action": "delete",
-            },
-            # Entity permissions
-            {
-                "name": "entity:read",
-                "display_name": "Entity Read",
-                "resource": "entity",
-                "action": "read",
-            },
-            {
-                "name": "entity:read_tree",
-                "display_name": "Entity Read Tree",
-                "resource": "entity",
-                "action": "read_tree",
-            },
-            {
-                "name": "entity:create",
-                "display_name": "Entity Create",
-                "resource": "entity",
-                "action": "create",
-            },
-            {
-                "name": "entity:update",
-                "display_name": "Entity Update",
-                "resource": "entity",
-                "action": "update",
-            },
-            {
-                "name": "entity:delete",
-                "display_name": "Entity Delete",
-                "resource": "entity",
-                "action": "delete",
-            },
-            # Membership permissions
-            {
-                "name": "membership:create",
-                "display_name": "Membership Create",
-                "resource": "membership",
-                "action": "create",
-            },
-            {
-                "name": "membership:read",
-                "display_name": "Membership Read",
-                "resource": "membership",
-                "action": "read",
-            },
-            {
-                "name": "membership:read_tree",
-                "display_name": "Membership Read Tree",
-                "resource": "membership",
-                "action": "read_tree",
-            },
-            {
-                "name": "membership:update",
-                "display_name": "Membership Update",
-                "resource": "membership",
-                "action": "update",
-            },
-            {
-                "name": "membership:update_tree",
-                "display_name": "Membership Update Tree",
-                "resource": "membership",
-                "action": "update_tree",
-            },
-            # Lead permissions
-            {
-                "name": "lead:read",
-                "display_name": "Lead Read",
-                "resource": "lead",
-                "action": "read",
-            },
-            {
-                "name": "lead:read_tree",
-                "display_name": "Lead Read Tree",
-                "resource": "lead",
-                "action": "read_tree",
-            },
-            {
-                "name": "lead:create",
-                "display_name": "Lead Create",
-                "resource": "lead",
-                "action": "create",
-            },
-            {
-                "name": "lead:update",
-                "display_name": "Lead Update",
-                "resource": "lead",
-                "action": "update",
-            },
-            {
-                "name": "lead:delete",
-                "display_name": "Lead Delete",
-                "resource": "lead",
-                "action": "delete",
-            },
+                "name": seed.name,
+                "display_name": seed.display_name,
+                "description": seed.description,
+            }
+            for seed in get_system_permission_catalog()
+        ]
+        example_permissions = [
+            # Tree variants the example grants through memberships.
+            ("user:read_tree", "User Read Tree", "View users across descendant entities."),
+            ("membership:create_tree", "Membership Create Tree", "Add members across descendant entities."),
+            # Lead (example resource) permissions.
+            ("lead:read", "Lead Read", None),
+            ("lead:read_tree", "Lead Read Tree", None),
+            ("lead:create", "Lead Create", None),
+            ("lead:update", "Lead Update", None),
+            ("lead:delete", "Lead Delete", None),
+            # API keys and integration principals (admin surface).
+            ("api_key:read", "API Key Read", None),
+            ("api_key:create", "API Key Create", None),
+            ("api_key:update", "API Key Update", None),
+            ("api_key:delete", "API Key Delete", None),
+            ("api_key:read_tree", "API Key Read Tree", None),
+            ("api_key:create_tree", "API Key Create Tree", None),
+            ("api_key:update_tree", "API Key Update Tree", None),
+            ("api_key:delete_tree", "API Key Delete Tree", None),
+        ]
+        for name, display_name, description in example_permissions:
+            permissions_data.append({"name": name, "display_name": display_name, "description": description})
+        permissions_data.append(
             {
                 "name": "lead:escalate_after_hours",
                 "display_name": "Lead Escalate After Hours",
-                "resource": "lead",
-                "action": "escalate_after_hours",
                 "description": "Custom permission for emergency lead escalation workflows after standard operating hours.",
                 "is_system": False,
-            },
-            # API Key permissions
+            }
+        )
+        permissions_data.append(
             {
-                "name": "apikey:read",
-                "display_name": "API Key Read",
-                "resource": "apikey",
-                "action": "read",
-            },
-            {
-                "name": "apikey:create",
-                "display_name": "API Key Create",
-                "resource": "apikey",
-                "action": "create",
-            },
-            {
-                "name": "apikey:revoke",
-                "display_name": "API Key Revoke",
-                "resource": "apikey",
-                "action": "revoke",
-            },
-            # API Key permissions used by the current admin surface
-            {
-                "name": "api_key:read",
-                "display_name": "API Key Read",
-                "resource": "api_key",
-                "action": "read",
-            },
-            {
-                "name": "api_key:create",
-                "display_name": "API Key Create",
-                "resource": "api_key",
-                "action": "create",
-            },
-            {
-                "name": "api_key:read_tree",
-                "display_name": "API Key Read Tree",
-                "resource": "api_key",
-                "action": "read_tree",
-            },
-            {
-                "name": "api_key:create_tree",
-                "display_name": "API Key Create Tree",
-                "resource": "api_key",
-                "action": "create_tree",
-            },
-            {
-                "name": "api_key:update",
-                "display_name": "API Key Update",
-                "resource": "api_key",
-                "action": "update",
-            },
-            {
-                "name": "api_key:delete",
-                "display_name": "API Key Delete",
-                "resource": "api_key",
-                "action": "delete",
-            },
-            {
-                "name": "api_key:update_tree",
-                "display_name": "API Key Update Tree",
-                "resource": "api_key",
-                "action": "update_tree",
-            },
-            {
-                "name": "api_key:delete_tree",
-                "display_name": "API Key Delete Tree",
-                "resource": "api_key",
-                "action": "delete_tree",
-            },
-        ]
+                "name": "lead:export",
+                "display_name": "Lead Export",
+                "description": "Lifecycle fixture: an INACTIVE permission still attached to a role.",
+                "is_system": False,
+                "is_active": False,
+            }
+        )
 
         permissions_map = {}
         for perm_data in permissions_data:
+            resource, action = perm_data["name"].split(":", 1)
             perm = Permission(
                 name=perm_data["name"],
                 display_name=perm_data["display_name"],
-                resource=perm_data["resource"],
-                action=perm_data["action"],
-                description=perm_data.get(
-                    "description",
-                    f"Permission to {perm_data['action']} {perm_data['resource']}",
-                ),
+                resource=resource,
+                action=action,
+                description=perm_data.get("description") or f"Permission to {action} {resource}",
                 is_system=perm_data.get("is_system", True),
-                is_active=True,
+                is_active=perm_data.get("is_active", True),
             )
             session.add(perm)
             permissions_map[perm_data["name"]] = perm
@@ -525,6 +327,9 @@ async def reset_database():
         await session.flush()
 
         seed_now = datetime.now(timezone.utc)
+        # Fixtures that must not lapse between a reseed and an E2E run use a
+        # far-future horizon instead of "seed time + a few hours/days".
+        far_future = seed_now + timedelta(days=3650)
 
         # Create entities (Organization -> Region -> Office -> Team)
         print("Creating entity hierarchy...")
@@ -644,7 +449,7 @@ async def reset_database():
             status="inactive",
             allowed_child_types=["team"],
             allowed_child_classes=["access_group"],
-            valid_until=seed_now + timedelta(days=90),
+            valid_until=far_future,
         )
         session.add(la_office)
         await session.flush()
@@ -779,6 +584,59 @@ async def reset_database():
         await session.flush()
         await create_closure_for_entity(austin_growth, austin_office)
 
+        # Lifecycle fixtures in the hierarchy.
+        la_downtown = Entity(
+            name="la_downtown",
+            display_name="LA Downtown Team",
+            slug="la-downtown",
+            description="Active team under the INACTIVE Los Angeles office (inactive-parent fixture).",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+            parent_id=la_office.id,
+            depth=3,
+            path="/acme-realty/west-coast/la-office/la-downtown",
+            status="active",
+            max_members=10,
+        )
+        session.add(la_downtown)
+        await session.flush()
+        await create_closure_for_entity(la_downtown, la_office)
+
+        sf_capacity = Entity(
+            name="sf_capacity_team",
+            display_name="SF Capacity Team",
+            slug="sf-capacity-team",
+            description="Team seeded exactly at max_members=2 (capacity fixture).",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+            parent_id=sf_office.id,
+            depth=3,
+            path="/acme-realty/west-coast/sf-office/sf-capacity-team",
+            status="active",
+            max_members=2,
+        )
+        session.add(sf_capacity)
+        await session.flush()
+        await create_closure_for_entity(sf_capacity, sf_office)
+
+        legacy_office = Entity(
+            name="boston_office",
+            display_name="Boston Office (archived)",
+            slug="boston-office",
+            description="Archived office (archived-entity fixture).",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="office",
+            parent_id=east_coast.id,
+            depth=2,
+            path="/acme-realty/east-coast/boston-office",
+            status="active",
+            allowed_child_types=["team"],
+            allowed_child_classes=["access_group"],
+        )
+        session.add(legacy_office)
+        await session.flush()
+        await create_closure_for_entity(legacy_office, east_coast)
+
         await session.flush()
         print("   Created entity hierarchy:")
         print("   - ACME Realty (organization)")
@@ -786,9 +644,12 @@ async def reset_database():
         print("       - San Francisco Office")
         print("         - SF Residential Team")
         print("         - SF Commercial Team")
-        print("       - Los Angeles Office")
+        print("         - SF Capacity Team (at max_members)")
+        print("       - Los Angeles Office (inactive)")
+        print("         - LA Downtown Team")
         print("     - East Coast Region")
         print("       - New York City Office")
+        print("       - Boston Office (archived below)")
         print("   - Summit Commercial (organization)")
         print("     - Texas Region")
         print("       - Austin Office")
@@ -807,13 +668,20 @@ async def reset_database():
             "texas_region": texas_region,
             "austin_office": austin_office,
             "austin_growth": austin_growth,
+            "la_downtown": la_downtown,
+            "sf_capacity": sf_capacity,
+            "legacy_office": legacy_office,
         }
 
         demo_roles_data = [
             {
-                "name": "scoped_roles_admin",
-                "display_name": "Scoped Roles Admin",
-                "description": "Directly grants role-management permissions. Pair it with user root or entity scope to limit what that admin can actually change.",
+                "name": "global_roles_admin",
+                "display_name": "Global Roles Admin (system-wide)",
+                "description": (
+                    "System-wide role: holding it DIRECTLY makes the holder a global actor across every "
+                    "tenant (DD-056). Seeded unassigned so the console can show what a system-wide role "
+                    "looks like; tenant-scoped admins cannot grant it."
+                ),
                 "permission_names": [
                     "role:read",
                     "role:create",
@@ -829,15 +697,19 @@ async def reset_database():
             },
             {
                 "name": "permission_catalog_admin",
-                "display_name": "Permission Catalog Admin",
-                "description": "Global permission administrator who can mint custom permissions and manage permission-level ABAC without full superuser access.",
+                "display_name": "Permission Catalog Admin (deliberately global)",
+                "description": (
+                    "The one deliberately global delegated persona: a system-wide role, so its holder spans "
+                    "every tenant (DD-056). Limited to the global permission catalog and ABAC, plus role "
+                    "reads; it carries no user, session or audit access."
+                ),
                 "permission_names": [
                     "permission:read",
                     "permission:create",
                     "permission:update",
                     "permission:delete",
+                    "permission:check",
                     "role:read",
-                    "user:read",
                 ],
                 "is_global": True,
                 "is_system_role": False,
@@ -845,13 +717,23 @@ async def reset_database():
             {
                 "name": "acme_org_admin",
                 "display_name": "ACME Org Admin",
-                "description": "Top-level ACME admin role. Intended for organization operators who manage roles across the full root scope.",
+                "description": (
+                    "Top-level ACME admin role. Users rooted at ACME get the whole ACME tree as their "
+                    "user/role scope, so this is the tenant administrator."
+                ),
                 "permission_names": [
                     "api_key:read_tree",
                     "api_key:create_tree",
                     "api_key:update_tree",
                     "api_key:delete_tree",
+                    "membership:read",
                     "membership:read_tree",
+                    "membership:create",
+                    "membership:create_tree",
+                    "membership:update_tree",
+                    "membership:delete_tree",
+                    "permission:read",
+                    "permission:check",
                     "role:read",
                     "role:create",
                     "role:update",
@@ -859,8 +741,85 @@ async def reset_database():
                     "user:read",
                     "user:read_tree",
                     "user:create",
+                    "user:update",
                     "entity:read",
                     "entity:read_tree",
+                    "entity:create_tree",
+                    "entity:update",
+                    "lead:export",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "acme_regional_admin",
+                "display_name": "ACME Regional Admin Baseline",
+                "description": (
+                    "Org-scoped read baseline for region admins. Org-scoped, not system-wide, so holding "
+                    "it directly never makes the holder a global actor (DD-056)."
+                ),
+                "permission_names": [
+                    "user:read",
+                    "user:read_tree",
+                    "role:read",
+                    "entity:read",
+                    "entity:read_tree",
+                    "membership:read",
+                    "membership:read_tree",
+                    "permission:read",
+                    "api_key:read",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "acme_office_admin",
+                "display_name": "ACME Office Admin Baseline",
+                "description": (
+                    "Org-scoped baseline for office admins: user onboarding and read access, without the "
+                    "global scope a system-wide role would grant."
+                ),
+                "permission_names": [
+                    "user:read",
+                    "user:read_tree",
+                    "user:create",
+                    "role:read",
+                    "entity:read",
+                    "entity:read_tree",
+                    "membership:read",
+                    "membership:read_tree",
+                    "lead:read",
+                    "lead:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "acme_agent_baseline",
+                "display_name": "ACME Agent Baseline",
+                "description": (
+                    "Direct, org-scoped baseline for ACME operational users. Never a system-wide role: "
+                    "a direct system-wide grant would make an agent a global actor (DD-056)."
+                ),
+                "permission_names": ["lead:read", "lead:create", "lead:update"],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "acme_team_lead_baseline",
+                "display_name": "ACME Team Lead Baseline",
+                "description": "Direct, org-scoped baseline for ACME team leads (no cross-tenant reach).",
+                "permission_names": [
+                    "lead:read",
+                    "lead:read_tree",
+                    "lead:create",
+                    "lead:update",
+                    "lead:delete",
+                    "user:read",
                 ],
                 "is_global": False,
                 "is_system_role": False,
@@ -876,6 +835,12 @@ async def reset_database():
                     "user:read_tree",
                     "entity:read",
                     "entity:read_tree",
+                    "membership:read",
+                    "membership:read_tree",
+                    "permission:read",
+                    "permission:check",
+                    "api_key:read",
+                    "api_key:read_tree",
                     "lead:read",
                     "lead:read_tree",
                 ],
@@ -1018,7 +983,14 @@ async def reset_database():
                     "api_key:create_tree",
                     "api_key:update_tree",
                     "api_key:delete_tree",
+                    "membership:read",
                     "membership:read_tree",
+                    "membership:create",
+                    "membership:create_tree",
+                    "membership:update_tree",
+                    "membership:delete_tree",
+                    "permission:read",
+                    "permission:check",
                     "role:read",
                     "role:create",
                     "role:update",
@@ -1026,9 +998,21 @@ async def reset_database():
                     "user:read",
                     "user:read_tree",
                     "user:create",
+                    "user:update",
                     "entity:read",
                     "entity:read_tree",
+                    "entity:create_tree",
+                    "entity:update",
                 ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "summit_org",
+            },
+            {
+                "name": "summit_agent_baseline",
+                "display_name": "Summit Agent Baseline",
+                "description": "Direct, org-scoped baseline for Summit operational users.",
+                "permission_names": ["lead:read", "lead:create", "lead:update"],
                 "is_global": False,
                 "is_system_role": False,
                 "root_entity_key": "summit_org",
@@ -1073,6 +1057,27 @@ async def reset_database():
                 "scope": RoleScope.HIERARCHY,
                 "is_auto_assigned": True,
                 "assignable_at_types": ["team"],
+            },
+            {
+                "name": "abac_showcase",
+                "display_name": "ABAC Showcase",
+                "description": (
+                    "Lifecycle fixture with every ABAC condition shape: an OR group (list IN or "
+                    "equality), a NOT_IN group, and ungrouped numeric and BEFORE conditions."
+                ),
+                "permission_names": ["lead:read", "lead:update"],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "legacy_reporting",
+                "display_name": "Legacy Reporting (archived)",
+                "description": "Lifecycle fixture: an ARCHIVED role that is still attached to a membership.",
+                "permission_names": ["lead:read"],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
             },
         ]
 
@@ -1127,8 +1132,11 @@ async def reset_database():
                 "password": "Testpass1!",
                 "first_name": "Priya",
                 "last_name": "Permissions",
-                "persona": "Permission catalog admin",
-                "notes": "Can create custom permissions and manage permission-level ABAC globally, without superuser access.",
+                "persona": "Global delegated admin (deliberately global)",
+                "notes": (
+                    "The one deliberately GLOBAL delegated persona: a direct system-wide role makes this "
+                    "account span every tenant (DD-056). Limited to the permission catalog and ABAC."
+                ),
                 "is_superuser": False,
                 "root_entity_key": "org",
                 "direct_roles": ["permission_catalog_admin"],
@@ -1154,10 +1162,17 @@ async def reset_database():
                 "first_name": "Riley",
                 "last_name": "RegionalAdmin",
                 "persona": "West Coast scoped admin",
-                "notes": "Can manage West Coast entity-defined roles only. Good for hierarchy-scope testing.",
+                "notes": (
+                    "Tenant-rooted (ACME) admin whose write authority is entity-defined at West Coast. "
+                    "User/role/entity listing scope is the ACME tenant (DD-056 scope is per tenant root); "
+                    "the West Coast boundary applies on tree-permission surfaces (memberships, entity "
+                    "writes, leads). Holds no system-wide role."
+                ),
                 "is_superuser": False,
                 "root_entity_key": "org",
-                "direct_roles": ["scoped_roles_admin"],
+                # Org-scoped (never system-wide) direct role: flat reads without
+                # global scope; entity-defined authority through the membership.
+                "direct_roles": ["acme_regional_admin"],
                 "entity_memberships": [
                     {
                         "entity_key": "west_coast",
@@ -1174,10 +1189,14 @@ async def reset_database():
                 "first_name": "Sarah",
                 "last_name": "Manager",
                 "persona": "SF office scoped admin",
-                "notes": "Can manage San Francisco office-local roles only. Useful for entity_only review.",
+                "notes": (
+                    "Office admin: an org-scoped baseline role plus the SF office membership. Tenant "
+                    "scope is ACME; office-local authority applies on tree-permission surfaces. Useful "
+                    "for entity_only review."
+                ),
                 "is_superuser": False,
                 "root_entity_key": "org",
-                "direct_roles": ["scoped_roles_admin"],
+                "direct_roles": ["acme_office_admin"],
                 "entity_memberships": [
                     {
                         "entity_key": "sf_office",
@@ -1191,10 +1210,13 @@ async def reset_database():
                 "first_name": "Elliot",
                 "last_name": "EastAdmin",
                 "persona": "East Coast scoped admin",
-                "notes": "Sibling branch admin for East Coast scope filtering and branch-isolation browser tests.",
+                "notes": (
+                    "Sibling-branch admin with East Coast entity-defined authority for branch-isolation "
+                    "tests on tree-permission surfaces (tenant scope is ACME)."
+                ),
                 "is_superuser": False,
                 "root_entity_key": "org",
-                "direct_roles": ["scoped_roles_admin"],
+                "direct_roles": ["acme_regional_admin"],
                 "entity_memberships": [
                     {
                         "entity_key": "east_coast",
@@ -1222,9 +1244,9 @@ async def reset_database():
                 "first_name": "Tom",
                 "last_name": "TeamLead",
                 "persona": "Operational team lead",
-                "notes": "Has normal team permissions plus the auto-assigned SF team default role.",
+                "notes": "Org-scoped team-lead baseline plus the SF Residential membership and its auto-assigned default role.",
                 "is_superuser": False,
-                "direct_roles": ["team_lead"],
+                "direct_roles": ["acme_team_lead_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_residential", "role_names": ["team_lead"]},
                 ],
@@ -1237,7 +1259,7 @@ async def reset_database():
                 "persona": "Residential agent",
                 "notes": "Receives the auto-assigned SF team default role on the residential team.",
                 "is_superuser": False,
-                "direct_roles": ["agent"],
+                "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_residential", "role_names": ["agent"]},
                 ],
@@ -1250,7 +1272,7 @@ async def reset_database():
                 "persona": "Commercial agent",
                 "notes": "Operational user outside the residential auto-assignment scope.",
                 "is_superuser": False,
-                "direct_roles": ["agent"],
+                "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {"entity_key": "sf_commercial", "role_names": ["agent"]},
                 ],
@@ -1278,7 +1300,7 @@ async def reset_database():
                 "notes": "Operational user in the second organization with an auto-assigned team default role.",
                 "is_superuser": False,
                 "root_entity_key": "summit_org",
-                "direct_roles": ["agent"],
+                "direct_roles": ["summit_agent_baseline"],
                 "entity_memberships": [
                     {"entity_key": "austin_growth", "role_names": ["agent"]},
                 ],
@@ -1304,12 +1326,11 @@ async def reset_database():
                 "first_name": "Nina",
                 "last_name": "Suspended",
                 "persona": "Suspended operator",
-                "notes": "Suspended user for lifecycle screens and audit trails.",
+                "notes": "Indefinitely suspended user (no auto-lift date) for lifecycle screens and audit trails.",
                 "is_superuser": False,
                 "root_entity_key": "org",
                 "status": UserStatus.SUSPENDED,
-                "suspended_days": 14,
-                "direct_roles": ["agent"],
+                "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {
                         "entity_key": "nyc_office",
@@ -1323,12 +1344,12 @@ async def reset_database():
                 "first_name": "Lena",
                 "last_name": "Locked",
                 "persona": "Locked support user",
-                "notes": "Active but temporarily locked account for security-state UI coverage.",
+                "notes": "Active but locked account for security-state UI coverage (lock far in the future so it never lapses).",
                 "is_superuser": False,
                 "root_entity_key": "org",
-                "locked_hours": 8,
+                "locked_days": 3650,
                 "failed_login_attempts": 5,
-                "direct_roles": ["agent"],
+                "direct_roles": ["acme_agent_baseline"],
                 "entity_memberships": [
                     {
                         "entity_key": "la_office",
@@ -1346,13 +1367,90 @@ async def reset_database():
                 "is_superuser": False,
                 "root_entity_key": "summit_org",
                 "email_verified": False,
-                "direct_roles": ["agent"],
+                "direct_roles": ["summit_agent_baseline"],
                 "entity_memberships": [
                     {
                         "entity_key": "austin_growth",
                         "role_names": ["agent"],
                     },
                 ],
+            },
+            {
+                "email": "banned@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Bo",
+                "last_name": "Banned",
+                "persona": "Banned user",
+                "notes": "Permanently banned account (manual lift required).",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "status": UserStatus.BANNED,
+                "direct_roles": [],
+                "entity_memberships": [],
+            },
+            {
+                "email": "lifecycle@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Lia",
+                "last_name": "Lifecycle",
+                "persona": "Membership lifecycle fixture",
+                "notes": (
+                    "Holds memberships and direct roles in every non-active state: suspended, revoked, "
+                    "pending (future start) and expired, plus an archived role still attached."
+                ),
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": [],
+                "entity_memberships": [],
+            },
+            {
+                "email": "orphan@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Otto",
+                "last_name": "Orphan",
+                "persona": "Orphaned user",
+                "notes": "Rooted at ACME whose only membership was revoked: appears in /users/orphaned for ACME admins.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": [],
+                "entity_memberships": [],
+            },
+            {
+                "email": "abac@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Ada",
+                "last_name": "Attributes",
+                "persona": "ABAC fixture",
+                "notes": "Holds the ABAC Showcase role at West Coast (OR/IN/NOT_IN/numeric/BEFORE conditions).",
+                "is_superuser": False,
+                "direct_roles": [],
+                "entity_memberships": [
+                    {"entity_key": "west_coast", "role_names": ["abac_showcase"]},
+                ],
+            },
+            {
+                "email": "capacity-1@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Cam",
+                "last_name": "CapacityOne",
+                "persona": "Capacity fixture",
+                "notes": "Fills the SF Capacity Team (max_members=2).",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": [],
+                "entity_memberships": [],
+            },
+            {
+                "email": "capacity-2@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Cy",
+                "last_name": "CapacityTwo",
+                "persona": "Capacity fixture",
+                "notes": "Fills the SF Capacity Team (max_members=2).",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": [],
+                "entity_memberships": [],
             },
         ]
 
@@ -1396,12 +1494,14 @@ async def reset_database():
             user.timezone = user_data.get("timezone", "America/Los_Angeles")
             if user_data.get("suspended_days"):
                 user.suspended_until = seed_now + timedelta(days=user_data["suspended_days"])
-            if user_data.get("locked_hours"):
-                user.locked_until = seed_now + timedelta(hours=user_data["locked_hours"])
+            if user_data.get("locked_days"):
+                user.locked_until = seed_now + timedelta(days=user_data["locked_days"])
             if user.status == UserStatus.INVITED:
                 user.last_login = None
                 user.last_activity = None
                 user.last_password_change = None
+                # Keep the invite fixture valid however long ago the seed ran.
+                user.invite_token_expires = far_future
             await session.flush()
             users_map[user_data["email"]] = user
 
@@ -1429,6 +1529,250 @@ async def reset_database():
                 )
 
         print(f"   Created {len(users_data)} test users with persona, lifecycle, and multi-root coverage\n")
+
+        # ------------------------------------------------------------------
+        # Lifecycle fixtures (F-160): every state a console has to render,
+        # created through the library services so history and audit rows are
+        # real. Time-based states use far-future / far-past windows so they
+        # never drift between a reseed and a test run.
+        # ------------------------------------------------------------------
+        print("Creating lifecycle fixtures...")
+        admin_user = users_map["admin@acme.com"]
+        lifecycle_user = users_map["lifecycle@acme.com"]
+        far_past = seed_now - timedelta(days=30)
+        api_key_service = auth.api_key_service
+        principal_service = auth.integration_principal_service
+
+        # Memberships: suspended, pending (future start), expired, revoked.
+        await membership_service.add_member(
+            session,
+            entity_id=entities_map["nyc_office"].id,
+            user_id=lifecycle_user.id,
+            role_ids=[roles_map["office_dispatch_coordinator"].id],
+            joined_by_id=admin_user.id,
+            status=MembershipStatus.SUSPENDED,
+            reason="On leave (lifecycle fixture)",
+        )
+        await membership_service.add_member(
+            session,
+            entity_id=entities_map["east_coast"].id,
+            user_id=lifecycle_user.id,
+            role_ids=[roles_map["acme_regional_admin"].id],
+            joined_by_id=admin_user.id,
+            valid_from=far_future,
+        )
+        expired_membership = await membership_service.add_member(
+            session,
+            entity_id=entities_map["sf_office"].id,
+            user_id=lifecycle_user.id,
+            role_ids=[roles_map["office_dispatch_coordinator"].id],
+            joined_by_id=admin_user.id,
+        )
+        expired_membership.valid_from = far_past - timedelta(days=60)
+        expired_membership.valid_until = far_past
+        await membership_service.add_member(
+            session,
+            entity_id=entities_map["sf_commercial"].id,
+            user_id=lifecycle_user.id,
+            role_ids=[roles_map["agent"].id],
+            joined_by_id=admin_user.id,
+        )
+        await membership_service.remove_member(
+            session,
+            entity_id=entities_map["sf_commercial"].id,
+            user_id=lifecycle_user.id,
+            revoked_by_id=admin_user.id,
+            reason="Moved teams (lifecycle fixture)",
+        )
+        # An ARCHIVED role still attached to an active membership.
+        await membership_service.add_member(
+            session,
+            entity_id=entities_map["org"].id,
+            user_id=lifecycle_user.id,
+            role_ids=[roles_map["legacy_reporting"].id],
+            joined_by_id=admin_user.id,
+        )
+
+        # Direct roles: suspended, revoked, pending, expired.
+        direct_states = [
+            ("acme_team_lead_baseline", "suspended"),
+            ("acme_office_admin", "revoked"),
+            ("acme_regional_admin", "pending"),
+            ("acme_agent_baseline", "expired"),
+        ]
+        for role_name, state in direct_states:
+            membership = await role_service.assign_role_to_user(
+                session,
+                user_id=lifecycle_user.id,
+                role_id=roles_map[role_name].id,
+                assigned_by_id=admin_user.id,
+                valid_from=far_future if state == "pending" else None,
+            )
+            if state == "suspended":
+                membership.status = MembershipStatus.SUSPENDED
+            elif state == "revoked":
+                await role_service.revoke_role_from_user(
+                    session,
+                    user_id=lifecycle_user.id,
+                    role_id=roles_map[role_name].id,
+                    revoked_by_id=admin_user.id,
+                )
+            elif state == "expired":
+                membership.valid_from = far_past - timedelta(days=60)
+                membership.valid_until = far_past
+        await session.flush()
+
+        # A real orphan: rooted at ACME, only membership revoked.
+        orphan_user = users_map["orphan@acme.com"]
+        await membership_service.add_member(
+            session,
+            entity_id=entities_map["sf_commercial"].id,
+            user_id=orphan_user.id,
+            role_ids=[roles_map["agent"].id],
+            joined_by_id=admin_user.id,
+        )
+        await membership_service.remove_member(
+            session,
+            entity_id=entities_map["sf_commercial"].id,
+            user_id=orphan_user.id,
+            revoked_by_id=admin_user.id,
+            reason="Left the company (orphan fixture)",
+        )
+
+        # Entity exactly at capacity.
+        for email in ("capacity-1@acme.com", "capacity-2@acme.com"):
+            await membership_service.add_member(
+                session,
+                entity_id=entities_map["sf_capacity"].id,
+                user_id=users_map[email].id,
+                role_ids=[roles_map["agent"].id],
+                joined_by_id=admin_user.id,
+            )
+
+        # Archive the legacy office and the legacy role (the role stays attached).
+        await auth.entity_service.delete_entity(
+            session,
+            entities_map["legacy_office"].id,
+            deleted_by_id=admin_user.id,
+        )
+        roles_map["legacy_reporting"].status = DefinitionStatus.ARCHIVED
+        await session.flush()
+
+        # Personal API keys in every status, plus a rotated pair.
+        sf_agent = users_map["agent@sf.acme.com"]
+        key_ids: dict[str, object] = {}
+        for label in ("active", "suspended", "revoked", "expired", "rotated"):
+            _secret, key = await api_key_service.create_api_key(
+                session,
+                owner_id=sf_agent.id,
+                name=f"SF agent {label} key",
+                scopes=["lead:read"],
+                description=f"Lifecycle fixture: {label} personal key",
+                actor_user_id=sf_agent.id,
+            )
+            key_ids[label] = key.id
+        await api_key_service.update_api_key(
+            session,
+            key_ids["suspended"],
+            actor_user_id=admin_user.id,
+            status=APIKeyStatus.SUSPENDED,
+        )
+        await api_key_service.revoke_api_key(
+            session,
+            key_ids["revoked"],
+            actor_user_id=admin_user.id,
+            reason="Lifecycle fixture",
+        )
+        expired_key = await api_key_service.get_api_key(session, key_ids["expired"])
+        expired_key.expires_at = far_past
+        expired_key.status = APIKeyStatus.EXPIRED
+        await api_key_service.rotate_api_key(session, key_ids["rotated"], actor_user_id=sf_agent.id)
+        await session.flush()
+
+        # Service accounts (integration principals) with machine keys.
+        platform_principal = await principal_service.create_principal(
+            session,
+            name="Nightly reporting job",
+            description="Platform-global service account (lifecycle fixture).",
+            scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+            anchor_entity_id=None,
+            inherit_from_tree=False,
+            allowed_scopes=["lead:read", "entity:read"],
+            created_by_user_id=admin_user.id,
+        )
+        await api_key_service.create_api_key(
+            session,
+            integration_principal_id=platform_principal.id,
+            name="Reporting job key",
+            scopes=["lead:read"],
+            key_kind=APIKeyKind.SYSTEM_INTEGRATION,
+            actor_user_id=admin_user.id,
+        )
+        sf_principal = await principal_service.create_principal(
+            session,
+            name="SF office CRM sync",
+            description="Entity-anchored service account at the SF office (lifecycle fixture).",
+            scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+            anchor_entity_id=entities_map["sf_office"].id,
+            inherit_from_tree=True,
+            allowed_scopes=["lead:read", "lead:update"],
+            created_by_user_id=admin_user.id,
+        )
+        await api_key_service.create_api_key(
+            session,
+            integration_principal_id=sf_principal.id,
+            name="SF CRM sync key",
+            scopes=["lead:read", "lead:update"],
+            entity_id=entities_map["sf_office"].id,
+            inherit_from_tree=True,
+            key_kind=APIKeyKind.SYSTEM_INTEGRATION,
+            actor_user_id=admin_user.id,
+        )
+        inactive_principal = await principal_service.create_principal(
+            session,
+            name="Paused webhook relay",
+            description="INACTIVE service account (lifecycle fixture).",
+            scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+            anchor_entity_id=entities_map["nyc_office"].id,
+            inherit_from_tree=False,
+            allowed_scopes=["lead:read"],
+            created_by_user_id=admin_user.id,
+        )
+        await principal_service.update_principal(
+            session,
+            inactive_principal.id,
+            actor_user_id=admin_user.id,
+            status=IntegrationPrincipalStatus.INACTIVE,
+        )
+        archived_principal = await principal_service.create_principal(
+            session,
+            name="Retired import tool",
+            description="ARCHIVED service account (lifecycle fixture).",
+            scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+            anchor_entity_id=None,
+            inherit_from_tree=False,
+            allowed_scopes=["lead:read"],
+            created_by_user_id=admin_user.id,
+        )
+        await principal_service.archive_principal(
+            session,
+            archived_principal.id,
+            actor_user_id=admin_user.id,
+            reason="Lifecycle fixture",
+        )
+
+        # Several sessions per persona so session managers have rows to show.
+        for email in ("org-admin@acme.com", "org-admin@acme.com", "agent@sf.acme.com"):
+            await auth.auth_service.create_tokens_for_user(
+                session,
+                users_map[email],
+                device_name="seeded-session",
+                ip_address="203.0.113.10",
+                user_agent="reset_test_env",
+                auth_method="seed",
+            )
+        await session.flush()
+        print("   Added membership/role/key/service-account/session lifecycle fixtures\n")
 
         print("Creating ABAC demo conditions...")
         after_hours_group = ConditionGroup(
@@ -1492,6 +1836,40 @@ async def reset_database():
             )
         )
         print("   Added ABAC condition group to Lead Escalate After Hours\n")
+
+        showcase_role_id = roles_map["abac_showcase"].id
+        region_or_urgent = ConditionGroup(
+            role_id=showcase_role_id,
+            operator="OR",
+            description="Western/eastern regions OR anything urgent.",
+        )
+        status_group = ConditionGroup(
+            role_id=showcase_role_id,
+            operator="AND",
+            description="Never on archived or deleted records.",
+        )
+        session.add_all([region_or_urgent, status_group])
+        await session.flush()
+        showcase_conditions = [
+            (region_or_urgent.id, "resource.region", ConditionOperator.IN, ["west", "east"], "list"),
+            (region_or_urgent.id, "resource.priority", ConditionOperator.EQUALS, "urgent", "string"),
+            (status_group.id, "resource.status", ConditionOperator.NOT_IN, ["archived", "deleted"], "list"),
+            (None, "resource.amount", ConditionOperator.LESS_THAN, 100000, "float"),
+            (None, "time.timestamp", ConditionOperator.BEFORE, "2099-01-01T00:00:00+00:00", "string"),
+        ]
+        for group_id, attribute, operator, value, value_type in showcase_conditions:
+            session.add(
+                RoleCondition(
+                    role_id=showcase_role_id,
+                    condition_group_id=group_id,
+                    attribute=attribute,
+                    operator=operator,
+                    value=serialize_condition_value(value, value_type),
+                    value_type=value_type,
+                    description="ABAC showcase fixture",
+                )
+            )
+        print("   Added OR / IN / NOT_IN / numeric / BEFORE conditions to ABAC Showcase\n")
 
         await session.commit()
 

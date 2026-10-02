@@ -75,7 +75,7 @@ against seeded multi-root scenario data, asserting the behavior an operator
 cares about before shipping.
 
 One command does everything (seed → boot uvicorn → admin/ABAC smoke →
-45-check assertion suite → teardown; non-zero exit on any failure):
+53-check assertion suite → teardown; non-zero exit on any failure):
 
 ```bash
 uv run python scripts/run_enterprise_example_smoke.py
@@ -89,14 +89,16 @@ already-running instance (including a staging host):
   create/move/archive as admin, plus a role-level ABAC condition created via
   the API and verified to allow/deny two holders of the same role.
 - `examples/enterprise_rbac/api_integration_check.py [--base-url ...]` — the
-  assertion suite (45 checks): persona logins across two org roots,
+  assertion suite (53 checks): persona logins across two org roots,
   entity-scoped grants, sibling-team / cross-root isolation via a
   membership-only user, **tree-permission inheritance** down the hierarchy
   (and non-leakage to sibling branches), cache-served verdict stability with
   latencies, and the **next-request visibility arcs** — role grant/revoke,
   role-permission add/remove, membership suspend/reactivate, entity archive,
   API-key revoke, and refresh-token logout must all take effect on the very
-  next request even with Redis caching enabled.
+  next request even with Redis caching enabled — plus tenant isolation of
+  user, membership-graph, effective-permission and entity reads across the
+  two org roots (DD-056 / DD-061).
 
 Both layers create only throwaway data (unique-suffixed users, roles, leads,
 one archived entity) on top of the seed; `reset_test_env.py` restores the

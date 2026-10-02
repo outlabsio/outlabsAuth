@@ -525,6 +525,55 @@ def main() -> int:
         f"http {response.status_code}",
     )
 
+    # ---- 15. Tenant scope beyond the users router (0.1.0a35) ----------------
+    summit_headers = {"Authorization": f"Bearer {tokens['summit_admin']}"}
+    response = client.get(f"/v1/memberships/user/{auditor_id}", headers=summit_headers)
+    check(
+        "other-root admin cannot read ACME membership graph (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.get(f"/v1/permissions/user/{auditor_id}", headers=summit_headers)
+    check(
+        "other-root admin cannot read ACME user permissions (403/404)",
+        response.status_code in (403, 404),
+        f"http {response.status_code}",
+    )
+    summit_entities = client.get("/v1/entities/", params={"limit": 1000}, headers=summit_headers)
+    summit_visible = {row["id"] for row in summit_entities.json().get("items", [])}
+    check(
+        "other-root admin entity list excludes ACME (DD-061)",
+        summit_entities.status_code == 200 and bool(acme_org) and acme_org not in summit_visible,
+        f"http {summit_entities.status_code}, {len(summit_visible)} visible",
+    )
+    response = client.get(f"/v1/entities/{sf_residential}", headers=summit_headers)
+    check(
+        "other-root admin cannot open ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
+    # The West Coast admin holds only org-scoped (never system-wide) roles, so
+    # it is NOT a global actor: its user scope is the ACME tenant.
+    regional_headers = {"Authorization": f"Bearer {tokens['regional_admin']}"}
+    regional_users = client.get("/v1/users/", params={"limit": 100}, headers=regional_headers)
+    regional_emails = {row["email"] for row in regional_users.json().get("items", [])}
+    check(
+        "regional admin is tenant-scoped, not global",
+        regional_users.status_code == 200
+        and PERSONAS["sf_agent"] in regional_emails
+        and PERSONAS["summit_admin"] not in regional_emails
+        and PERSONAS["summit_agent"] not in regional_emails,
+        f"http {regional_users.status_code}, {len(regional_emails)} users",
+    )
+
+    config = client.get("/v1/auth/config").json()
+    check(
+        "/auth/config publishes password policy and registration mode",
+        bool(config.get("password_policy")) and config.get("registration_mode") in {"open", "invite_only", "closed"},
+        f"registration_mode={config.get('registration_mode')}",
+    )
+
     return finish()
 
 

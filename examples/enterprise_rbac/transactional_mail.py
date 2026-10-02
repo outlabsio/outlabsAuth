@@ -107,6 +107,9 @@ def build_example_frontend_registry(
                     access_code="/auth/access-code",
                     oauth_success="/auth/oauth/callback",
                     oauth_error="/auth/login",
+                    # Account linking lands back on the account page with
+                    # ?linked=<provider> or ?link_error=<code>&provider=<provider>.
+                    oauth_associate_success="/app/account",
                 ),
                 support_email=_env("MAIL_SUPPORT_EMAIL"),
             ),

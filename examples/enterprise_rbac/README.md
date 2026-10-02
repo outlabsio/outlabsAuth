@@ -30,7 +30,7 @@ script before relying on the credentials below.
 
 `api_integration_check.py` drives the **running** API over HTTP against the
 seeded scenarios and asserts the behavior an operator cares about before a
-release (45 checks): persona logins across both org roots, entity-scoped
+release (53 checks): persona logins across both org roots, entity-scoped
 grants, sibling-team and cross-root isolation (via a membership-only user),
 tree-permission inheritance down the hierarchy, cache-served verdict
 stability, and the next-request visibility arcs — role grant/revoke,
@@ -50,7 +50,7 @@ Or run the pieces individually (e.g. against a staging host):
 ```bash
 python reset_test_env.py                                  # seed known state
 uvicorn main:app --port 8004                              # start the API
-python api_integration_check.py                           # 45 checks, exit 0 on pass
+python api_integration_check.py                           # 53 checks, exit 0 on pass
 python api_integration_check.py --base-url http://staging-host:8004
 ```
 
@@ -207,25 +207,47 @@ All seeded passwords are `Testpass1!` unless noted. Source of truth:
 | Email | Persona |
 |-------|---------|
 | `admin@acme.com` | Superuser |
-| `org-admin@acme.com` | ACME root-scoped admin |
-| `regional-admin@acme.com` | West Coast hierarchy admin |
+| `permissions-admin@acme.com` | The one deliberately **global** delegated persona (direct system-wide role): permission catalog + ABAC only |
+| `org-admin@acme.com` | ACME tenant admin (org-scoped role; users, roles, entities, memberships) |
+| `regional-admin@acme.com` | West Coast hierarchy admin (org-scoped baseline + West Coast entity-defined roles) |
 | `east-admin@acme.com` | East Coast hierarchy admin |
 | `manager@sf.acme.com` | San Francisco office admin |
-| `auditor@acme.com` | Read-only ACME auditor |
+| `auditor@acme.com` | Read-only ACME auditor (users, roles, memberships, permissions, keys) |
 | `lead@sf.acme.com` | SF residential team lead |
 | `agent@sf.acme.com` | SF residential agent |
 | `commercial@sf.acme.com` | SF commercial agent |
 | `summit-admin@summit.com` | Second-root (Summit) admin |
 | `agent@austin.summit.com` | Summit growth agent |
 
+Only `admin@acme.com` (superuser) and `permissions-admin@acme.com` (system-wide
+role) are global actors. Every other persona holds org-scoped roles only, so its
+user/role/entity scope is its own tenant (DD-056 scope is per tenant root: a
+first membership roots the user at that tree). Region- and office-level limits
+apply on tree-permission surfaces — membership writes, entity-context checks
+and the example's lead routes — not on tenant-wide listings.
+
 ### Lifecycle fixtures
 
-| Email | Notes |
+| Email / object | Notes |
 |-------|-------|
-| `invited@acme.com` | Pending invite (no password) |
-| `suspended@ny.acme.com` | Suspended operator |
-| `locked@la.acme.com` | Locked account fixture |
+| `invited@acme.com` | Pending invite (no password; invite never expires) |
+| `suspended@ny.acme.com` | Indefinitely suspended operator |
+| `locked@la.acme.com` | Locked account (lock ten years out) |
 | `unverified@austin.summit.com` | Unverified email fixture |
+| `banned@acme.com` | Banned account |
+| `lifecycle@acme.com` | Suspended, pending, expired and revoked memberships and direct roles, plus an archived role still attached |
+| `orphan@acme.com` | Real orphan: ACME-rooted, only membership revoked |
+| `abac@acme.com` | Holds the ABAC Showcase role (OR / IN / NOT_IN / numeric / BEFORE conditions) |
+| `capacity-1@acme.com`, `capacity-2@acme.com` | Fill the SF Capacity Team exactly to `max_members=2` |
+| LA Downtown Team | Active team under the inactive LA office |
+| Boston Office | Archived entity |
+| `lead:export` | Inactive permission still attached to the ACME Org Admin role |
+| SF agent API keys | Personal keys in every status (active, suspended, revoked, expired) plus a rotated pair |
+| Service accounts | Platform-global and SF-office integration principals with machine keys, plus inactive and archived principals |
+| Sessions | Several sessions for `org-admin@acme.com` and `agent@sf.acme.com` |
+
+Set `LOGIN_IP_RATE_LIMIT_MAX` / `LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS` when an
+E2E suite logs many personas in from one IP (library default: 20 per 300 s).
 
 ### What to try
 
@@ -307,8 +329,8 @@ steer naming without hardcoding a global taxonomy.
 | Login as | Expect |
 |----------|--------|
 | `admin@acme.com` | Broad admin access across ACME (superuser) |
-| `regional-admin@acme.com` | West Coast scope; not East Coast admin |
-| `east-admin@acme.com` | East Coast scope; sibling of West |
+| `regional-admin@acme.com` | ACME tenant listings; West Coast-only membership and lead writes |
+| `east-admin@acme.com` | ACME tenant listings; East Coast-only membership and lead writes |
 | `agent@sf.acme.com` | SF residential team leads only |
 | `summit-admin@summit.com` | Summit root; ACME entities/leads out of scope |
 

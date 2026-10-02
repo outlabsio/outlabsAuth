@@ -212,7 +212,7 @@ jobs:
         run: uv run --extra all --extra test python -m pytest -q
 
   # Black-box validation of the RUNNING EnterpriseRBAC example over HTTP:
-  # seed -> boot uvicorn -> admin/ABAC smoke -> 45-check assertion suite ->
+  # seed -> boot uvicorn -> admin/ABAC smoke -> 53-check assertion suite ->
   # teardown. See docs/PRIVATE_RELEASE.md "API Integration Validation".
   api-integration:
     runs-on: ubuntu-latest
@@ -258,7 +258,7 @@ jobs:
       - name: Generate ephemeral SECRET_KEY
         run: echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
-      - name: Run API integration suite (seed, boot, smoke, 45 checks)
+      - name: Run API integration suite (seed, boot, smoke, 53 checks)
         run: uv run python scripts/run_enterprise_example_smoke.py
 
   # Seed and validate the running SimpleRBAC FastAPI example independently of
@@ -306,3 +306,41 @@ jobs:
 
       - name: Run SimpleRBAC integration suite (seed, boot, live API checks)
         run: uv run python scripts/run_simple_example_smoke.py
+
+  # The ABAC cookbook is the minimal-backend preset (no entities, keys or
+  # audit): seed it through migrations, boot it and drive the condition
+  # lifecycle over HTTP so ABAC write validation and fail-closed evaluation are
+  # release-gated end to end.
+  abac-cookbook-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: abac_cookbook
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d abac_cookbook"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/abac_cookbook
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Generate ephemeral SECRET_KEY
+        run: echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+
+      - name: Run ABAC cookbook smoke (seed, boot, condition lifecycle)
+        run: uv run python scripts/run_abac_cookbook_smoke.py
