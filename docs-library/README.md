@@ -105,7 +105,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 
 | Guide | Summary |
 |-------|---------|
-| [OutlabsAuth UI](../docs/AUTH_UI.md) | Sister Vite/React console you point at any mounted OutlabsAuth API |
+| [OutlabsAuth UI](../docs/AUTH_UI.md) | Sister Nuxt static admin console you point at any mounted OutlabsAuth API |
 
 ### Reference
 

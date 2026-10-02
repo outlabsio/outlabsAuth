@@ -177,6 +177,14 @@ examples.
 Optional shared admin console for Simple/Enterprise hosts:
 [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) — see [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 
+**These examples are the console's release gate.** OutlabsAuth UI has no hosted CI: its
+`bun run release:check --enterprise http://localhost:8004 --simple http://localhost:8003`
+runs the full Playwright suite against these two examples (each with its own disposable
+database; the run creates and cleans up data). It depends on their `/v1` prefix, the
+personas and passwords seeded by `reset_test_env.py`, CORS for `http://localhost:3000` and
+`:3001`, the EnterpriseRBAC `console` frontend profile, and the development-only
+`/dev/auth/*/latest` token captures. Treat a change to any of them as a console contract change.
+
 ---
 
 ## API Endpoints Comparison

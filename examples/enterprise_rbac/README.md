@@ -351,35 +351,36 @@ roles/permissions in Swagger or OutlabsAuth UI after login.
 
 ## 🔗 Connect Admin UI
 
-[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
-admin console. Point it at this example’s API:
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister admin console
+(a Nuxt 4 + Nuxt UI static SPA; Bun 1.3.3+ and Node.js 22.18+). Its config template
+already targets this example:
 
 ```bash
 # Sibling of the outlabsAuth repo (not inside examples/)
 cd ../../../OutlabsAuthUI   # or: git clone https://github.com/outlabsio/OutlabsAuthUI.git
 bun install
 cp public/app-config.template.json public/app-config.json
+bun run dev   # http://localhost:3000
 ```
 
-Set `public/app-config.json` to:
+The copied `public/app-config.json` (untracked) contains, besides branding and sign-in
+options:
 
 ```json
 {
   "apiBaseUrl": "http://localhost:8004",
   "authApiPrefix": "/v1",
-  "appName": "OutlabsAuth UI",
-  "appSubtitle": "EnterpriseRBAC example",
-  "authBrand": "OutlabsAuth",
-  "signInDescription": "Sign in with a seeded demo admin from this example."
+  "frontendProfileKey": "console"
 }
 ```
 
-```bash
-bun run dev
-```
+`frontendProfileKey: "console"` names the console profile this example registers
+(`transactional_mail.py`), so sessions are bound to it and emailed reset, invite,
+magic-link and code links land on `FRONTEND_URL` (default `http://localhost:3000`, the
+console's dev URL).
 
-Open the Vite URL (default `http://localhost:5173`) and sign in with a seeded
-account from `reset_test_env.py` (for example `admin@acme.com` / `Testpass1!`).
+Open `http://localhost:3000` and sign in with a seeded account from `reset_test_env.py`
+(for example `admin@acme.com` / `Testpass1!`).
 
 The UI reads `GET /v1/auth/config` and adapts for Enterprise features (entity
 hierarchy, memberships, entity-type settings). More detail:
