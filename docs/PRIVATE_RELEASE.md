@@ -75,7 +75,7 @@ against seeded multi-root scenario data, asserting the behavior an operator
 cares about before shipping.
 
 One command does everything (seed → boot uvicorn → admin/ABAC smoke →
-53-check assertion suite → teardown; non-zero exit on any failure):
+61-check assertion suite → teardown; non-zero exit on any failure):
 
 ```bash
 uv run python scripts/run_enterprise_example_smoke.py
@@ -89,7 +89,7 @@ already-running instance (including a staging host):
   create/move/archive as admin, plus a role-level ABAC condition created via
   the API and verified to allow/deny two holders of the same role.
 - `examples/enterprise_rbac/api_integration_check.py [--base-url ...]` — the
-  assertion suite (56 checks): persona logins across two org roots,
+  assertion suite (61 checks): persona logins across two org roots,
   entity-scoped grants, sibling-team / cross-root isolation via a
   membership-only user, **tree-permission inheritance** down the hierarchy
   (and non-leakage to sibling branches), cache-served verdict stability with
@@ -101,7 +101,7 @@ already-running instance (including a staging host):
   two org roots (DD-056 / DD-061).
 
 Both layers create only throwaway data (unique-suffixed users, roles, leads,
-one archived entity) on top of the seed; `reset_test_env.py` restores the
+two archived entities) on top of the seed; `reset_test_env.py` restores the
 known state. Gotchas encoded in the scripts so they aren't relearned:
 everything must run with `--project <repo root>` so the *current* library is
 exercised (the example's own `.venv` may pin an older build), seeded

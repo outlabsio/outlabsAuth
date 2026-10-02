@@ -615,6 +615,45 @@ def main() -> int:
         f"http {response.status_code}",
     )
 
+    # A superuser moving a populated ACME team into Summit hands Summit no
+    # ACME accounts: the moved member is visible through its membership but
+    # stays managed by ACME (DD-061 decision 16). The team is archived after.
+    austin_office = by_name.get("austin_office")
+    acme_sf_office = by_name.get("sf_office")
+    moved_team = client.post(
+        "/v1/entities/",
+        json={
+            "name": f"itc_moved_{marker}",
+            "display_name": f"ITC Moved {marker}",
+            "slug": f"itc-moved-{marker}",
+            "entity_class": "access_group",
+            "entity_type": "team",
+            "parent_entity_id": acme_sf_office,
+        },
+        headers=admin_headers,
+    )
+    moved_team_id = moved_team.json().get("id")
+    moved_user_id, _ = register_user("moved")
+    client.post(
+        "/v1/memberships/",
+        json={"entity_id": moved_team_id, "user_id": moved_user_id, "role_ids": []},
+        headers=admin_headers,
+    )
+    moved = client.post(
+        f"/v1/entities/{moved_team_id}/move", json={"new_parent_id": austin_office}, headers=admin_headers
+    )
+    seen = client.get(f"/v1/users/{moved_user_id}", headers=summit_headers)
+    reset = client.patch(
+        f"/v1/users/{moved_user_id}/password", json={"new_password": "Hijacked1!x"}, headers=summit_headers
+    )
+    check(
+        "other-root admin cannot take over an ACME member moved into its tree (403)",
+        moved.status_code == 200 and seen.status_code == 200 and reset.status_code == 403,
+        f"move http {moved.status_code}, read http {seen.status_code}, reset http {reset.status_code}",
+    )
+    if moved_team_id:
+        client.delete(f"/v1/entities/{moved_team_id}", headers=admin_headers)
+
     # The permission catalog is shared by every tenant: the deliberately
     # global catalog admin can still write it.
     catalog_headers = {"Authorization": f"Bearer {tokens['permissions_admin']}"}

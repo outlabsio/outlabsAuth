@@ -208,7 +208,7 @@ noted.
   profile declares an account-linking landing.
 - The ABAC cookbook seeds through migrations with a valid secret and editable
   ABAC definitions, and its smoke runs in release CI. The EnterpriseRBAC
-  integration suite adds tenant-scope checks (60 checks).
+  integration suite adds tenant-scope checks (61 checks).
 
 ### Database migrations
 
