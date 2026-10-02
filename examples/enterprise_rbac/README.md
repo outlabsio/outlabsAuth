@@ -30,13 +30,15 @@ script before relying on the credentials below.
 
 `api_integration_check.py` drives the **running** API over HTTP against the
 seeded scenarios and asserts the behavior an operator cares about before a
-release (61 checks): persona logins across both org roots, entity-scoped
+release (62 checks): persona logins across both org roots, entity-scoped
 grants, sibling-team and cross-root isolation (via a membership-only user),
 tree-permission inheritance down the hierarchy, cache-served verdict
 stability, and the next-request visibility arcs — role grant/revoke,
 role-permission add/remove, membership suspend/reactivate, entity archive,
 API-key revoke, and refresh-token logout all take effect on the very next
-request even with Redis caching enabled.
+request even with Redis caching enabled — plus tenant isolation across the two
+org roots, including a cross-root team move that is refused while the team has
+a member and hands over nothing once emptied.
 
 The one-command release flow (seed → boot → admin/ABAC smoke → assertion
 suite → teardown) lives at the repo root:
@@ -50,7 +52,7 @@ Or run the pieces individually (e.g. against a staging host):
 ```bash
 python reset_test_env.py                                  # seed known state
 uvicorn main:app --port 8004                              # start the API
-python api_integration_check.py                           # 61 checks, exit 0 on pass
+python api_integration_check.py                           # 62 checks, exit 0 on pass
 python api_integration_check.py --base-url http://staging-host:8004
 ```
 

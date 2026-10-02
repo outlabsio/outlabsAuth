@@ -615,9 +615,13 @@ def main() -> int:
         f"http {response.status_code}",
     )
 
-    # A superuser moving a populated ACME team into Summit hands Summit no
-    # ACME accounts: the moved member is visible through its membership but
-    # stays managed by ACME (DD-061 decision 16). The team is archived after.
+    # A move that changes an entity's root fails closed while the moved
+    # subtree carries access (DD-061 decision 17), even for a superuser: a
+    # populated ACME team cannot be moved into Summit, and Summit sees none
+    # of it. The operator procedure — revoke the team's access, move it,
+    # re-grant in the destination — then moves it without handing Summit an
+    # ACME account or letting it revive the revoked membership. The team is
+    # archived after.
     austin_office = by_name.get("austin_office")
     acme_sf_office = by_name.get("sf_office")
     moved_team = client.post(
@@ -639,6 +643,17 @@ def main() -> int:
         json={"entity_id": moved_team_id, "user_id": moved_user_id, "role_ids": []},
         headers=admin_headers,
     )
+    refused = client.post(
+        f"/v1/entities/{moved_team_id}/move", json={"new_parent_id": austin_office}, headers=admin_headers
+    )
+    seen = client.get(f"/v1/users/{moved_user_id}", headers=summit_headers)
+    refused_error = refused.json().get("error") if refused.status_code == 422 else None
+    check(
+        "superuser cannot move a populated ACME team into Summit (422 ENTITY_MOVE_CARRIES_ACCESS)",
+        refused.status_code == 422 and refused_error == "ENTITY_MOVE_CARRIES_ACCESS" and seen.status_code == 404,
+        f"move http {refused.status_code} {refused_error}, Summit read http {seen.status_code}",
+    )
+    revoked = client.delete(f"/v1/memberships/{moved_team_id}/{moved_user_id}", headers=admin_headers)
     moved = client.post(
         f"/v1/entities/{moved_team_id}/move", json={"new_parent_id": austin_office}, headers=admin_headers
     )
@@ -646,10 +661,18 @@ def main() -> int:
     reset = client.patch(
         f"/v1/users/{moved_user_id}/password", json={"new_password": "Hijacked1!x"}, headers=summit_headers
     )
+    revived = client.patch(
+        f"/v1/memberships/{moved_team_id}/{moved_user_id}", json={"status": "active"}, headers=summit_headers
+    )
     check(
-        "other-root admin cannot take over an ACME member moved into its tree (403)",
-        moved.status_code == 200 and seen.status_code == 200 and reset.status_code == 403,
-        f"move http {moved.status_code}, read http {seen.status_code}, reset http {reset.status_code}",
+        "emptied ACME team moves into Summit; Summit gets no ACME account (404) or revoked membership (422)",
+        revoked.status_code == 204
+        and moved.status_code == 200
+        and seen.status_code == 404
+        and reset.status_code == 404
+        and revived.status_code == 422,
+        f"revoke http {revoked.status_code}, move http {moved.status_code}, read http {seen.status_code}, "
+        f"reset http {reset.status_code}, revive http {revived.status_code}",
     )
     if moved_team_id:
         client.delete(f"/v1/entities/{moved_team_id}", headers=admin_headers)

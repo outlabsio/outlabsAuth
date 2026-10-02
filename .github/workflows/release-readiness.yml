@@ -212,7 +212,7 @@ jobs:
         run: uv run --extra all --extra test python -m pytest -q
 
   # Black-box validation of the RUNNING EnterpriseRBAC example over HTTP:
-  # seed -> boot uvicorn -> admin/ABAC smoke -> 53-check assertion suite ->
+  # seed -> boot uvicorn -> admin/ABAC smoke -> 62-check assertion suite ->
   # teardown. See docs/PRIVATE_RELEASE.md "API Integration Validation".
   api-integration:
     runs-on: ubuntu-latest
@@ -258,7 +258,7 @@ jobs:
       - name: Generate ephemeral SECRET_KEY
         run: echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
-      - name: Run API integration suite (seed, boot, smoke, 53 checks)
+      - name: Run API integration suite (seed, boot, smoke, 62 checks)
         run: uv run python scripts/run_enterprise_example_smoke.py
 
   # Seed and validate the running SimpleRBAC FastAPI example independently of
