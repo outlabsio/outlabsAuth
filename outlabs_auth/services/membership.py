@@ -40,6 +40,7 @@ from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.utils.lifecycle import lifecycle_update_grants_access
 
 
 @dataclass
@@ -486,6 +487,21 @@ class MembershipService(BaseService[EntityMembership]):
                     "user_id": str(user_id),
                 },
             )
+
+        next_status = status if update_status and status is not None else membership.status
+        grants_again = lifecycle_update_grants_access(
+            current_status=membership.status,
+            current_valid_from=membership.valid_from,
+            current_valid_until=membership.valid_until,
+            next_status=next_status,
+            next_valid_from=next_valid_from,
+            next_valid_until=next_valid_until,
+        )
+        if not grants_again and update_roles and str(getattr(next_status, "value", next_status)) == "active":
+            current_role_ids = {role.id for role in membership.roles}
+            grants_again = bool(set(role_ids or []) - current_role_ids)
+        if grants_again:
+            await self._require_holder_in_entity_tree(session, entity_id, user_id)
 
         if update_roles:
             roles = await self._fetch_roles_by_ids(session, role_ids or [])
@@ -1014,6 +1030,7 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
+        await self._require_holder_in_entity_tree(session, entity_id, user_id)
         previous_snapshot = await self._build_membership_history_snapshot(session, membership)
         membership.status = MembershipStatus.ACTIVE
         membership.revocation_reason = None
@@ -1645,6 +1662,49 @@ class MembershipService(BaseService[EntityMembership]):
     # =========================================================================
     # Helper Methods for Root Entity Validation
     # =========================================================================
+
+    async def _require_holder_in_entity_tree(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        """Refuse to re-grant a membership whose holder is rooted in another tree (DD-061).
+
+        ``add_member`` keeps memberships in their holder's tree. A stored row
+        can still sit in another tree — left behind by an entity move from an
+        earlier release, or revoked before a root-changing move (decision 17)
+        — and reactivating it, widening its window or adding roles to it would
+        give an account of one tenant authority in another without the
+        ``add_member`` check. Applies to every caller whenever tenant scope is
+        enforced; narrowing, suspending and revoking are never refused, and
+        unrooted (legacy) holders are left to the adoption rules.
+
+        Raises:
+            InvalidInputError: (422, ``details.reason = membership_root_mismatch``)
+        """
+        if not (
+            getattr(self.config, "enable_entity_hierarchy", False) and getattr(self.config, "enforce_user_scope", True)
+        ):
+            return
+        user = await session.get(User, user_id)
+        holder_root_entity_id = getattr(user, "root_entity_id", None)
+        if holder_root_entity_id is None:
+            return
+        entity_root_entity_id = await self._get_root_entity_id(session, entity_id)
+        if entity_root_entity_id == holder_root_entity_id:
+            return
+        raise InvalidInputError(
+            message=(
+                "This membership belongs to a user rooted in another organization and cannot be "
+                "re-granted; add a member of this organization instead"
+            ),
+            details={
+                "reason": "membership_root_mismatch",
+                "entity_id": str(entity_id),
+                "user_id": str(user_id),
+            },
+        )
 
     async def _get_root_entity_id(
         self,

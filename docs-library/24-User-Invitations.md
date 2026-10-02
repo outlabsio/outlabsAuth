@@ -91,7 +91,10 @@ tenant-scoped inviter's invitee is rooted at the inviter's own root so it stays
 visible to that tenant; a global inviter's invitee is rooted in the
 organization of its direct roles (roles from two organizations: 422). With `entity_id`, the entity must be
 inside the inviter's tenant (DD-061): another tenant's entity answers 404 and
-no account is created.
+no account is created. For a non-global inviter it must also lie in the tree of
+the inviter's own root: an entity reached only through a membership left in
+another tenant's tree by an earlier cross-root move answers 403 (decision 17),
+because the invitee would be rooted in that tenant.
 
 **Accept** (`AcceptInviteRequest`): `token`, `new_password` (length policy enforced).
 

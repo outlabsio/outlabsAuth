@@ -84,13 +84,21 @@ The core trust boundaries are:
 - Tenant isolation (DD-056, DD-061) covers user, membership-graph,
   effective-permission and entity routes: non-global actors only reach targets
   inside their scope, and out-of-scope targets answer 404 like nonexistent
-  ones. Creating, promoting to, or archiving a root entity needs a global
-  actor.
+  ones. Creating, promoting to, moving under another root, or archiving a root
+  entity needs a global actor.
+- A move that changes an entity's root fails closed: while the moved subtree
+  carries access (memberships, pending invitations, role assignments anchored
+  in it, entity API keys, integration principals, rooted accounts) it is
+  refused for every caller, superusers included (422
+  `ENTITY_MOVE_CARRIES_ACCESS`); operators revoke, move, then re-grant in the
+  destination. A membership held by an account of another tree is never
+  re-granted, and only an entity's own tenant grants access in it.
 - Seeing an account is not owning it: only the tenant that holds an account's
   root (or a global actor) can modify it or add it to an entity. An account
   visible only through a membership — for example a member of a subtree a
-  superuser moved under another tenant — is read-only (403), so a cross-root
-  move cannot hand one tenant's accounts, or its administrators, to another.
+  superuser moved under another tenant on an earlier release — is read-only
+  (403), so such a move cannot hand one tenant's accounts, or its
+  administrators, to another.
 - Global scope is granted only by global actors: directly assigning a
   system-wide role (including on invite and on reactivation) is refused for
   tenant-scoped admins, and new accounts stay inside the creator's tenant.

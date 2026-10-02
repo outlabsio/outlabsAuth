@@ -260,6 +260,19 @@ class MissingRequiredFieldError(ValidationError):
     error_code = "MISSING_REQUIRED_FIELD"
 
 
+class EntityMoveCarriesAccessError(InvalidInputError):
+    """An entity move would change the entity's root while its subtree still carries access.
+
+    Raised by ``EntityService.move_entity`` (DD-061 decision 17) for a move
+    under another root, a promotion to the root level or the demotion of a
+    root, when the moved subtree still holds memberships, role assignments,
+    entity API keys, integration principals, pending invitations or accounts.
+    ``details`` carries ``reason = "cross_root_move_carries_access"`` and an
+    ``access`` count per category so operators know what to revoke first.
+    """
+    error_code = "ENTITY_MOVE_CARRIES_ACCESS"
+
+
 # ============================================================================
 # Rate Limiting Exceptions
 # ============================================================================

@@ -22,6 +22,7 @@ from outlabs_auth.routers._scope import (
     entity_scope_guard,
     get_visible_user_or_404,
     require_account_managed_by_principal,
+    require_membership_write_in_principal_tenant,
     resolve_principal_scope,
     scope_enforced,
 )
@@ -172,11 +173,16 @@ def get_memberships_router(
         be *rooted* in the actor's tenant (decision 16): one seen only through
         a membership answers 403. Pulling an unaffiliated or foreign-rooted
         account into a tenant is a global-actor operation: it would hand the
-        tenant control over that account.
+        tenant control over that account. The entity must also lie in the
+        actor's own tenant (decision 17): a membership the actor holds in
+        another tree does not let it grant access there (403).
         """
         if scope_enforced(auth):
             actor_scope = await resolve_principal_scope(auth, session, auth_result)
             if not actor_scope.get("is_global"):
+                await require_membership_write_in_principal_tenant(
+                    auth, session, auth_result, UUID(data.entity_id), scope=actor_scope
+                )
                 target_user = await get_visible_user_or_404(
                     auth, session, auth_result, UUID(data.user_id), scope=actor_scope
                 )
@@ -378,8 +384,18 @@ def get_memberships_router(
         """Update a user's roles and lifecycle state in an entity."""
         fields_set = data.model_fields_set
 
+        async def _require_grant_in_actor_tenant() -> None:
+            # DD-061 decision 17: re-granting or adding roles is a grant in
+            # this entity, which only its own tenant (or a global actor) makes.
+            if scope_enforced(auth):
+                actor_scope = await resolve_principal_scope(auth, session, auth_result)
+                await require_membership_write_in_principal_tenant(
+                    auth, session, auth_result, entity_id, scope=actor_scope
+                )
+
         role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
         if "role_ids" in fields_set:
+            await _require_grant_in_actor_tenant()
             await require_can_delegate_roles(
                 session,
                 auth=auth,
@@ -400,6 +416,7 @@ def get_memberships_router(
                 next_valid_from=data.valid_from if "valid_from" in fields_set else current.valid_from,
                 next_valid_until=data.valid_until if "valid_until" in fields_set else current.valid_until,
             ):
+                await _require_grant_in_actor_tenant()
                 await require_can_delegate_roles(
                     session,
                     auth=auth,

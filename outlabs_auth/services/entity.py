@@ -21,19 +21,32 @@ if TYPE_CHECKING:
     from outlabs_auth.services.redis_client import RedisClient
     from outlabs_auth.services.role import RoleService
 
-from sqlalchemy import and_, insert, or_, select
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    EntityMoveCarriesAccessError,
     EntityNotFoundError,
     InvalidInputError,
 )
+from outlabs_auth.models.sql.api_key import APIKey
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
+from outlabs_auth.models.sql.enums import (
+    APIKeyStatus,
+    EntityClass,
+    IntegrationPrincipalStatus,
+    MembershipStatus,
+    UserStatus,
+)
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal, IntegrationPrincipalRole
+from outlabs_auth.models.sql.role import Role
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
 
 ROOT_NAMING_PATTERN_FIELDS = (
@@ -42,6 +55,17 @@ ROOT_NAMING_PATTERN_FIELDS = (
     "child_slug_pattern",
 )
 ROOT_ONLY_GOVERNANCE_FIELDS = ROOT_NAMING_PATTERN_FIELDS + ("child_naming_guidance",)
+
+# Access a subtree can carry (DD-061 decision 17). A move that changes the
+# subtree's root is refused while any of these counts is non-zero.
+SUBTREE_ACCESS_CATEGORIES = (
+    "memberships",
+    "pending_invitations",
+    "role_assignments",
+    "api_keys",
+    "integration_principals",
+    "accounts",
+)
 
 
 class EntityService(BaseService[Entity]):
@@ -374,6 +398,14 @@ class EntityService(BaseService[Entity]):
         - `entities.depth` and materialized `entities.path` for the entire subtree
         - `entity_closure` rows so ancestor/descendant queries stay correct
 
+        A move that changes the subtree's root — under another root, to the
+        root level, or a root under any parent — fails closed with tenant
+        scope enforced (DD-061 decision 17): it is refused for every caller,
+        superusers included, while the subtree still carries access (see
+        :meth:`get_subtree_access`). An allowed root-changing move re-anchors
+        the subtree's entity-local role definitions at the new root. Moves
+        within one root are unaffected.
+
         Args:
             session: Database session
             entity_id: Entity being moved (root of subtree)
@@ -382,6 +414,9 @@ class EntityService(BaseService[Entity]):
         Raises:
             EntityNotFoundError: If entity or new parent does not exist
             InvalidInputError: If move would create a cycle or violates hierarchy rules
+            EntityMoveCarriesAccessError: If the move changes the subtree's
+                root while it still carries access (422,
+                ``details.reason = "cross_root_move_carries_access"``)
         """
         start_time = time.perf_counter()
 
@@ -458,6 +493,48 @@ class EntityService(BaseService[Entity]):
         subtree_entities: list[Entity] = [row[0] for row in subtree_rows]
         subtree_ids = list(subtree_depth_by_id.keys())
 
+        # DD-061 decision 17: a move that changes the subtree's root fails
+        # closed while the subtree carries access. Memberships, role grants,
+        # keys, principals, invitations and accounts anchored in it would
+        # otherwise keep (or let their holders create) authority in a tenant
+        # that never granted it.
+        previous_root_entity_id: Optional[UUID] = None
+        new_root_entity_id: Optional[UUID] = None
+        changes_root = False
+        if self._tenant_scope_enforced():
+            previous_root_entity_id = await self._resolve_root_entity_id(session, entity)
+            new_root_entity_id = (
+                entity.id if new_parent is None else await self._resolve_root_entity_id(session, new_parent)
+            )
+            changes_root = (
+                previous_root_entity_id is None
+                or new_root_entity_id is None
+                or previous_root_entity_id != new_root_entity_id
+            )
+            if changes_root:
+                access = await self._count_subtree_access(
+                    session,
+                    await self._with_archived_descendants(session, subtree_ids),
+                )
+                if any(access.values()):
+                    raise EntityMoveCarriesAccessError(
+                        message=(
+                            "This move would change the entity's root while its subtree still carries "
+                            "access. Revoke or archive the subtree's memberships, role assignments, "
+                            "entity API keys, integration principals and pending invitations first "
+                            "(accounts rooted in it cannot change tenant), then move it and re-grant "
+                            "access in the destination."
+                        ),
+                        details={
+                            "reason": "cross_root_move_carries_access",
+                            "entity_id": str(entity.id),
+                            "new_parent_id": str(new_parent_id) if new_parent_id else None,
+                            "root_entity_id": str(previous_root_entity_id) if previous_root_entity_id else None,
+                            "new_root_entity_id": str(new_root_entity_id) if new_root_entity_id else None,
+                            "access": access,
+                        },
+                    )
+
         # Determine old/new root path prefixes for safe path rebuild.
         old_root_path = (entity.path or "").strip() or None
         if old_root_path and not old_root_path.endswith("/"):
@@ -532,6 +609,35 @@ class EntityService(BaseService[Entity]):
 
         await session.flush()
 
+        # An entity-local role belongs to its scope entity, and its
+        # root_entity_id names that entity's organization. After a
+        # root-changing move (allowed only for a subtree without access) the
+        # subtree's role definitions follow it: otherwise they would keep the
+        # old organization, be unassignable in the destination (and, when
+        # auto-assigned, break every new membership in the subtree), and a
+        # revoked direct grant of one could be reactivated for a holder of the
+        # old tenant (the direct-role root rule compares the role's root).
+        reanchored_role_ids: list[UUID] = []
+        if changes_root and new_root_entity_id is not None:
+            role_ids_result = await session.execute(
+                select(cast(Any, Role.id)).where(
+                    cast(Any, Role.scope_entity_id).in_(subtree_ids),
+                    or_(
+                        cast(Any, Role.root_entity_id).is_(None),
+                        cast(Any, Role.root_entity_id) != new_root_entity_id,
+                    ),
+                )
+            )
+            reanchored_role_ids = [cast(UUID, role_id) for (role_id,) in role_ids_result.all()]
+            if reanchored_role_ids:
+                await session.execute(
+                    update(Role)
+                    .where(cast(Any, Role.id).in_(reanchored_role_ids))
+                    .values(root_entity_id=new_root_entity_id)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await session.flush()
+
         # Invalidate caches affected by this move.
         await self.invalidate_entity_tree_cache(session, entity.id)
 
@@ -549,6 +655,15 @@ class EntityService(BaseService[Entity]):
             )
 
         await self._invalidate_permission_cache(entity.id, scope_global=True)
+        move_metadata: Dict[str, Any] = {"subtree_size": len(subtree_ids)}
+        if changes_root:
+            move_metadata.update(
+                {
+                    "changes_root": True,
+                    "previous_root_entity_id": str(previous_root_entity_id) if previous_root_entity_id else None,
+                    "reanchored_role_ids": sorted(str(role_id) for role_id in reanchored_role_ids),
+                }
+            )
         await self._record_entity_audit_event(
             session,
             entity,
@@ -562,9 +677,185 @@ class EntityService(BaseService[Entity]):
                 "parent_id": str(new_parent_id) if new_parent_id else None,
                 "path": entity.path,
             },
-            metadata={"subtree_size": len(subtree_ids)},
+            metadata=move_metadata,
         )
         return entity
+
+    def _tenant_scope_enforced(self) -> bool:
+        """Tenant isolation applies (EnterpriseRBAC with ``enforce_user_scope``), as in DD-061."""
+        return bool(
+            getattr(self.config, "enable_entity_hierarchy", False) and getattr(self.config, "enforce_user_scope", True)
+        )
+
+    async def get_root_entity_id(self, session: AsyncSession, entity_id: UUID) -> Optional[UUID]:
+        """Return the root of an entity's tree (the entity itself for a root).
+
+        ``None`` for an entity without closure rows (an archived non-root).
+        """
+        entity = await self.get_entity(session, entity_id)
+        return await self._resolve_root_entity_id(session, entity)
+
+    async def get_subtree_access(self, session: AsyncSession, entity_id: UUID) -> Dict[str, int]:
+        """Count the access anchored in the subtree rooted at ``entity_id`` (DD-061 decision 17).
+
+        The subtree is the entity, its linked descendants and archived
+        descendants still attached to them through ``parent_id``. Returned
+        counts (all categories always present, see
+        ``SUBTREE_ACCESS_CATEGORIES``):
+
+        * ``memberships`` — entity memberships in the subtree that are not
+          revoked (active, suspended, pending, expired or rejected rows can
+          be brought back without a new grant);
+        * ``pending_invitations`` — invited accounts (not yet accepted) with
+          such a membership in the subtree, or rooted in it;
+        * ``role_assignments`` — non-revoked direct role assignments of roles
+          anchored in the subtree (entity-local roles defined there, or
+          organization roles of a root inside it), plus non-revoked
+          memberships elsewhere and non-archived integration principals
+          elsewhere that hold such a role;
+        * ``api_keys`` — non-revoked API keys anchored at a subtree entity;
+        * ``integration_principals`` — non-archived principals anchored at a
+          subtree entity;
+        * ``accounts`` — accounts (any status) rooted at a subtree entity.
+
+        A move that changes the subtree's root is refused while any count is
+        non-zero; operators can call this to see what to revoke first.
+        """
+        entity = await self.get_entity(session, entity_id)
+        linked_result = await session.execute(
+            select(cast(Any, EntityClosure.descendant_id)).where(cast(Any, EntityClosure.ancestor_id) == entity.id)
+        )
+        subtree_ids = {cast(UUID, descendant_id) for (descendant_id,) in linked_result.all()}
+        subtree_ids.add(entity.id)
+        return await self._count_subtree_access(
+            session,
+            await self._with_archived_descendants(session, subtree_ids),
+        )
+
+    async def _with_archived_descendants(
+        self,
+        session: AsyncSession,
+        entity_ids: Sequence[UUID] | set[UUID],
+    ) -> list[UUID]:
+        """Add descendants that archiving unlinked from the closure table.
+
+        Archiving removes an entity's closure rows, but its ``parent_id`` still
+        points into the tree, so it travels with a moved subtree (and stays
+        visible to the subtree's tenant, DD-061 decision 3).
+        """
+        collected: set[UUID] = set(entity_ids)
+        frontier: set[UUID] = set(collected)
+        for _ in range(max(int(self.max_depth or 0), 1) + 1):
+            if not frontier:
+                break
+            result = await session.execute(
+                select(cast(Any, Entity.id)).where(
+                    cast(Any, Entity.parent_id).in_(list(frontier)),
+                    cast(Any, Entity.id).notin_(list(collected)),
+                )
+            )
+            frontier = {cast(UUID, entity_id) for (entity_id,) in result.all()} - collected
+            collected |= frontier
+        return list(collected)
+
+    async def _count_subtree_access(self, session: AsyncSession, entity_ids: Sequence[UUID]) -> Dict[str, int]:
+        """Count each category of access anchored at ``entity_ids`` (see :meth:`get_subtree_access`)."""
+        ids = list(entity_ids)
+        access: Dict[str, int] = {category: 0 for category in SUBTREE_ACCESS_CATEGORIES}
+        if not ids:
+            return access
+
+        revoked = MembershipStatus.REVOKED.value
+
+        async def _count(stmt: Any) -> int:
+            return int((await session.execute(stmt)).scalar_one() or 0)
+
+        live_membership_in_subtree = and_(
+            cast(Any, EntityMembership.entity_id).in_(ids),
+            cast(Any, EntityMembership.status) != revoked,
+        )
+        access["memberships"] = await _count(
+            select(func.count()).select_from(EntityMembership).where(live_membership_in_subtree)
+        )
+
+        holds_live_membership = (
+            select(cast(Any, EntityMembership.id))
+            .where(cast(Any, EntityMembership.user_id) == User.id, live_membership_in_subtree)
+            .exists()
+        )
+        access["pending_invitations"] = await _count(
+            select(func.count())
+            .select_from(User)
+            .where(
+                cast(Any, User.status) == UserStatus.INVITED.value,
+                or_(cast(Any, User.root_entity_id).in_(ids), holds_live_membership),
+            )
+        )
+
+        anchored_role_ids = select(cast(Any, Role.id)).where(
+            or_(
+                cast(Any, Role.scope_entity_id).in_(ids),
+                cast(Any, Role.root_entity_id).in_(ids),
+            )
+        )
+        direct_grants = await _count(
+            select(func.count())
+            .select_from(UserRoleMembership)
+            .where(
+                cast(Any, UserRoleMembership.role_id).in_(anchored_role_ids),
+                cast(Any, UserRoleMembership.status) != revoked,
+            )
+        )
+        # Memberships inside the subtree are already counted above.
+        membership_grants_elsewhere = await _count(
+            select(func.count())
+            .select_from(EntityMembershipRole)
+            .join(EntityMembership, cast(Any, EntityMembership.id) == EntityMembershipRole.membership_id)
+            .where(
+                cast(Any, EntityMembershipRole.role_id).in_(anchored_role_ids),
+                cast(Any, EntityMembership.status) != revoked,
+                cast(Any, EntityMembership.entity_id).notin_(ids),
+            )
+        )
+        # Principals anchored inside the subtree are counted below.
+        principal_grants_elsewhere = await _count(
+            select(func.count())
+            .select_from(IntegrationPrincipalRole)
+            .join(
+                IntegrationPrincipal,
+                cast(Any, IntegrationPrincipal.id) == IntegrationPrincipalRole.integration_principal_id,
+            )
+            .where(
+                cast(Any, IntegrationPrincipalRole.role_id).in_(anchored_role_ids),
+                cast(Any, IntegrationPrincipal.status) != IntegrationPrincipalStatus.ARCHIVED.value,
+                or_(
+                    cast(Any, IntegrationPrincipal.anchor_entity_id).is_(None),
+                    cast(Any, IntegrationPrincipal.anchor_entity_id).notin_(ids),
+                ),
+            )
+        )
+        access["role_assignments"] = direct_grants + membership_grants_elsewhere + principal_grants_elsewhere
+
+        access["api_keys"] = await _count(
+            select(func.count())
+            .select_from(APIKey)
+            .where(
+                cast(Any, APIKey.entity_id).in_(ids),
+                cast(Any, APIKey.status) != APIKeyStatus.REVOKED.value,
+            )
+        )
+        access["integration_principals"] = await _count(
+            select(func.count())
+            .select_from(IntegrationPrincipal)
+            .where(
+                cast(Any, IntegrationPrincipal.anchor_entity_id).in_(ids),
+                cast(Any, IntegrationPrincipal.status) != IntegrationPrincipalStatus.ARCHIVED.value,
+            )
+        )
+        access["accounts"] = await _count(
+            select(func.count()).select_from(User).where(cast(Any, User.root_entity_id).in_(ids))
+        )
+        return access
 
     async def delete_entity(
         self,

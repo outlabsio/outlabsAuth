@@ -23,7 +23,12 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   in their organization) and the permission catalog is global-only. Accounts
   are managed only by the tenant that holds their root: membership-only
   visibility (unrooted legacy members, members of a subtree moved across
-  roots) is read-only.
+  roots on an earlier release) is read-only. A move that changes an entity's
+  root fails closed while the subtree carries access (memberships,
+  invitations, role assignments, keys, principals, rooted accounts) — for
+  superusers too — so cross-tenant reorganizations are revoke → move →
+  re-grant; memberships of another tree's accounts are never re-granted, and
+  only an entity's own tenant grants access in it.
 - ABAC condition writes are validated and evaluation fails closed.
 - Console contract additions: `/auth/config` password policy, access-code
   length and registration mode; session `is_current` via the `sid` claim and

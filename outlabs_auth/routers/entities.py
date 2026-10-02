@@ -353,6 +353,15 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
                 _require_global(scope, "Only global administrators can move an entity to the root level")
         elif not entity_in_scope(scope, new_parent_id):
             raise entity_not_found()
+        elif scope_enforced(auth) and not scope.get("is_global"):
+            # DD-061 decision 17: a move under another root reshapes two
+            # tenants (and demoting a root removes one), like a move to the
+            # root level. The service additionally refuses it for everyone
+            # while the subtree carries access (422).
+            current_root_id = await auth.entity_service.get_root_entity_id(session, entity_id)
+            new_root_id = await auth.entity_service.get_root_entity_id(session, new_parent_id)
+            if current_root_id is None or new_root_id is None or current_root_id != new_root_id:
+                _require_global(scope, "Only global administrators can move an entity to another root")
 
         # If moving under a new parent, require permission to create under that parent
         # (tree permissions from ancestors apply automatically via the closure table).

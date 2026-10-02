@@ -34,6 +34,7 @@ from outlabs_auth.routers._authz_utils import require_can_delegate_direct_roles,
 from outlabs_auth.routers._scope import (
     require_direct_role_grants_in_scope,
     require_entity_visible_or_404,
+    require_membership_write_in_principal_tenant,
     resolve_root_for_scoped_create,
     role_not_found,
     scope_enforced,
@@ -864,12 +865,27 @@ def get_auth_router(
                         detail="Authenticated actor is required for membership delegation",
                     )
                 # DD-061: an inviter can only place the invitee in an entity of
-                # its own tenant. Out of scope answers 404, like the entity routes.
-                await require_entity_visible_or_404(
+                # its own tenant. Out of scope answers 404, like the entity routes;
+                # an entity the inviter reaches only through a membership in
+                # another tree answers 403 (decision 17): the invitee would be
+                # rooted in that tree.
+                inviter_auth_result = actor_auth_result or {
+                    "source": "jwt",
+                    "user_id": str(actor_user_id),
+                    "user": actor_user,
+                }
+                inviter_scope = await require_entity_visible_or_404(
                     auth,
                     session,
-                    actor_auth_result or {"source": "jwt", "user_id": str(actor_user_id), "user": actor_user},
+                    inviter_auth_result,
                     target_entity_id,
+                )
+                await require_membership_write_in_principal_tenant(
+                    auth,
+                    session,
+                    inviter_auth_result,
+                    target_entity_id,
+                    scope=inviter_scope,
                 )
                 can_create_membership = await auth.permission_service.check_permission(
                     session,

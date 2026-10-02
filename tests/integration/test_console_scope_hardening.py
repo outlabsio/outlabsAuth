@@ -23,7 +23,12 @@ or global request still works):
 * accounts with a dormant (scheduled, suspended, expired, revoked or
   inactive-definition) system-wide grant are managed by global actors only;
 * the shared permission catalog and its ABAC conditions are written by global
-  actors only.
+  actors only;
+* an account is managed only by the tenant holding its root (decision 16), and
+  a move that changes an entity's root fails closed while the moved subtree
+  carries access, for every actor (decision 17): a member of a moved subtree
+  can no longer plant an account in the destination tenant, and revoked rows
+  left behind cannot be re-granted across the tenant boundary.
 """
 
 from __future__ import annotations
@@ -90,7 +95,13 @@ def _headers(auth: EnterpriseRBAC, user_id: Any) -> dict[str, str]:
 
 
 def _make_app(auth: EnterpriseRBAC) -> FastAPI:
+    from outlabs_auth.middleware import RequestCacheMiddleware
+
     app = FastAPI()
+    # Production apps get the per-request memo reset from instrument_fastapi;
+    # without it the in-process test transport would carry ORM instances from
+    # a rolled-back request (a refused move) into the next one.
+    app.add_middleware(RequestCacheMiddleware)
     register_exception_handlers(app, debug=True)
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
     app.include_router(get_users_router(auth, prefix="/v1/users"))
@@ -1696,13 +1707,32 @@ async def _assert_account_untouched(client, auth, user, *, password: str = "Test
         assert current.deleted_at is None
 
 
+async def _insert_legacy_membership(session, *, entity_id, user_id, role_ids=()) -> Any:
+    """A membership row as a cross-root entity move from an earlier release left it.
+
+    ``MembershipService.add_member`` refuses a holder rooted in another tree,
+    and a root-changing move of a subtree with memberships now fails closed
+    (DD-061 decision 17), so the row is written directly.
+    """
+    from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
+
+    membership = EntityMembership(entity_id=entity_id, user_id=user_id, status=MembershipStatus.ACTIVE)
+    session.add(membership)
+    await session.flush()
+    for role_id in role_ids:
+        session.add(EntityMembershipRole(membership_id=membership.id, role_id=role_id))
+    await session.flush()
+    return membership
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.parametrize("destination", ["under_another_root", "to_the_root_level"])
-async def test_cross_root_move_does_not_hand_accounts_to_the_new_tenant(client, auth_instance, world, destination):
+async def test_legacy_cross_root_members_are_not_handed_to_the_new_tenant(client, auth_instance, world, destination):
+    """Decision 16 stays as defence in depth for subtrees moved before decision 17."""
     auth = auth_instance
     async with auth.get_session() as session:
-        # A tenant-A branch ("organization", so it may also become a root) with
+        # A tenant-A branch ("organization", so it may also become a root),
         # tenant A's second org admin (direct org role) and a plain member.
         branch = await _entity(
             auth, session, label="branch-a", parent_id=world["root_a"].id, entity_type="organization"
@@ -1712,10 +1742,6 @@ async def test_cross_root_move_does_not_hand_accounts_to_the_new_tenant(client, 
             session, user_id=admin_a2.id, role_id=world["scoped_role"].id
         )
         member_a = await _user(auth, session, prefix="member-a", root_entity_id=world["root_a"].id)
-        for account in (admin_a2, member_a):
-            await auth.membership_service.add_member(
-                session, entity_id=branch.id, user_id=account.id, role_ids=[world["member_role_a"].id]
-            )
         await session.commit()
 
     super_headers = _headers(auth, world["superuser"].id)
@@ -1725,8 +1751,16 @@ async def test_cross_root_move_does_not_hand_accounts_to_the_new_tenant(client, 
     else:
         new_root_id = branch.id
         body = {"new_parent_id": None}
+    # The (empty) move is allowed; tenant A's members are then placed in the
+    # moved subtree the way a populated move on an earlier release left them.
     moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
     assert moved.status_code == 200, moved.text
+    async with auth.get_session() as session:
+        for account in (admin_a2, member_a):
+            await _insert_legacy_membership(
+                session, entity_id=branch.id, user_id=account.id, role_ids=[world["member_role_a"].id]
+            )
+        await session.commit()
 
     # The destination tenant's admin (direct org role at the new root) and one
     # of its own accounts.
@@ -1930,3 +1964,631 @@ async def test_anchored_personal_keys_add_members_of_their_owners_tenant_only(cl
     assert adopt.status_code == 403, adopt.text
     async with auth.get_session() as session:
         assert (await auth.user_service.get_user_by_id(session, legacy.id)).root_entity_id is None
+
+
+# ---------------------------------------------------------------------------
+# Review round 5 (DD-061 decision 17): a move that changes an entity's root
+# fails closed while the moved subtree carries access
+# ---------------------------------------------------------------------------
+
+
+def _assert_move_carries_access(response: httpx.Response, **minimums: int) -> dict[str, int]:
+    assert response.status_code == 422, response.text
+    from outlabs_auth.services.entity import SUBTREE_ACCESS_CATEGORIES
+
+    body = response.json()
+    assert body["error"] == "ENTITY_MOVE_CARRIES_ACCESS", body
+    assert body["details"]["reason"] == "cross_root_move_carries_access", body
+    access = body["details"]["access"]
+    assert set(access) == set(SUBTREE_ACCESS_CATEGORIES), access
+    for category, minimum in minimums.items():
+        assert access[category] >= minimum, (category, access)
+    return access
+
+
+async def _destination_admin(
+    auth: EnterpriseRBAC,
+    root_id: Any,
+    *,
+    prefix: str = "dest-admin",
+    permissions: tuple[str, ...] = (*ADMIN_PERMISSIONS, "lead:read"),
+):
+    """An org admin of the destination tenant (direct org role at its root)."""
+    async with auth.get_session() as session:
+        admin = await _user(auth, session, prefix=prefix, root_entity_id=root_id)
+        role = await _role(auth, session, permissions=permissions, root_entity_id=root_id)
+        await auth.role_service.assign_role_to_user(session, user_id=admin.id, role_id=role.id)
+        await session.commit()
+    return admin, role
+
+
+async def _root_of(auth: EnterpriseRBAC, entity_id: Any) -> Any:
+    async with auth.get_session() as session:
+        return await auth.entity_service.get_root_entity_id(session, entity_id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["under_another_root", "to_the_root_level"])
+async def test_populated_cross_root_move_is_refused_for_every_actor(client, auth_instance, world, destination):
+    from outlabs_auth.core.exceptions import EntityMoveCarriesAccessError
+
+    auth = auth_instance
+    async with auth.get_session() as session:
+        branch = await _entity(
+            auth, session, label="branch-a", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        admin_a2 = await _user(auth, session, prefix="admin-a2", root_entity_id=world["root_a"].id)
+        await auth.role_service.assign_role_to_user(session, user_id=admin_a2.id, role_id=world["scoped_role"].id)
+        member_a = await _user(auth, session, prefix="member-a", root_entity_id=world["root_a"].id)
+        for account in (admin_a2, member_a):
+            await auth.membership_service.add_member(
+                session, entity_id=branch.id, user_id=account.id, role_ids=[world["member_role_a"].id]
+            )
+        await session.commit()
+
+        # The global admin also gets the tree-create permission a move under
+        # a new parent needs, so only decision 17 can refuse it.
+        await auth.permission_service.create_permission(
+            session, name="entity:create_tree", display_name="entity:create_tree"
+        )
+        tree_role = await _role(auth, session, permissions=["entity:create_tree"], is_global=True)
+        await auth.role_service.assign_role_to_user(session, user_id=world["global_admin"].id, role_id=tree_role.id)
+        await session.commit()
+
+    new_parent_id = world["root_b"].id if destination == "under_another_root" else None
+    body = {"new_parent_id": str(new_parent_id) if new_parent_id else None}
+    for actor in ("superuser", "global_admin"):
+        refused = await client.post(
+            f"/v1/entities/{branch.id}/move", headers=_headers(auth, world[actor].id), json=body
+        )
+        access = _assert_move_carries_access(refused, memberships=2)
+        assert access["accounts"] == 0 and access["api_keys"] == 0
+    # The service refuses it for direct callers too.
+    async with auth.get_session() as session:
+        with pytest.raises(EntityMoveCarriesAccessError) as excinfo:
+            await auth.entity_service.move_entity(session, branch.id, new_parent_id, moved_by_id=world["superuser"].id)
+        assert excinfo.value.status_code == 422
+        assert excinfo.value.details["access"]["memberships"] == 2
+        await session.rollback()
+
+    # Nothing moved: the branch and its members stay in tenant A.
+    assert await _root_of(auth, branch.id) == world["root_a"].id
+    async with auth.get_session() as session:
+        assert (await auth.entity_service.get_entity(session, branch.id)).parent_id == world["root_a"].id
+
+    # The round-3 probe is now impossible: tenant B's admin can neither see
+    # nor take over the branch's members ...
+    b_admin, _ = await _destination_admin(auth, world["root_b"].id)
+    b_headers = _headers(auth, b_admin.id)
+    for member in (admin_a2, member_a):
+        assert (await client.get(f"/v1/users/{member.id}", headers=b_headers)).status_code == 404
+        hijack = await client.patch(
+            f"/v1/users/{member.id}/password", headers=b_headers, json={"new_password": "Hijacked123!x"}
+        )
+        assert hijack.status_code == 404, hijack.text
+        await _assert_account_untouched(client, auth, member)
+    assert (await client.get(f"/v1/entities/{branch.id}", headers=b_headers)).status_code == 404
+
+    # ... while tenant A still manages them, and moves inside tenant A work.
+    scoped = _headers(auth, world["scoped_admin"].id)
+    reset = await client.patch(
+        f"/v1/users/{admin_a2.id}/password", headers=scoped, json={"new_password": "Rotated123!x"}
+    )
+    assert reset.status_code == 204, reset.text
+    same_root = await client.post(
+        f"/v1/entities/{branch.id}/move",
+        headers=_headers(auth, world["superuser"].id),
+        json={"new_parent_id": str(world["child_a"].id)},
+    )
+    assert same_root.status_code == 200, same_root.text
+    assert await _root_of(auth, branch.id) == world["root_a"].id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_root_demotion_is_refused_while_accounts_are_rooted_there(client, auth_instance, world):
+    auth = auth_instance
+    super_headers = _headers(auth, world["superuser"].id)
+    async with auth.get_session() as session:
+        # A small tenant whose only access is an account rooted at it.
+        tenant_c = await _entity(auth, session, label="tenant-c")
+        team_c = await _entity(auth, session, label="team-c", parent_id=tenant_c.id)
+        account_c = await _user(auth, session, prefix="account-c", root_entity_id=tenant_c.id)
+        # An empty tenant with an entity-local role definition (no holders).
+        tenant_d = await _entity(auth, session, label="tenant-d")
+        team_d = await _entity(auth, session, label="team-d", parent_id=tenant_d.id)
+        local_role_d = await _role(auth, session, permissions=["lead:read"], scope_entity_id=team_d.id)
+        await session.commit()
+    assert local_role_d.root_entity_id == tenant_d.id
+
+    # Demoting a root that holds accounts would hand them to the containing
+    # tenant (an account belongs to the tenant whose tree holds its root).
+    refused = await client.post(
+        f"/v1/entities/{tenant_c.id}/move", headers=super_headers, json={"new_parent_id": str(world["root_b"].id)}
+    )
+    access = _assert_move_carries_access(refused, accounts=1)
+    assert access["memberships"] == 0
+    b_admin, _ = await _destination_admin(auth, world["root_b"].id)
+    assert (await client.get(f"/v1/users/{account_c.id}", headers=_headers(auth, b_admin.id))).status_code == 404
+
+    # The operator path: move the (empty) children instead; the root keeps its accounts.
+    moved_child = await client.post(
+        f"/v1/entities/{team_c.id}/move", headers=super_headers, json={"new_parent_id": str(world["root_b"].id)}
+    )
+    assert moved_child.status_code == 200, moved_child.text
+    assert await _root_of(auth, team_c.id) == world["root_b"].id
+    assert await _root_of(auth, tenant_c.id) == tenant_c.id
+
+    # An empty root can be demoted; its entity-local role definitions follow
+    # their scope entity into the destination organization.
+    demoted = await client.post(
+        f"/v1/entities/{tenant_d.id}/move", headers=super_headers, json={"new_parent_id": str(world["root_b"].id)}
+    )
+    assert demoted.status_code == 200, demoted.text
+    assert await _root_of(auth, team_d.id) == world["root_b"].id
+    async with auth.get_session() as session:
+        role = await auth.role_service.get_role_by_id(session, local_role_d.id)
+        assert role.root_entity_id == world["root_b"].id
+
+
+async def _grant_access_in_branch(auth: EnterpriseRBAC, client, world, branch, kind: str) -> dict[str, Any]:
+    """Give ``branch`` one kind of access; return what the operator revokes."""
+    from outlabs_auth.models.sql.enums import IntegrationPrincipalScopeKind
+    from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    async with auth.get_session() as session:
+        holder = await _user(auth, session, prefix=f"holder-{kind}", root_entity_id=world["root_a"].id)
+        await session.commit()
+    if kind in ("membership", "suspended_membership"):
+        async with auth.get_session() as session:
+            await auth.membership_service.add_member(
+                session,
+                entity_id=branch.id,
+                user_id=holder.id,
+                role_ids=[world["member_role_a"].id],
+                status=MembershipStatus.SUSPENDED if kind == "suspended_membership" else MembershipStatus.ACTIVE,
+            )
+            await session.commit()
+        return {"category": "memberships", "membership_user_id": holder.id}
+    if kind == "pending_invitation":
+        invited = await client.post(
+            "/v1/auth/invite",
+            headers=scoped,
+            json={"email": f"pending-{_suffix()}@example.com", "entity_id": str(branch.id), "role_ids": []},
+        )
+        assert invited.status_code == 201, invited.text
+        assert invited.json()["status"] == "invited"
+        return {"category": "pending_invitations", "membership_user_id": invited.json()["id"]}
+    if kind == "api_key":
+        async with auth.get_session() as session:
+            _, api_key = await auth.api_key_service.create_api_key(
+                session,
+                owner_id=world["scoped_admin"].id,
+                name=f"branch-key-{_suffix()}",
+                scopes=["user:read"],
+                entity_id=branch.id,
+                actor_user_id=world["scoped_admin"].id,
+            )
+            await session.commit()
+        return {"category": "api_keys", "api_key_id": api_key.id}
+    if kind == "integration_principal":
+        async with auth.get_session() as session:
+            principal = await auth.integration_principal_service.create_principal(
+                session,
+                name=f"branch-bot-{_suffix()}",
+                description=None,
+                scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+                anchor_entity_id=branch.id,
+                inherit_from_tree=False,
+                allowed_scopes=["lead:read"],
+                created_by_user_id=world["superuser"].id,
+            )
+            await session.commit()
+        return {"category": "integration_principals", "principal_id": principal.id}
+    # Role assignments anchored in the branch: an entity-local role defined
+    # there, held by an integration principal anchored elsewhere in tenant A,
+    # or (rows from before entity-local direct grants were refused) directly.
+    async with auth.get_session() as session:
+        local_role = await _role(auth, session, permissions=["lead:read"], scope_entity_id=branch.id)
+        if kind == "principal_role":
+            principal = await auth.integration_principal_service.create_principal(
+                session,
+                name=f"tenant-bot-{_suffix()}",
+                description=None,
+                scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+                anchor_entity_id=world["root_a"].id,
+                inherit_from_tree=True,
+                allowed_scopes=[],
+                role_ids=[local_role.id],
+                created_by_user_id=world["superuser"].id,
+            )
+            await session.commit()
+            return {"category": "role_assignments", "principal_id": principal.id}
+        grant = UserRoleMembership(user_id=holder.id, role_id=local_role.id, status=MembershipStatus.ACTIVE)
+        session.add(grant)
+        await session.commit()
+        return {"category": "role_assignments", "direct_grant": (holder.id, grant.id)}
+
+
+async def _revoke_access_in_branch(auth: EnterpriseRBAC, client, world, branch, granted: dict[str, Any]) -> None:
+    """The documented operator step: revoke or archive the access first."""
+    scoped = _headers(auth, world["scoped_admin"].id)
+    if "membership_user_id" in granted:
+        removed = await client.delete(
+            f"/v1/memberships/{branch.id}/{granted['membership_user_id']}",
+            headers=_headers(auth, world["superuser"].id),
+        )
+        assert removed.status_code == 204, removed.text
+    elif "api_key_id" in granted:
+        revoked = await client.delete(f"/v1/api-keys/{granted['api_key_id']}", headers=scoped)
+        assert revoked.status_code == 204, revoked.text
+    elif "principal_id" in granted:
+        async with auth.get_session() as session:
+            assert await auth.integration_principal_service.archive_principal(
+                session, granted["principal_id"], actor_user_id=world["superuser"].id
+            )
+            await session.commit()
+    else:
+        user_id, grant_id = granted["direct_grant"]
+        revoked = await client.patch(
+            f"/v1/users/{user_id}/role-memberships/{grant_id}", headers=scoped, json={"status": "revoked"}
+        )
+        assert revoked.status_code == 200, revoked.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "membership",
+        "suspended_membership",
+        "pending_invitation",
+        "api_key",
+        "integration_principal",
+        "principal_role",
+        "direct_role",
+    ],
+)
+async def test_each_kind_of_access_blocks_a_cross_root_move_until_revoked(client, auth_instance, world, kind):
+    auth = auth_instance
+    super_headers = _headers(auth, world["superuser"].id)
+    async with auth.get_session() as session:
+        branch = await _entity(auth, session, label=f"branch-{kind}", parent_id=world["root_a"].id)
+        await session.commit()
+    granted = await _grant_access_in_branch(auth, client, world, branch, kind)
+    body = {"new_parent_id": str(world["root_b"].id)}
+
+    refused = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    _assert_move_carries_access(refused, **{granted["category"]: 1})
+    async with auth.get_session() as session:
+        assert (await auth.entity_service.get_subtree_access(session, branch.id))[granted["category"]] >= 1
+    assert await _root_of(auth, branch.id) == world["root_a"].id
+
+    await _revoke_access_in_branch(auth, client, world, branch, granted)
+    async with auth.get_session() as session:
+        assert not any((await auth.entity_service.get_subtree_access(session, branch.id)).values())
+    moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    assert moved.status_code == 200, moved.text
+    assert await _root_of(auth, branch.id) == world["root_b"].id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_empty_subtree_moves_across_roots_and_hands_over_nothing(client, auth_instance, world):
+    auth = auth_instance
+    super_headers = _headers(auth, world["superuser"].id)
+    async with auth.get_session() as session:
+        branch = await _entity(auth, session, label="branch-empty", parent_id=world["root_a"].id)
+        leaf = await _entity(auth, session, label="leaf-empty", parent_id=branch.id)
+        # An auto-assigned entity-local role (a definition, not access).
+        auto_role = await _role(
+            auth,
+            session,
+            permissions=["lead:read"],
+            scope_entity_id=branch.id,
+            scope=RoleScope.HIERARCHY,
+            is_auto_assigned=True,
+        )
+        # A former tenant-A member whose membership was revoked.
+        former = await _user(auth, session, prefix="former-a", root_entity_id=world["root_a"].id)
+        await auth.membership_service.add_member(
+            session, entity_id=leaf.id, user_id=former.id, role_ids=[world["member_role_a"].id]
+        )
+        await auth.membership_service.remove_member(session, entity_id=leaf.id, user_id=former.id)
+        await session.commit()
+
+    moved = await client.post(
+        f"/v1/entities/{branch.id}/move", headers=super_headers, json={"new_parent_id": str(world["root_b"].id)}
+    )
+    assert moved.status_code == 200, moved.text
+    assert await _root_of(auth, leaf.id) == world["root_b"].id
+    async with auth.get_session() as session:
+        role = await auth.role_service.get_role_by_id(session, auto_role.id)
+        assert role.root_entity_id == world["root_b"].id
+        events, _ = await auth.user_audit_service.list_events(
+            session, page=1, limit=10, event_category="entity", entity_id=branch.id
+        )
+    moved_event = next(event for event in events if event.event_type == "entity.moved")
+    assert moved_event.event_metadata["changes_root"] is True
+    assert moved_event.event_metadata["previous_root_entity_id"] == str(world["root_a"].id)
+    assert moved_event.event_metadata["reanchored_role_ids"] == [str(auto_role.id)]
+    assert moved_event.root_entity_id == world["root_b"].id
+
+    # Tenant B now owns the branch: it reads it and adds its own members,
+    # and the re-anchored auto-assigned role applies to them.
+    b_admin, _ = await _destination_admin(auth, world["root_b"].id)
+    b_headers = _headers(auth, b_admin.id)
+    assert (await client.get(f"/v1/entities/{leaf.id}", headers=b_headers)).status_code == 200
+    added = await client.post(
+        "/v1/memberships/",
+        headers=b_headers,
+        json={"entity_id": str(leaf.id), "user_id": str(world["user_b"].id), "role_ids": []},
+    )
+    assert added.status_code == 201, added.text
+    assert str(auto_role.id) in added.json()["role_ids"]
+
+    # Tenant A lost the branch and nothing in it.
+    scoped = _headers(auth, world["scoped_admin"].id)
+    assert (await client.get(f"/v1/entities/{branch.id}", headers=scoped)).status_code == 404
+
+    # The revoked tenant-A membership cannot be brought back into tenant B,
+    # by the destination admin or a superuser (add_member's root rule).
+    for headers in (b_headers, super_headers):
+        revived = await client.patch(
+            f"/v1/memberships/{leaf.id}/{former.id}", headers=headers, json={"status": "active"}
+        )
+        assert revived.status_code == 422, revived.text
+        assert revived.json()["details"]["reason"] == "membership_root_mismatch"
+    assert (await client.get(f"/v1/users/{former.id}", headers=b_headers)).status_code == 404
+    async with auth.get_session() as session:
+        with pytest.raises(InvalidInputError):
+            await auth.membership_service.reactivate_membership(session, leaf.id, former.id)
+        await session.rollback()
+        membership = await auth.membership_service.get_member(session, leaf.id, former.id)
+        assert membership.status == MembershipStatus.REVOKED
+
+    # Promoting an empty organization-type branch to a root is allowed too.
+    async with auth.get_session() as session:
+        spin_off = await _entity(
+            auth, session, label="spin-off", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        await session.commit()
+    promoted = await client.post(
+        f"/v1/entities/{spin_off.id}/move", headers=super_headers, json={"new_parent_id": None}
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert await _root_of(auth, spin_off.id) == spin_off.id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_root_changing_moves_need_a_global_actor(client, auth_instance, world):
+    """A tenant admin whose scope reaches another tree (a membership left there
+    by an earlier release) still cannot re-root a subtree."""
+    auth = auth_instance
+    async with auth.get_session() as session:
+        team = await _entity(auth, session, label="team-to-move", parent_id=world["root_a"].id)
+        await _insert_legacy_membership(session, entity_id=world["child_b"].id, user_id=world["scoped_admin"].id)
+        # Tenant A's admin may also create below its entities, so only the
+        # root rule can refuse the cross-root move.
+        await auth.permission_service.create_permission(
+            session, name="entity:create_tree", display_name="entity:create_tree"
+        )
+        tree_role = await _role(auth, session, permissions=["entity:create_tree"], root_entity_id=world["root_a"].id)
+        await auth.role_service.assign_role_to_user(session, user_id=world["scoped_admin"].id, role_id=tree_role.id)
+        await session.commit()
+    scoped = _headers(auth, world["scoped_admin"].id)
+    cross = await client.post(
+        f"/v1/entities/{team.id}/move", headers=scoped, json={"new_parent_id": str(world["child_b"].id)}
+    )
+    assert cross.status_code == 403, cross.text
+    assert "another root" in cross.text
+    assert await _root_of(auth, team.id) == world["root_a"].id
+
+    # Positive: the same actor still moves the team inside its own tenant.
+    within = await client.post(
+        f"/v1/entities/{team.id}/move", headers=scoped, json={"new_parent_id": str(world["child_a"].id)}
+    )
+    assert within.status_code == 200, within.text
+
+
+async def _attempt_invite_takeover(client, auth, *, inviter, entity_id, role_id, victim, captured) -> bool:
+    """Round-4 chain: invite an account into ``entity_id`` with ``role_id``,
+    accept the invitation and reset ``victim``'s password with it.
+
+    Returns whether the takeover succeeded.
+    """
+    email = f"planted-{_suffix()}@example.com"
+    invited = await client.post(
+        "/v1/auth/invite",
+        headers=_headers(auth, inviter.id),
+        json={"email": email, "entity_id": str(entity_id), "role_ids": [str(role_id)]},
+    )
+    if invited.status_code != 201:
+        async with auth.get_session() as session:
+            assert await auth.user_service.get_user_by_email(session, email) is None
+        return False
+    accepted = await client.post(
+        "/v1/auth/accept-invite", json={"token": captured[email], "new_password": "Planted123!x"}
+    )
+    assert accepted.status_code == 200, accepted.text
+    planted = {"Authorization": f"Bearer {accepted.json()['access_token']}"}
+    reset = await client.patch(
+        f"/v1/users/{victim.id}/password", headers=planted, json={"new_password": "Hijacked123!x"}
+    )
+    return reset.status_code == 204
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_moved_subtree_member_cannot_plant_an_account_in_the_destination(client, auth_instance, world):
+    """Round-4 escalation: a member of a moved subtree invites a new account
+    into the destination tenant and resets the destination org admin's
+    password with it."""
+    auth = auth_instance
+    captured: dict[str, str] = {}
+
+    async def capture_invite(user, token, request=None):
+        captured[user.email] = token
+
+    auth.user_service.on_after_invite = capture_invite
+    super_headers = _headers(auth, world["superuser"].id)
+    async with auth.get_session() as session:
+        branch = await _entity(auth, session, label="branch-r4", parent_id=world["root_a"].id)
+        # A tenant-A member holding tenant A's admin role in the branch.
+        mover = await _user(auth, session, prefix="mover", root_entity_id=world["root_a"].id)
+        await auth.membership_service.add_member(
+            session, entity_id=branch.id, user_id=mover.id, role_ids=[world["scoped_role"].id]
+        )
+        await session.commit()
+    # Tenant B's org admin holds the same permission names as tenant A's
+    # admin role, so SEC-2 containment alone does not stop the mover from
+    # handing out tenant B's role.
+    b_admin, b_admin_role = await _destination_admin(
+        auth, world["root_b"].id, prefix="b-org-admin", permissions=ADMIN_PERMISSIONS
+    )
+    body = {"new_parent_id": str(world["root_b"].id)}
+
+    # The move that started the chain is refused ...
+    _assert_move_carries_access(
+        await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body), memberships=1
+    )
+    # ... so the member can only invite into tenant A, where tenant B's role
+    # is not available.
+    assert not await _attempt_invite_takeover(
+        client, auth, inviter=mover, entity_id=branch.id, role_id=b_admin_role.id, victim=b_admin, captured=captured
+    )
+    assert not await _attempt_invite_takeover(
+        client,
+        auth,
+        inviter=mover,
+        entity_id=world["child_b"].id,
+        role_id=b_admin_role.id,
+        victim=b_admin,
+        captured=captured,
+    )
+    await _assert_account_untouched(client, auth, b_admin)
+
+    # The operator procedure: revoke the branch's access, move it, re-grant
+    # in the destination. The former member gains nothing in tenant B.
+    assert (await client.delete(f"/v1/memberships/{branch.id}/{mover.id}", headers=super_headers)).status_code == 204
+    moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    assert moved.status_code == 200, moved.text
+    assert not await _attempt_invite_takeover(
+        client, auth, inviter=mover, entity_id=branch.id, role_id=b_admin_role.id, victim=b_admin, captured=captured
+    )
+    for headers in (_headers(auth, b_admin.id), super_headers):
+        revived = await client.patch(
+            f"/v1/memberships/{branch.id}/{mover.id}", headers=headers, json={"status": "active"}
+        )
+        assert revived.status_code == 422, revived.text
+    await _assert_account_untouched(client, auth, b_admin)
+
+    # Positive: tenant B grants access in its new branch to its own accounts.
+    regrant = await client.post(
+        "/v1/memberships/",
+        headers=_headers(auth, b_admin.id),
+        json={"entity_id": str(branch.id), "user_id": str(world["user_b"].id), "role_ids": []},
+    )
+    assert regrant.status_code == 201, regrant.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_legacy_cross_root_members_cannot_grant_access_in_the_destination(client, auth_instance, world):
+    """Decision 17 defence in depth for subtrees moved before this release: a
+    member left in another tenant's tree cannot invite into it or hand out
+    roles there."""
+    auth = auth_instance
+    captured: dict[str, str] = {}
+
+    async def capture_invite(user, token, request=None):
+        captured[user.email] = token
+
+    auth.user_service.on_after_invite = capture_invite
+    async with auth.get_session() as session:
+        branch = await _entity(auth, session, label="branch-legacy", parent_id=world["root_a"].id)
+        mover = await _user(auth, session, prefix="legacy-mover", root_entity_id=world["root_a"].id)
+        await session.commit()
+    moved = await client.post(
+        f"/v1/entities/{branch.id}/move",
+        headers=_headers(auth, world["superuser"].id),
+        json={"new_parent_id": str(world["root_b"].id)},
+    )
+    assert moved.status_code == 200, moved.text
+    # Tenant B's org admin holds the same permission names as tenant A's
+    # admin role, so SEC-2 containment alone does not stop the mover from
+    # handing out tenant B's role.
+    b_admin, b_admin_role = await _destination_admin(
+        auth, world["root_b"].id, prefix="b-org-admin", permissions=ADMIN_PERMISSIONS
+    )
+    async with auth.get_session() as session:
+        await _insert_legacy_membership(
+            session, entity_id=branch.id, user_id=mover.id, role_ids=[world["scoped_role"].id]
+        )
+        await session.commit()
+    # Tenant B places one of its own members in the branch.
+    b_headers = _headers(auth, b_admin.id)
+    assert (
+        await client.post(
+            "/v1/memberships/",
+            headers=b_headers,
+            json={"entity_id": str(branch.id), "user_id": str(world["user_b"].id), "role_ids": []},
+        )
+    ).status_code == 201
+
+    mover_headers = _headers(auth, mover.id)
+    planted = await client.post(
+        "/v1/auth/invite",
+        headers=mover_headers,
+        json={
+            "email": f"planted-{_suffix()}@example.com",
+            "entity_id": str(branch.id),
+            "role_ids": [str(b_admin_role.id)],
+        },
+    )
+    assert planted.status_code == 403, planted.text
+    assert not await _attempt_invite_takeover(
+        client, auth, inviter=mover, entity_id=branch.id, role_id=b_admin_role.id, victim=b_admin, captured=captured
+    )
+    widened = await client.patch(
+        f"/v1/memberships/{branch.id}/{world['user_b'].id}",
+        headers=mover_headers,
+        json={"role_ids": [str(b_admin_role.id)]},
+    )
+    assert widened.status_code == 403, widened.text
+    added = await client.post(
+        "/v1/memberships/",
+        headers=mover_headers,
+        json={"entity_id": str(branch.id), "user_id": str(world["user_a"].id), "role_ids": []},
+    )
+    assert added.status_code == 403, added.text
+    await _assert_account_untouched(client, auth, b_admin)
+    async with auth.get_session() as session:
+        membership = await auth.membership_service.get_member(session, branch.id, world["user_b"].id)
+        assert b_admin_role.id not in {role.id for role in membership.roles}
+
+    # Narrowing stays possible for incident response.
+    suspended = await client.patch(
+        f"/v1/memberships/{branch.id}/{world['user_b'].id}", headers=mover_headers, json={"status": "suspended"}
+    )
+    assert suspended.status_code == 200, suspended.text
+
+    # Positive: tenant B invites into its branch; tenant A invites into its own tree.
+    own = await client.post(
+        "/v1/auth/invite",
+        headers=b_headers,
+        json={"email": f"b-invitee-{_suffix()}@example.com", "entity_id": str(branch.id), "role_ids": []},
+    )
+    assert own.status_code == 201, own.text
+    assert own.json()["root_entity_id"] == str(world["root_b"].id)
+    a_invite = await client.post(
+        "/v1/auth/invite",
+        headers=_headers(auth, world["scoped_admin"].id),
+        json={"email": f"a-invitee-{_suffix()}@example.com", "entity_id": str(world["child_a"].id), "role_ids": []},
+    )
+    assert a_invite.status_code == 201, a_invite.text
+    assert a_invite.json()["root_entity_id"] == str(world["root_a"].id)

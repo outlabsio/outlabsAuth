@@ -358,6 +358,86 @@ async def require_account_managed_by_principal(
     raise account_managed_elsewhere()
 
 
+async def entity_in_users_tenant(session: AsyncSession, actor_user: Any, entity_id: Any) -> bool:
+    """Whether ``entity_id`` lies in the tree of ``actor_user``'s own root (DD-061 decision 17).
+
+    The entity-side counterpart of :func:`account_in_users_tenant`: an
+    actor's memberships never make another tree its tenant, so a membership
+    write there is not the actor's to make. An unrooted actor has no tenant.
+    """
+    actor_root_entity_id = getattr(actor_user, "root_entity_id", None)
+    if actor_root_entity_id is None or entity_id is None:
+        return False
+    if str(actor_root_entity_id) == str(entity_id):
+        return True
+    stmt = (
+        select(literal(True))
+        .select_from(EntityClosure)
+        .where(
+            cast(Any, EntityClosure.ancestor_id) == actor_root_entity_id,
+            cast(Any, EntityClosure.descendant_id) == entity_id,
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).first() is not None
+
+
+def membership_write_outside_tenant() -> HTTPException:
+    """403 for a membership grant in an entity of another tenant (DD-061 decision 17)."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only the entity's own tenant or a global administrator can grant access in this entity",
+    )
+
+
+async def require_membership_write_in_principal_tenant(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: Optional[dict[str, Any]],
+    entity_id: Any,
+    *,
+    scope: dict[str, Any],
+) -> None:
+    """403 unless a membership grant at ``entity_id`` stays in the principal's tenant.
+
+    Call after the entity scope check on writes that grant access in an
+    entity — ``POST /memberships``, ``POST /auth/invite`` with an entity (the
+    invitee is rooted in the entity's tree) and ``PATCH /memberships`` edits
+    that re-grant or add roles. In consistent data a non-global actor's scope
+    lies inside its own root tree, so this only refuses an actor whose scope
+    reaches another tree through a membership left there by an entity move
+    from an earlier release (or an unrooted legacy actor): such a member
+    could otherwise invite accounts into, or hand roles out in, the other
+    tenant (DD-061 decision 17, defence in depth). A human — including the
+    owner behind a personal API key — is judged by its own root (a global
+    owner's anchored key keeps its owner's reach); a principal without a
+    user record is judged by its scope, which the caller already checked.
+    """
+    if not scope_enforced(auth) or scope.get("is_global"):
+        return
+    auth_result = auth_result or {}
+    actor_user = auth_result.get("user")
+    actor_user_id = auth_result.get("user_id")
+    if actor_user is None and actor_user_id is not None:
+        try:
+            actor_user = await auth.user_service.get_user_by_id(session, UUID(str(actor_user_id)))
+        except (TypeError, ValueError):
+            actor_user = None
+    if actor_user is None:
+        if actor_user_id is None:
+            return
+        raise membership_write_outside_tenant()
+    if await entity_in_users_tenant(session, actor_user, entity_id):
+        return
+    if auth_result.get("source") == "api_key":
+        if bool(getattr(actor_user, "is_superuser", False)):
+            return
+        owner_scope = await resolve_user_scope(auth, session, actor_user)
+        if owner_scope.get("is_global"):
+            return
+    raise membership_write_outside_tenant()
+
+
 def user_not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 

@@ -3930,6 +3930,19 @@ admins — and sign in as them; when the moved subtree became a root, its
 members could likewise take over the new tenant's accounts; and a tenant
 admin could adopt an unrooted legacy member through `POST /memberships`.
 
+A fourth review traced every remaining escalation to the same place:
+cross-root entity moves. Memberships, role grants, keys and invitations in a
+moved subtree keep — or let their holders create — authority in a tenant
+that never granted it. Decision 16 stops the destination tenant from taking
+over the moved members, but a member of the moved subtree could still invite
+a new account into an entity of the subtree: `add_member` roots the invitee
+in the destination tenant, SEC-2 containment lets the member hand it a
+destination role whose permission names it holds through its old tenant's
+role, and the invitee — now an account of the destination tenant — resets the
+destination org admin's password. The root cause was the judgement call that
+let cross-root moves of populated subtrees proceed (decision 16 below);
+decision 17 removes it.
+
 ### Options Considered
 
 1. **Extend the DD-056 model to every route that exposes or changes the identity graph** (chosen)
@@ -3974,7 +3987,8 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
    visible to its own tenant (archived roots: global actors only). Creating a root, moving an entity to the root level and
    archiving a root create or remove a tenant, so they need a global actor
    (**403** otherwise); a move to the root level must also satisfy the
-   configured root entity types. The scope check runs *before* the
+   configured root entity types. Moving an entity under another root
+   reshapes two tenants and needs a global actor too (decision 17). The scope check runs *before* the
    entity-context permission check (`entity_scope_guard`), so out-of-scope and
    nonexistent entities both answer 404 even where the permission check would
    answer 403. The same guard covers the entity-keyed membership routes
@@ -4078,14 +4092,48 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
     the entity tree; otherwise **403**. Memberships count on neither side: an
     account seen only through a membership (an unrooted legacy member, or a
     member of a subtree that a global actor moved under another root or to
-    the root level) stays readable but read-only, and an actor's own
-    membership in a moved subtree — even one promoted to a root — never makes
-    that tree its tenant. Unrooted non-global actors change no accounts. A
-    personal API key is judged by its owner's root (a global owner's anchored
-    key keeps its owner's reach); a principal without a user record by its
-    own scope. Self-requests and global actors are unaffected. In consistent
-    data a membership shares its holder's root, so this only differs from
-    visibility after a cross-root move or for legacy rows.
+    the root level on an earlier release) stays readable but read-only, and
+    an actor's own membership in a moved subtree — even one promoted to a
+    root — never makes that tree its tenant. Unrooted non-global actors
+    change no accounts. A personal API key is judged by its owner's root (a
+    global owner's anchored key keeps its owner's reach); a principal without
+    a user record by its own scope. Self-requests and global actors are
+    unaffected. In consistent data a membership shares its holder's root, so
+    this only differs from visibility for legacy rows. Since decision 17 a
+    populated subtree can no longer change roots, so this is defence in depth
+    for subtrees moved before it and for rows written outside the services.
+17. **A move that changes an entity's root fails closed.** With tenant scope
+    enforced, `EntityService.move_entity` refuses — for every caller,
+    superusers and direct service callers included — a move that changes the
+    subtree's root (under another root, to the root level, or a root under
+    any parent) while the subtree carries access: entity memberships that are
+    not revoked (active, suspended, pending, expired or rejected rows can be
+    brought back without a new grant), pending invitations into it,
+    non-revoked direct role assignments of roles anchored in it (entity-local
+    roles defined there, organization roles of a root inside it) and
+    non-archived integration principals or non-revoked memberships elsewhere
+    holding such a role, non-revoked API keys anchored in it, non-archived
+    integration principals anchored in it, and accounts (any status) rooted
+    in it. The subtree includes archived descendants still attached through
+    `parent_id`. The answer is **422** `ENTITY_MOVE_CARRIES_ACCESS`
+    (`EntityMoveCarriesAccessError`, `details.reason =
+    cross_root_move_carries_access`, `details.access` counting each category);
+    `EntityService.get_subtree_access` returns the same counts. The operator
+    procedure is: revoke or archive the subtree's access, move it, re-grant in
+    the destination. An allowed move re-anchors the subtree's entity-local
+    role definitions at the new root (an entity-local role belongs to its
+    scope entity). Moves within one root are unchanged. Two rules keep the
+    boundary closed after an allowed move and for subtrees moved before this
+    decision: a membership whose holder is rooted in another tree is never
+    re-granted — reactivating it, widening its window or adding roles answers
+    **422** (`membership_root_mismatch`) for every actor, the counterpart of
+    `add_member`'s root rule — and a non-global actor grants access in an
+    entity (`POST /memberships`, `POST /auth/invite` with an entity,
+    `PATCH /memberships` edits that re-grant or add roles) only when the
+    entity lies in its own root's tree (**403** otherwise), so a member left
+    in another tenant's tree cannot plant accounts or hand out roles there.
+    A non-global actor whose scope reaches two trees through such a
+    membership cannot move an entity between them either (**403**).
 
 ### Judgement calls (conservative, backward-compatible)
 
@@ -4122,14 +4170,17 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
   belong to the actor's tenant (403 otherwise, decision 16). Together they
   refuse unrooted accounts, accounts rooted in another tenant and accounts
   that only hold memberships in the actor's tree.
-- **Cross-root moves stay allowed and do not re-root members** (decision 16).
-  Refusing a global actor's move of a populated subtree would block
-  reorganizations; re-rooting its members would silently transfer accounts
-  whose other memberships and direct org roles stay in the old tree. Instead
-  the move hands over no accounts: members stay with their root tenant, and
-  the destination tenant reads them and manages only their memberships in
-  its own entities (suspend, revoke, its own roles). The memberships keep the
-  old tree's roles; reviewing those is left to the operator.
+- **Superseded by decision 17 — cross-root moves stay allowed and do not
+  re-root members** (decision 16). Refusing a global actor's move of a
+  populated subtree would block reorganizations; re-rooting its members would
+  silently transfer accounts whose other memberships and direct org roles
+  stay in the old tree. Instead the move hands over no accounts: members stay
+  with their root tenant, and the destination tenant reads them and manages
+  only their memberships in its own entities (suspend, revoke, its own
+  roles). The memberships keep the old tree's roles; reviewing those is left
+  to the operator. *Superseded:* handing over no accounts was not enough —
+  the access the subtree carried kept working in the destination, and a
+  moved member could create destination accounts through an invitation.
 - **A visible account that belongs elsewhere answers 403, not 404, on
   writes.** The actor can already read it, so 404 would contradict `GET`
   without hiding anything.
@@ -4138,7 +4189,54 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
   a member's scope contains that root, and a scope test would hand the new
   tenant's accounts to the member. A root that a global actor moves under
   another tenant's tree (a deliberate merge) makes its accounts part of the
-  containing tenant.
+  containing tenant. *Since decision 17* a root that holds accounts cannot be
+  moved under another tree at all.
+- **Root-changing moves fail closed instead of migrating access**
+  (decision 17). Re-rooting the members, or revoking the subtree's access as
+  part of the move, would decide silently which accounts and grants change
+  tenant; refusing the move makes the operator revoke explicitly and re-grant
+  in the destination, with both steps audited. Reorganizations inside one
+  tenant are unaffected, and an emptied subtree still moves.
+- **Anything that can come back counts.** A suspended, expired, pending or
+  rejected membership, a scheduled or suspended direct grant, an expired API
+  key and an inactive integration principal can all be brought back to
+  active without a new grant, so they block the move like active ones. The
+  states the operator reaches through the normal revoke and archive routes —
+  revoked memberships, grants and keys, archived principals — do not. Of
+  those, a revoked membership is the one that would carry the old tenant's
+  authority back, so the membership root rule refuses to re-grant it across
+  the boundary; a revoked direct grant of a re-anchored entity-local role
+  fails the direct-role root rule; a revived key or principal anchored in
+  the moved subtree acts only inside the destination tree, with its owner's
+  authority there (none for an account of the old tenant, decisions 10 and
+  16), and only the destination tenant can revive a principal.
+- **Accounts rooted in the subtree block the move.** Only roots hold
+  accounts, so this bites when a root is demoted: an account belongs to the
+  tenant whose tree holds its root (decision 16), so demoting it would hand
+  its accounts, soft-deleted ones included (they can be restored), to the
+  containing tenant. There is no re-rooting API; move the root's children
+  instead, and the root keeps its accounts.
+- **Entity-local role definitions follow their entity; organization roles do
+  not.** An entity-local role is defined at its scope entity, and its
+  `root_entity_id` only records that entity's organization: left stale, it
+  would be unassignable in the destination (and an auto-assigned one would
+  break every new membership in the subtree), and a revoked direct grant of
+  it would still pass the direct-role root rule for a holder of the old
+  tenant. The allowed move therefore re-anchors it (the moved subtree carries
+  no grant of it by then). The organization roles of a demoted root stay
+  attached to that entity; with no root of their own they are assignable
+  nowhere, and only global actors see them.
+- **Membership grants stay in the actor's own tenant** (decision 17). In
+  consistent data a non-global actor's scope lies inside its own root tree,
+  so the rule changes nothing there; it closes the round-4 chain for
+  subtrees moved before this release, whose members keep authority in the
+  destination tree until an operator revokes it. Narrowing, suspending and
+  revoking stay open to the entity's tenant and to those members alike —
+  incident response must be able to cut access.
+- **The fail-closed move follows `enforce_user_scope`.** Like the
+  direct-role bounds (decisions 10 and 14), it applies when tenant scope is
+  enforced; `enforce_user_scope=False` keeps the unscoped legacy behavior,
+  where tenants are not isolated in the first place.
 - **Reads stay visibility-based.** The destination tenant of a move still
   reads the moved members (profile, roles, memberships, sessions); hiding
   them would hide members of its own entities.
@@ -4186,9 +4284,11 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
   direct role no longer authorizes anything in another tenant, including host
   routes, and a tenant admin can no longer grant itself or anyone else
   another tenant's role; the shared permission catalog can only be changed by
-  a global actor; an account can only be changed by its own tenant, so a
-  cross-root move cannot hand one tenant's accounts or administrators to
-  another.
+  a global actor; an account can only be changed by its own tenant; and a
+  subtree changes roots only once it carries no access, so a move can hand
+  one tenant neither another tenant's accounts and administrators nor the
+  memberships, grants, keys, principals and invitations that would let their
+  holders act — or create accounts — in it.
 - **Positive**: one error contract (404 out of scope, 403 for platform-level
   operations) across users, roles, memberships, permissions and entities.
 - **Negative (breaking for scoped admins)**: tenant-scoped actors lose
@@ -4204,7 +4304,10 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
   admins, and unrooted tenant admins change no accounts; out-of-scope entities
   answer 404 on entity-keyed routes that used to answer 403; ABAC policies
   that relied on fail-open evaluation now deny. Global actors and SimpleRBAC
-  are unaffected.
+  are unaffected, except that no one — superusers included — can move a
+  subtree that carries access to another root, to the root level, or demote
+  a root that holds accounts: reorganizations across tenants become
+  revoke → move → re-grant, and cross-root memberships cannot be re-granted.
 - **Neutral**: permission-check verdicts cached before the upgrade can still
   allow a cross-tree entity check until they expire (`cache_permission_ttl`);
   `await auth.cache_service.publish_all_permissions_invalidation()` drops them
@@ -4220,7 +4323,15 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
   visibility predicate and direct-grant rules
   (`require_direct_role_grants_in_scope`), account ownership
   (`account_in_users_tenant`, `require_account_managed_by_principal`),
-  scoped root resolution
+  membership grants in the actor's own tenant (`entity_in_users_tenant`,
+  `require_membership_write_in_principal_tenant`), scoped root resolution
+- `outlabs_auth/services/entity.py` — the fail-closed root-changing move
+  (`move_entity`, `get_subtree_access`, `SUBTREE_ACCESS_CATEGORIES`,
+  entity-local role re-anchoring, `changes_root` audit metadata) and
+  `get_root_entity_id`; `outlabs_auth/core/exceptions.py`
+  (`EntityMoveCarriesAccessError`); `outlabs_auth/services/membership.py`
+  (`_require_holder_in_entity_tree` on `update_membership` and
+  `reactivate_membership`)
 - `outlabs_auth/services/role.py` (`require_direct_role_root_match`, also run
   on reactivation), `outlabs_auth/services/access_scope.py`
   (`user_has_system_wide_role_grant`), `outlabs_auth/utils/lifecycle.py`
@@ -4245,5 +4356,5 @@ admin could adopt an unrooted legacy member through `POST /memberships`.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root)
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root; root-changing entity moves fail closed while the subtree carries access)
 **Next Review**: After testing all examples

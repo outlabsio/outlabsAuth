@@ -49,13 +49,13 @@ the same membership different windows.
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/me` | Authenticated | Own memberships; `include_inactive`. Rows include `entity_name`, `entity_display_name`, `entity_type` and `role_names` |
-| `POST` | `/` | Tree `membership:create` + entity and user in tenant scope | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason`. Out-of-scope entity or user → 404; a visible user that does not belong to the actor's tenant (rooted elsewhere or unrooted, seen only through a membership) → 403, so adopting such an account needs a global actor |
+| `POST` | `/` | Tree `membership:create` + entity and user in tenant scope | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason`. Out-of-scope entity or user → 404; a visible user that does not belong to the actor's tenant (rooted elsewhere or unrooted, seen only through a membership) → 403, so adopting such an account needs a global actor; an entity outside the tree of a non-global actor's own root → 403 |
 | `GET` | `/entity/{entity_id}` | Tree `membership:read` | Members of one entity (paginated) |
 | `GET` | `/entity/{entity_id}/details` | Tree `membership:read` | Same + user/role summaries (bare list) |
 | `GET` | `/entity/{entity_id}/members` | Tree `membership:read` | Paginated details envelope with `total`; optional `search` (email / name) |
 | `GET` | `/user/{user_id}` | `membership:read` + target in tenant scope | User’s memberships (access reviews). Out-of-scope users → 404 |
-| `PATCH` | `/{entity_id}/{user_id}` | Tree `membership:update` | Replace roles, suspend/reactivate, set/clear windows (`null` clears). Reactivating or widening the window re-runs role delegation checks |
-| `DELETE` | `/{entity_id}/{user_id}` | Tree `membership:delete` | Soft revoke → `revoked`; reactivate later with `PATCH` `status=active` |
+| `PATCH` | `/{entity_id}/{user_id}` | Tree `membership:update` | Replace roles, suspend/reactivate, set/clear windows (`null` clears). Reactivating or widening the window re-runs role delegation checks. Re-granting or adding roles needs the entity in the tree of a non-global actor's own root (403), and is refused for a holder rooted in another tree (422 `membership_root_mismatch`, every actor) |
+| `DELETE` | `/{entity_id}/{user_id}` | Tree `membership:delete` | Soft revoke → `revoked`; reactivate later with `PATCH` `status=active` (only while the holder is rooted in the entity's tree) |
 
 List/detail queries: `page`, `limit`, `include_inactive` (default false).
 
