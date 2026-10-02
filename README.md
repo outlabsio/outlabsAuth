@@ -40,7 +40,7 @@ with `python3 scripts/port_handbook.py` from that project.
 | [Background Maintenance](./docs-library/09-Background-Maintenance.md) | Typed one-shot cleanup/sync, external ownership, activation, and rollback |
 | [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
 | [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
-| [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |
+| [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Nuxt static SPA) |
 
 **Maintainers** (design decisions, audits, release process): [`docs/`](./docs/).
 Deep host DX / feature matrix when you need them:
@@ -125,7 +125,7 @@ For production, run migrations with the CLI (`auto_migrate=False`). Continue wit
 
 ## OutlabsAuth UI
 
-Optional sister repository: a **Vite/React** admin console that plugs into any app hosting this library. It reads public feature flags from `GET {authApiPrefix}/auth/config`, then loads the permission catalog from authenticated `GET {authApiPrefix}/auth/config/permissions` when needed.
+Optional sister repository: a **Nuxt 4 + Nuxt UI** static single-page admin console that plugs into any app hosting this library. Each deployment names its API in a runtime `app-config.json`; the console reads public feature flags from `GET {authApiPrefix}/auth/config`, then loads the permission catalog from authenticated `GET {authApiPrefix}/auth/config/permissions` when needed.
 
 ```bash
 # Terminal 1 — Enterprise example API
@@ -133,15 +133,15 @@ cd examples/enterprise_rbac
 uv sync && uv run outlabs-auth migrate && uv run python reset_test_env.py
 uv run uvicorn main:app --reload --port 8004
 
-# Terminal 2 — from the outlabsAuth repo root
+# Terminal 2 — from the outlabsAuth repo root (Bun 1.3.3+, Node.js 22.18+)
 cd ../OutlabsAuthUI   # https://github.com/outlabsio/OutlabsAuthUI
 bun install
 cp public/app-config.template.json public/app-config.json
-# apiBaseUrl: http://localhost:8004   authApiPrefix: /v1
-bun run dev
+# the template already targets this example: http://localhost:8004, /v1, frontendProfileKey console
+bun run dev   # http://localhost:3000
 ```
 
-Sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
+Open `http://localhost:3000` and sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring, production hosting and the console's release gate: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
 
 ## CLI Operations and Administration
 

@@ -4,6 +4,12 @@
 > current ACME/Summit seed in `reset_test_env.py`, and the admin UI is the sister
 > Vite/React repo [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) — not
 > an in-tree Nuxt app. Prefer [README.md](./README.md) and [QUICKSTART.md](./QUICKSTART.md).
+>
+> **Status (2026-10-02):** OutlabsAuthUI has since been rebuilt as a Nuxt 4 + Nuxt UI
+> static SPA (still an external repository, not in-tree), served on
+> `http://localhost:3000` and configured through a runtime `public/app-config.json`. The
+> older prototype commands below (`NUXT_PUBLIC_USE_REAL_API`, port 8002) remain historical;
+> use [README.md](./README.md) ("Connect Admin UI") or [`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
 
 **Started**: 2025-01-23
 **Updated**: 2025-10-23

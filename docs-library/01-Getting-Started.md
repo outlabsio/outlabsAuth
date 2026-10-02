@@ -156,21 +156,27 @@ More host patterns live in the examples and [`docs/API_DESIGN.md`](../docs/API_D
 
 ## 7. Optional: OutlabsAuth UI
 
-The sister admin console is a separate repo. Point it at your API:
+The sister admin console is a separate repo (a static Nuxt app; needs Bun 1.3.3+ and
+Node.js 22.18+). It calls your API from the browser, so allow its origin in CORS with
+credentials first, for example FastAPI's `CORSMiddleware` with
+`allow_origins=["http://localhost:3000"]` and `allow_credentials=True`. Then point it at
+your API:
 
 ```bash
 git clone https://github.com/outlabsio/OutlabsAuthUI.git
 cd OutlabsAuthUI
 bun install
 cp public/app-config.template.json public/app-config.json
-# apiBaseUrl  = http://localhost:8000  (your API origin)
-# authApiPrefix = "" if you mounted at /auth
-#               = /v1 if you mounted at /v1/auth, /v1/users, …
-bun run dev
+# apiBaseUrl    = http://localhost:8000  (your API origin)
+# authApiPrefix = "/"  if you mounted at /auth
+#               = /v1  if you mounted at /v1/auth, /v1/users, …
+# frontendProfileKey: remove it unless your host registers frontend profiles
+bun run dev   # http://localhost:3000
 ```
 
-Full wiring and Simple vs Enterprise invite rules:
-[`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
+The admin screens need more than the auth router; mount the sets in
+[Routers & Prefixes](./02-Routers-and-Prefixes.md). Full wiring and Simple vs Enterprise
+invite rules: [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 
 ## 8. Learn from examples
 

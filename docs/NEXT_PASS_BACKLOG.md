@@ -1,9 +1,13 @@
 # Next Pass Backlog
 
-**Updated**: 2026-07-29
+**Updated**: 2026-10-02
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
+
+## Shipped Since Last Backlog Update (2026-10)
+
+- ✅ **External console adoption** — OutlabsAuthUI rebuilt as a Nuxt 4 + Nuxt UI static SPA consuming the enterprise API-key, integration-principal, session, social-link and audit surfaces; `docs/AUTH_UI.md` and the handbook updated for it.
 
 ## Shipped Since Last Backlog Update (2026-07)
 
@@ -292,10 +296,28 @@ The README now has the correct production defaults, but some operator guidance s
 
 ## UI / Consumer Adoption Gaps
 
-These are known ecosystem follow-ups, not core auth-library blockers:
+These are known ecosystem follow-ups, not core auth-library blockers. The external
+console (OutlabsAuthUI, rebuilt on Nuxt on 2026-10-02) now consumes the enterprise
+API-key, integration-principal, session, social-link and audit surfaces with Playwright
+coverage, run against both examples. What it still needs from this repository (full list
+and status: that repository's `PRODUCTION.md` "Backend dependencies" and the
+`CAPABILITIES.md` rows marked "backend"):
 
-- External admin UI should adopt the newer enterprise API key and integration-principal surfaces.
-- Add Playwright coverage in the UI repo when those newer surfaces are actually in use.
+- Authorization scoping for delegated admins: entity, membership, permission-check and
+  orphaned-account routes and account creation scoped to the admin's organization
+  (F-012, F-020, F-039, F-040, F-161, F-162)
+- Sessions: identify the current session, keep it on "sign out others", blacklist access
+  tokens on revoke in the examples, a refresh grace window (F-030, F-157)
+- Published policy and state: password policy, whether an account has a password, whether
+  messaging can deliver codes (F-097, F-098, F-099)
+- Integrity: versions or ETags on writes (F-158), an atomic role permission-set change
+- Audit coverage: role, permission, machine-key and entity lifecycle events and history
+  endpoints (F-092, F-241)
+- API keys: an effective-status filter for the entity key inventory, a grantable-scopes
+  endpoint (F-079), no rotation of a suspended key (F-080)
+- OAuth: an authorize variant reached by top-level navigation so console and API need not
+  be same-site (F-150); the associate error redirect (F-104)
+- Example seed: grant `permission:check` (F-059)
 - Keep consumer examples validating the packaged wheel path, not repo-local editable assumptions.
 
 ## Sync-In-Async Audit Follow-Ups (2026-04-22)

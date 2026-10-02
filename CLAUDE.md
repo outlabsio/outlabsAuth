@@ -171,6 +171,7 @@ docker run -d --name outlabs-redis -p 6380:6379 redis:latest
 - Backend API: `http://localhost:8004`
 - PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac`
 - Redis: `redis://localhost:6380`
+- Admin UI: `http://localhost:3000` (external `OutlabsAuthUI`; its config template targets this example)
 
 **Notifications Example** (`examples/notifications/`):
 - Backend API: `http://localhost:8005`
@@ -316,7 +317,7 @@ outlabsAuth/
 │   ├── 03-Configuration.md
 │   └── … topic guides (JWT, invites, observability, …)
 │
-├── ../OutlabsAuthUI                # 🎨 SISTER ADMIN UI (Vite/React)
+├── ../OutlabsAuthUI                # 🎨 SISTER ADMIN UI (Nuxt 4 + Nuxt UI static SPA)
 │   # https://github.com/outlabsio/OutlabsAuthUI — see docs/AUTH_UI.md
 │
 │
@@ -592,13 +593,21 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
 ## Admin UI
 
-[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
-admin console (not part of this Python package).
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Nuxt 4 + Nuxt UI
+static single-page admin console (not part of this Python package).
 
 - Repository: `../OutlabsAuthUI` (local) or https://github.com/outlabsio/OutlabsAuthUI
-- Runs separately; configure `apiBaseUrl` + `authApiPrefix` via `app-config.json`
+- Runs separately: `bun install && cp public/app-config.template.json public/app-config.json && bun run dev`
+  serves it on `http://localhost:3000`; the runtime `app-config.json` sets `apiBaseUrl`,
+  `authApiPrefix` and `frontendProfileKey` (`console` for the EnterpriseRBAC example; remove it
+  for hosts without frontend profiles)
+- It targets a checked-in OpenAPI snapshot of these routes and API contract
+  `outlabs-auth.api/v1`; a route or schema change here needs a snapshot refresh in that repo
+- Its release gate (`bun run release:check --enterprise http://localhost:8004 --simple http://localhost:8003`)
+  runs Playwright against this repo's seeded examples, so example seeds, personas, CORS origins
+  and the `/dev/auth/*` captures are part of its contract
 
-See **`docs/AUTH_UI.md`** for the plug-in contract and Simple vs Enterprise invite rules.
+See **`docs/AUTH_UI.md`** for the plug-in contract, the hosting checklist and Simple vs Enterprise invite rules.
 
 ---
 

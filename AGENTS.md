@@ -18,15 +18,15 @@
 - `uv run pytest tests/integration/`: integration tests (often require DB/Redis).
 - `uv run ruff check .`: run lint checks.
 - `uv run black --check .`: verify formatting.
-- `cd ../OutlabsAuthUI && bun install && bun run dev`: run the external admin UI repo.
-- `cd ../OutlabsAuthUI && bun run build`: build the external admin UI repo.
+- `cd ../OutlabsAuthUI && bun install && cp public/app-config.template.json public/app-config.json && bun run dev`: run the external admin console (Nuxt) on `http://localhost:3000`; the template targets the EnterpriseRBAC example on `:8004`.
+- `cd ../OutlabsAuthUI && bun run generate`: build the console's static artifact (`.output/public`). Its release gate is `bun run release:check --enterprise http://localhost:8004 --simple http://localhost:8003`, run against this repo's seeded examples.
 - `docker compose up -d`: start local dependencies (Postgres/Redis/observability stack).
 
 ## Coding Style & Naming Conventions
 - Python: 4-space indentation, type hints preferred; format with `black`.
 - Static checks: `ruff` and `mypy` are configured in `pyproject.toml`.
 - Tests: files named `test_*.py`, pytest markers like `@pytest.mark.unit` and `@pytest.mark.integration` are used.
-- Frontend: admin UI lives in sibling `../OutlabsAuthUI` (Vite/React/TypeScript); follow that repo’s conventions.
+- Frontend: admin UI lives in sibling `../OutlabsAuthUI` (Nuxt 4 + Nuxt UI 4, Vue/TypeScript, Pinia + Pinia Colada, Zod; Playwright E2E is its acceptance gate); follow that repo’s `AGENTS.md`.
 
 ## Testing Guidelines
 - Frameworks: `pytest` + `pytest-asyncio`.
@@ -35,8 +35,8 @@
 
 ## Commit & Pull Request Guidelines
 - Commit style in history uses short, imperative summaries (e.g., “Fix…”, “Update…”).
-- PRs should include a clear description, test evidence, and screenshots for UI changes (see `../OutlabsAuthUI`).
+- PRs should include a clear description and test evidence. UI changes belong in `../OutlabsAuthUI` and ship there with a Playwright spec; backend changes that alter routes, schemas or example seeds should note the console impact.
 
 ## Security & Configuration Tips
-- Configure UI secrets and DB URLs via environment variables in `../OutlabsAuthUI`.
+- The console holds no secrets or database URLs: it reads a public runtime `app-config.json` (untracked `public/app-config.json` in development, staged per deployment by its deploy preflight; `NUXT_PUBLIC_*` env is honoured only by `bun run dev`). Only its deploy credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) live in its untracked `.env.deploy`.
 - When adding permissions/roles, keep names in `resource:action` format.
