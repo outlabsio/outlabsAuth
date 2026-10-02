@@ -132,6 +132,39 @@ def entity_in_scope(scope: dict[str, Any], entity_id: Any) -> bool:
     return str(entity_id) in scope_entity_ids(scope)
 
 
+async def entity_visible_in_scope(
+    session: AsyncSession,
+    scope: dict[str, Any],
+    entity_id: Any,
+    *,
+    max_depth: int = 64,
+) -> bool:
+    """Whether an entity is inside the scope, including archived entities.
+
+    Scope entity sets come from the closure table, and archiving an entity
+    removes its closure rows. An archived entity therefore stays visible when
+    its nearest still-linked ancestor is in scope (its tenant can still open
+    it, e.g. from history), while archived roots remain global-only.
+    """
+    if entity_in_scope(scope, entity_id):
+        return True
+    if not scope_entity_ids(scope):
+        return False
+    from outlabs_auth.models.sql.entity import Entity
+
+    current = await session.get(Entity, entity_id)
+    for _ in range(max_depth):
+        if current is None or getattr(current, "status", "active") == "active":
+            return False
+        parent_id = getattr(current, "parent_id", None)
+        if parent_id is None:
+            return False
+        if entity_in_scope(scope, parent_id):
+            return True
+        current = await session.get(Entity, parent_id)
+    return False
+
+
 async def target_user_in_scope(
     session: AsyncSession,
     target_user: Any,

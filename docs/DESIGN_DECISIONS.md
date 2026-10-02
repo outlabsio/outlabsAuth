@@ -3919,7 +3919,9 @@ engine cannot evaluate, some of which then failed open.
    **404** for out-of-scope entities on get, children, path, descendants,
    members, update, archive, move (source and new parent) and type
    suggestions. The path of an in-scope entity still returns its full ancestor
-   breadcrumb. Creating a root, moving an entity to the root level and
+   breadcrumb. Archiving removes an entity's closure rows, so an archived
+   entity is matched through its nearest still-linked ancestor and stays
+   visible to its own tenant (archived roots: global actors only). Creating a root, moving an entity to the root level and
    archiving a root create or remove a tenant, so they need a global actor
    (**403** otherwise); a move to the root level must also satisfy the
    configured root entity types.

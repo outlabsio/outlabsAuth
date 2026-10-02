@@ -72,7 +72,8 @@ to a global create check.
 **Tenant scope (DD-061).** With `enforce_user_scope=True` (default) every entity
 route applies the same tenant scope as the user routes: non-global actors only
 list and open entities inside their resolved scope (their root tree plus
-membership subtrees), and out-of-scope entities answer **404**. Changes that
+membership subtrees; archived entities stay visible to their own tenant), and
+out-of-scope entities answer **404**. Changes that
 create or remove a tenant — creating a root, moving an entity to the root
 level, archiving a root — require a global actor (superuser or active
 system-wide role holder) and answer **403** otherwise. Moving to the root level

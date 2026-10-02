@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth.routers._scope import (
     entity_in_scope,
     entity_not_found,
+    entity_visible_in_scope,
     resolve_principal_scope,
     scope_enforced,
 )
@@ -97,7 +98,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
 
     async def _require_entity_in_scope(session: AsyncSession, auth_result: Any, entity_id: UUID) -> dict[str, Any]:
         scope = await _scope(session, auth_result)
-        if not entity_in_scope(scope, entity_id):
+        if not await entity_visible_in_scope(session, scope, entity_id):
             raise entity_not_found()
         return scope
 

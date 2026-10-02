@@ -802,3 +802,22 @@ async def test_self_service_email_change_requires_reauthentication_when_enabled(
             assert ok.json()["email_verified"] is False
     finally:
         await auth.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_archived_entities_stay_visible_to_their_own_tenant_only(client, auth_instance, world):
+    auth = auth_instance
+    async with auth.get_session() as session:
+        archived_a = await _entity(auth, session, label="archived-a", parent_id=world["child_a"].id)
+        archived_b = await _entity(auth, session, label="archived-b", parent_id=world["child_b"].id)
+        for entity in (archived_a, archived_b):
+            await auth.entity_service.delete_entity(session, entity.id, deleted_by_id=world["superuser"].id)
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    own = await client.get(f"/v1/entities/{archived_a.id}", headers=scoped)
+    assert own.status_code == 200, own.text
+    assert own.json()["status"] == "archived"
+    other = await client.get(f"/v1/entities/{archived_b.id}", headers=scoped)
+    assert other.status_code == 404, other.text
