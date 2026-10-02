@@ -30,7 +30,7 @@ script before relying on the credentials below.
 
 `api_integration_check.py` drives the **running** API over HTTP against the
 seeded scenarios and asserts the behavior an operator cares about before a
-release (53 checks): persona logins across both org roots, entity-scoped
+release (56 checks): persona logins across both org roots, entity-scoped
 grants, sibling-team and cross-root isolation (via a membership-only user),
 tree-permission inheritance down the hierarchy, cache-served verdict
 stability, and the next-request visibility arcs — role grant/revoke,
@@ -50,7 +50,7 @@ Or run the pieces individually (e.g. against a staging host):
 ```bash
 python reset_test_env.py                                  # seed known state
 uvicorn main:app --port 8004                              # start the API
-python api_integration_check.py                           # 53 checks, exit 0 on pass
+python api_integration_check.py                           # 56 checks, exit 0 on pass
 python api_integration_check.py --base-url http://staging-host:8004
 ```
 

@@ -89,7 +89,7 @@ already-running instance (including a staging host):
   create/move/archive as admin, plus a role-level ABAC condition created via
   the API and verified to allow/deny two holders of the same role.
 - `examples/enterprise_rbac/api_integration_check.py [--base-url ...]` — the
-  assertion suite (53 checks): persona logins across two org roots,
+  assertion suite (56 checks): persona logins across two org roots,
   entity-scoped grants, sibling-team / cross-root isolation via a
   membership-only user, **tree-permission inheritance** down the hierarchy
   (and non-leakage to sibling branches), cache-served verdict stability with

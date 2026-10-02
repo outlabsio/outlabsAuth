@@ -553,6 +553,39 @@ def main() -> int:
         f"http {response.status_code}",
     )
 
+    # Entity-keyed writes into another tenant answer 404 before any permission
+    # check, and a tenant role never authorizes anything in another tenant.
+    response = client.post(
+        "/v1/memberships/",
+        json={"entity_id": sf_residential, "user_id": auditor_id, "role_ids": []},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot add members to an ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.patch(
+        f"/v1/memberships/{sf_residential}/{auditor_id}",
+        json={"status": "suspended"},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot change ACME memberships (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.post(
+        "/v1/auth/invite",
+        json={"email": f"cross-tenant-{uuid.uuid4().hex[:8]}@example.com", "entity_id": sf_residential, "role_ids": []},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot invite into an ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
     # The West Coast admin holds only org-scoped (never system-wide) roles, so
     # it is NOT a global actor: its user scope is the ACME tenant.
     regional_headers = {"Authorization": f"Bearer {tokens['regional_admin']}"}
