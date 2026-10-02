@@ -11,7 +11,12 @@ or global request still works):
 * clearing ``assignable_at_types`` counts as widening a role;
 * orphaned-user listing is tenant-scoped and hides soft-deleted accounts;
 * entity routes are tenant-scoped and tenant-creating changes need a global actor;
-* self-service email change is disabled by default and needs re-authentication.
+* self-service email change is disabled by default and needs re-authentication;
+* a tenant admin cannot pull an unaffiliated (possibly global) account into its
+  tenant, modify an in-tree global administrator, invite into another tenant's
+  entity, or reach other tenants' roles through a personal API key;
+* direct org-scoped and entity-local roles only grant inside their own tree in
+  an entity context (DD-054 matrix).
 """
 
 from __future__ import annotations
@@ -26,8 +31,9 @@ from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.fastapi import register_exception_handlers
-from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, UserStatus
+from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope, UserStatus
 from outlabs_auth.routers import (
+    get_api_keys_router,
     get_auth_router,
     get_entities_router,
     get_memberships_router,
@@ -84,6 +90,7 @@ def _make_app(auth: EnterpriseRBAC) -> FastAPI:
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))
+    app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
     return app
 
 
@@ -821,3 +828,378 @@ async def test_archived_entities_stay_visible_to_their_own_tenant_only(client, a
     assert own.json()["status"] == "archived"
     other = await client.get(f"/v1/entities/{archived_b.id}", headers=scoped)
     assert other.status_code == 404, other.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 (DD-061): escalation paths found in the release-candidate review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_post_membership_cannot_pull_unaffiliated_or_foreign_accounts(client, auth_instance, world):
+    auth = auth_instance
+    async with auth.get_session() as session:
+        # An unrooted account holding a direct system-wide role: global scope.
+        drifter = await _user(auth, session, prefix="drifter")
+        await auth.role_service.assign_role_to_user(
+            session, user_id=drifter.id, role_id=world["system_admin_role"].id
+        )
+        plain_unrooted = await _user(auth, session, prefix="unrooted")
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+
+    # Negative: the unaffiliated global account is invisible to the tenant
+    # admin, so it cannot be pulled into the tenant (404 like a missing user).
+    pulled = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["child_a"].id), "user_id": str(drifter.id), "role_ids": []},
+    )
+    assert pulled.status_code == 404, pulled.text
+    missing = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["child_a"].id), "user_id": str(uuid.uuid4()), "role_ids": []},
+    )
+    assert missing.status_code == 404
+    assert missing.json() == pulled.json()
+    plain = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["child_a"].id), "user_id": str(plain_unrooted.id), "role_ids": []},
+    )
+    assert plain.status_code == 404, plain.text
+
+    # ... so the takeover chain stops at the first step.
+    reset = await client.patch(
+        f"/v1/users/{drifter.id}/password", headers=scoped, json={"new_password": "Hijacked123!"}
+    )
+    assert reset.status_code == 404, reset.text
+    login = await client.post(
+        "/v1/auth/login", json={"email": drifter.email, "password": "Hijacked123!"}
+    )
+    assert login.status_code == 401, login.text
+    async with auth.get_session() as session:
+        memberships, _ = await auth.membership_service.get_user_entities(
+            session, user_id=drifter.id, active_only=False
+        )
+        assert memberships == []
+
+    # Negative: another tenant's entity answers 404 too (scope guard runs first).
+    foreign = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["child_b"].id), "user_id": str(world["user_b"].id), "role_ids": []},
+    )
+    assert foreign.status_code == 404, foreign.text
+
+    # Positive: in-scope users can still be added to in-scope entities.
+    own = await client.post(
+        "/v1/memberships/",
+        headers=scoped,
+        json={"entity_id": str(world["root_a"].id), "user_id": str(world["user_a"].id), "role_ids": []},
+    )
+    assert own.status_code == 201, own.text
+
+    # Positive: a global actor can still adopt the unaffiliated account.
+    adopted = await client.post(
+        "/v1/memberships/",
+        headers=_headers(auth, world["global_admin"].id),
+        json={"entity_id": str(world["child_a"].id), "user_id": str(plain_unrooted.id), "role_ids": []},
+    )
+    assert adopted.status_code == 201, adopted.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scoped_admin_cannot_modify_in_tree_global_administrator(client, auth_instance, world):
+    auth = auth_instance
+    scoped = _headers(auth, world["scoped_admin"].id)
+    global_admin = world["global_admin"]  # rooted in tenant A, holds a system-wide role
+
+    # Reads of an in-tree global administrator stay allowed (DD-056).
+    assert (await client.get(f"/v1/users/{global_admin.id}", headers=scoped)).status_code == 200
+
+    # Negative: every mutation of a global-scope account is refused.
+    for method, path, body in (
+        ("PATCH", f"/v1/users/{global_admin.id}", {"first_name": "Owned"}),
+        ("PATCH", f"/v1/users/{global_admin.id}/password", {"new_password": "Hijacked123!"}),
+        ("PATCH", f"/v1/users/{global_admin.id}/status", {"status": "suspended"}),
+        ("DELETE", f"/v1/users/{global_admin.id}", None),
+    ):
+        response = await client.request(method, path, headers=scoped, json=body)
+        assert response.status_code == 403, (path, response.status_code, response.text)
+    login = await client.post(
+        "/v1/auth/login", json={"email": global_admin.email, "password": "Hijacked123!"}
+    )
+    assert login.status_code == 401, login.text
+
+    # Positive: ordinary in-tree accounts stay manageable by the tenant admin.
+    ordinary = await client.patch(
+        f"/v1/users/{world['user_a'].id}", headers=scoped, json={"first_name": "Renamed"}
+    )
+    assert ordinary.status_code == 200, ordinary.text
+
+    # Positive: a global actor can still manage the global administrator.
+    by_superuser = await client.patch(
+        f"/v1/users/{global_admin.id}",
+        headers=_headers(auth, world["superuser"].id),
+        json={"first_name": "Updated"},
+    )
+    assert by_superuser.status_code == 200, by_superuser.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_invite_into_another_tenants_entity_is_refused(client, auth_instance, world):
+    auth = auth_instance
+    async with auth.get_session() as session:
+        # A tenant-B role whose permissions the scoped admin holds, so only the
+        # scope rule can refuse the grant.
+        tenant_b_admin_role = await _role(
+            auth, session, permissions=["user:read", "membership:read"], root_entity_id=world["root_b"].id
+        )
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    for role_ids in ([], [str(tenant_b_admin_role.id)]):
+        email = f"plant-{_suffix()}@example.com"
+        refused = await client.post(
+            "/v1/auth/invite",
+            headers=scoped,
+            json={"email": email, "entity_id": str(world["child_b"].id), "role_ids": role_ids},
+        )
+        assert refused.status_code == 404, refused.text
+        async with auth.get_session() as session:
+            assert await auth.user_service.get_user_by_email(session, email) is None
+
+    nonexistent = await client.post(
+        "/v1/auth/invite",
+        headers=scoped,
+        json={"email": f"ghost-{_suffix()}@example.com", "entity_id": str(uuid.uuid4()), "role_ids": []},
+    )
+    assert nonexistent.status_code == 404
+    assert nonexistent.json() == refused.json()
+
+    # Positive: inviting into the inviter's own tenant still works.
+    own = await client.post(
+        "/v1/auth/invite",
+        headers=scoped,
+        json={"email": f"own-{_suffix()}@example.com", "entity_id": str(world["child_a"].id), "role_ids": []},
+    )
+    assert own.status_code == 201, own.text
+    assert own.json()["root_entity_id"] == str(world["root_a"].id)
+
+    # Positive: a global actor may invite into any tenant.
+    global_invite = await client.post(
+        "/v1/auth/invite",
+        headers=_headers(auth, world["global_admin"].id),
+        json={"email": f"global-b-{_suffix()}@example.com", "entity_id": str(world["child_b"].id), "role_ids": []},
+    )
+    assert global_invite.status_code == 201, global_invite.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_roles_router_scopes_personal_api_keys_to_their_owner(client, auth_instance, world):
+    auth = auth_instance
+    async with auth.get_session() as session:
+        await auth.permission_service.create_permission(session, name="role:create", display_name="role:create")
+        role_creator = await _role(auth, session, permissions=["role:create"], root_entity_id=world["root_a"].id)
+        await auth.role_service.assign_role_to_user(
+            session, user_id=world["scoped_admin"].id, role_id=role_creator.id
+        )
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    minted = await client.post(
+        "/v1/api-keys/",
+        headers=scoped,
+        json={"name": f"personal-{_suffix()}", "scopes": ["role:read", "role:update"]},
+    )
+    assert minted.status_code == 201, minted.text
+    key_headers = {"X-API-Key": minted.json()["api_key"]}
+    role_a, role_b = world["member_role_a"], world["member_role_b"]
+
+    # Negative: an unanchored personal key is not a global credential.
+    assert (await client.get(f"/v1/roles/{role_b.id}", headers=key_headers)).status_code == 404
+    listing = await client.get("/v1/roles/", headers=key_headers, params={"limit": 100})
+    assert listing.status_code == 200, listing.text
+    listed = {item["id"] for item in listing.json()["items"]}
+    assert str(role_b.id) not in listed and str(role_a.id) in listed
+    patched = await client.patch(f"/v1/roles/{role_b.id}", headers=key_headers, json={"display_name": "Hijack"})
+    assert patched.status_code == 404, patched.text
+    # A host that allows "create" on personal keys still gets no global reach.
+    auth.api_key_policy_service._personal_allowed_action_prefixes.append("create")
+    async with auth.get_session() as session:
+        creator_secret, _ = await auth.api_key_service.create_api_key(
+            session,
+            owner_id=world["scoped_admin"].id,
+            name=f"creator-{_suffix()}",
+            scopes=["role:create", "role:read"],
+            actor_user_id=world["scoped_admin"].id,
+        )
+        await session.commit()
+    system_wide = await client.post(
+        "/v1/roles/",
+        headers={"X-API-Key": creator_secret},
+        json={"name": f"rogue-{_suffix()}", "display_name": "Rogue", "is_global": True},
+    )
+    assert system_wide.status_code == 403, system_wide.text
+    tenant_role = await client.post(
+        "/v1/roles/",
+        headers={"X-API-Key": creator_secret},
+        json={
+            "name": f"tenant-{_suffix()}",
+            "display_name": "Tenant",
+            "is_global": False,
+            "root_entity_id": str(world["root_a"].id),
+        },
+    )
+    assert tenant_role.status_code == 201, tenant_role.text
+
+    # Positive: the key reaches its owner's own tenant roles.
+    assert (await client.get(f"/v1/roles/{role_a.id}", headers=key_headers)).status_code == 200
+
+    # Role pickers for another tenant's entity answer 404 (scope guard first).
+    picker_b = await client.get(f"/v1/roles/entity/{world['child_b'].id}", headers=scoped)
+    assert picker_b.status_code == 404, picker_b.text
+
+    # A key anchored inside the tenant never reaches past its anchor.
+    async with auth.get_session() as session:
+        anchored_secret, _ = await auth.api_key_service.create_api_key(
+            session,
+            owner_id=world["scoped_admin"].id,
+            name=f"anchored-{_suffix()}",
+            scopes=["role:read"],
+            entity_id=world["child_a"].id,
+            actor_user_id=world["scoped_admin"].id,
+        )
+        await session.commit()
+    anchored = {"X-API-Key": anchored_secret}
+    assert (await client.get(f"/v1/roles/{role_b.id}", headers=anchored)).status_code == 404
+
+    # Positive: a global owner's personal key keeps global reach.
+    global_key = await client.post(
+        "/v1/api-keys/",
+        headers=_headers(auth, world["global_admin"].id),
+        json={"name": f"global-{_suffix()}", "scopes": ["role:read"]},
+    )
+    assert global_key.status_code == 201, global_key.text
+    global_read = await client.get(
+        f"/v1/roles/{role_b.id}", headers={"X-API-Key": global_key.json()["api_key"]}
+    )
+    assert global_read.status_code == 200, global_read.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_scoped_roles_only_grant_inside_their_own_tree(client, auth_instance, world):
+    """DD-054 matrix for direct roles: the root cause behind the cross-tenant writes."""
+    auth = auth_instance
+    scoped_admin, global_admin = world["scoped_admin"], world["global_admin"]
+    async with auth.get_session() as session:
+        check = auth.permission_service.check_permission
+        # Org-scoped direct role: inside its own tree only.
+        assert await check(session, scoped_admin.id, "membership:create_tree", entity_id=world["child_a"].id)
+        assert await check(session, scoped_admin.id, "membership:create_tree", entity_id=world["root_a"].id)
+        assert not await check(session, scoped_admin.id, "membership:create_tree", entity_id=world["child_b"].id)
+        assert not await check(session, scoped_admin.id, "membership:create_tree", entity_id=uuid.uuid4())
+        # Without an entity context the flat DD-054 behavior is unchanged.
+        assert await check(session, scoped_admin.id, "membership:create_tree")
+        # System-wide roles still grant everywhere.
+        assert await check(session, global_admin.id, "membership:create_tree", entity_id=world["child_b"].id)
+
+        effective = await auth.permission_service.get_effective_permission_names(
+            session, scoped_admin.id, entity_id=world["child_b"].id, candidate_permission_names=["user:read"]
+        )
+        assert effective == set()
+        effective_own = await auth.permission_service.get_effective_permission_names(
+            session, scoped_admin.id, entity_id=world["child_a"].id, candidate_permission_names=["user:read"]
+        )
+        assert effective_own == {"user:read"}
+
+    # Archived entities of the role's own tree stay reachable; another tree's do not.
+    async with auth.get_session() as session:
+        archived_a = await _entity(auth, session, label="arch-a", parent_id=world["child_a"].id)
+        archived_b = await _entity(auth, session, label="arch-b", parent_id=world["child_b"].id)
+        for entity in (archived_a, archived_b):
+            await auth.entity_service.delete_entity(session, entity.id, deleted_by_id=world["superuser"].id)
+        await session.commit()
+    async with auth.get_session() as session:
+        check = auth.permission_service.check_permission
+        assert await check(session, scoped_admin.id, "entity:update", entity_id=archived_a.id)
+        assert not await check(session, scoped_admin.id, "entity:update", entity_id=archived_b.id)
+
+    # Over HTTP: tree-permission membership writes and reads on another tenant
+    # answer 404 (scope guard), in-tenant ones keep working.
+    scoped = _headers(auth, scoped_admin.id)
+    cross = f"/v1/memberships/{world['child_b'].id}/{world['user_b'].id}"
+    assert (await client.patch(cross, headers=scoped, json={"status": "suspended"})).status_code == 404
+    assert (await client.delete(cross, headers=scoped)).status_code == 404
+    for path in (
+        f"/v1/memberships/entity/{world['child_b'].id}",
+        f"/v1/memberships/entity/{world['child_b'].id}/details",
+        f"/v1/memberships/entity/{world['child_b'].id}/members",
+    ):
+        assert (await client.get(path, headers=scoped)).status_code == 404, path
+    own = f"/v1/memberships/{world['child_a'].id}/{world['user_a'].id}"
+    suspended = await client.patch(own, headers=scoped, json={"status": "suspended"})
+    assert suspended.status_code == 200, suspended.text
+    async with auth.get_session() as session:
+        user_b_memberships, _ = await auth.membership_service.get_user_entities(
+            session, user_id=world["user_b"].id, active_only=False
+        )
+        assert [m.status for m in user_b_memberships] == [MembershipStatus.ACTIVE]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_global_principals_without_a_user_may_grant_system_wide_roles(auth_instance, world):
+    from outlabs_auth.core.exceptions import PermissionDeniedError
+    from outlabs_auth.routers._scope import require_global_actor_for_system_wide_roles
+
+    auth = auth_instance
+    role_ids = [world["system_admin_role"].id]
+    async with auth.get_session() as session:
+        # Positive: a host-minted service token is a global platform credential.
+        await require_global_actor_for_system_wide_roles(
+            auth, session, actor_user=None, role_ids=role_ids, auth_result={"source": "service_token"}
+        )
+        # Negative: no actor at all, or a non-global principal, is refused.
+        with pytest.raises(PermissionDeniedError):
+            await require_global_actor_for_system_wide_roles(auth, session, actor_user=None, role_ids=role_ids)
+        with pytest.raises(PermissionDeniedError):
+            await require_global_actor_for_system_wide_roles(
+                auth, session, actor_user=None, role_ids=role_ids, auth_result={"source": "unknown"}
+            )
+        with pytest.raises(PermissionDeniedError):
+            await require_global_actor_for_system_wide_roles(
+                auth, session, actor_user=world["scoped_admin"], role_ids=role_ids
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enforce_user_scope_false_restores_legacy_direct_role_reach(test_engine, auth_instance, world):
+    """The DD-056 transitional escape hatch also restores the unbounded reach."""
+    legacy = EnterpriseRBAC(
+        engine=test_engine,
+        secret_key=SECRET,
+        enforce_user_scope=False,
+        enable_token_cleanup=False,
+    )
+    await legacy.initialize()
+    try:
+        async with legacy.get_session() as session:
+            assert await legacy.permission_service.check_permission(
+                session, world["scoped_admin"].id, "membership:create_tree", entity_id=world["child_b"].id
+            )
+    finally:
+        await legacy.shutdown()
+    async with auth_instance.get_session() as session:
+        assert not await auth_instance.permission_service.check_permission(
+            session, world["scoped_admin"].id, "membership:create_tree", entity_id=world["child_b"].id
+        )

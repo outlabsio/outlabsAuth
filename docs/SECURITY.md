@@ -89,6 +89,13 @@ The core trust boundaries are:
 - Global scope is granted only by global actors: directly assigning a
   system-wide role (including on invite and on reactivation) is refused for
   tenant-scoped admins, and new accounts stay inside the creator's tenant.
+  Tenant admins cannot pull an account from outside their tenant into it,
+  invite into another tenant's entity, or mutate an in-tree global
+  administrator; a personal API key carries its owner's scope, never global
+  scope on its own.
+- In entity-context checks a directly assigned org-scoped role only reaches
+  its own organization's tree (DD-054 matrix, enforced since 0.1.0a35), so a
+  tenant role cannot authorize library or host routes in another tenant.
 - Reactivating a suspended/revoked role or membership, or widening its
   validity window, re-runs delegation containment; clearing a role's
   `assignable_at_types` counts as widening.

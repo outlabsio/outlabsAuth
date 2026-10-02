@@ -18,7 +18,12 @@ from outlabs_auth.routers._authz_utils import (
     lifecycle_update_grants_access,
     require_can_delegate_roles,
 )
-from outlabs_auth.routers._scope import get_visible_user_or_404
+from outlabs_auth.routers._scope import (
+    entity_scope_guard,
+    get_visible_user_or_404,
+    resolve_principal_scope,
+    scope_enforced,
+)
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.membership import (
@@ -154,9 +159,24 @@ def get_memberships_router(
     async def add_member(
         data: MembershipCreateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id", source="body")),
         auth_result=Depends(auth.require_tree_permission("membership:create", "entity_id", source="body")),
     ):
-        """Add a user to an entity with specific roles."""
+        """Add a user to an entity with specific roles.
+
+        DD-061: a tenant-scoped actor can only add users it can already see
+        (rooted in, or a member of, its scope) to entities inside its scope
+        (the entity is checked by ``entity_scope_guard``). Both answer 404
+        otherwise, exactly like nonexistent IDs. Pulling an unaffiliated
+        account into a tenant is a global-actor operation: it would hand the
+        tenant control over that account.
+        """
+        if scope_enforced(auth):
+            actor_scope = await resolve_principal_scope(auth, session, auth_result)
+            if not actor_scope.get("is_global"):
+                await get_visible_user_or_404(
+                    auth, session, auth_result, UUID(data.user_id), scope=actor_scope
+                )
         role_ids = [UUID(rid) for rid in data.role_ids]
         auto_roles = await auth.membership_service.get_auto_assigned_roles_for_entity(session, UUID(data.entity_id))
         containment_role_ids = list({*role_ids, *(role.id for role in auto_roles)})
@@ -195,6 +215,7 @@ def get_memberships_router(
             description="Include suspended, revoked, pending, and expired memberships",
         ),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id", source="path")),
     ):
         """Get all members of an entity."""
@@ -222,6 +243,7 @@ def get_memberships_router(
             description="Include suspended, revoked, pending, and expired memberships",
         ),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id", source="path")),
     ):
         """Get all members of an entity with user details and role information."""
@@ -283,6 +305,7 @@ def get_memberships_router(
             description="Case-insensitive match on member email, first name or last name",
         ),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id", source="path")),
     ):
         memberships, total = await auth.membership_service.get_entity_members_with_users(
@@ -345,6 +368,7 @@ def get_memberships_router(
         user_id: UUID,
         data: MembershipUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:update", "entity_id", source="path")),
     ):
         """Update a user's roles and lifecycle state in an entity."""
@@ -408,6 +432,7 @@ def get_memberships_router(
         entity_id: UUID,
         user_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:delete", "entity_id", source="path")),
     ):
         """Remove a user from an entity."""

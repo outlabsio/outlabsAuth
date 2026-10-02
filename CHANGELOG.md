@@ -16,6 +16,43 @@ noted.
 
 ### Security
 
+- **Breaking:** direct role grants follow the DD-054 matrix in an entity
+  context. An org-scoped role assigned directly to a user (`root_entity_id`
+  set) now grants only at entities inside its own root's tree (archived ones
+  included), and an entity-local one only inside its scope; system-wide roles
+  still grant everywhere and checks without an entity are unchanged. Before,
+  a tenant admin's org-scoped direct role granted its permissions at any
+  entity of any tenant, which let it invite into or add members to another
+  tenant's entities and passed host routes guarded by `require_permission`
+  with an entity context, `require_entity_permission` or
+  `require_tree_permission`. Covers `check_permission`, effective permission
+  names, delegation containment and API-key grantable scopes.
+- **Breaking:** `POST /memberships` requires the target user to be inside the
+  actor's scope (404 otherwise, like a nonexistent user). A tenant admin can
+  no longer pull an unaffiliated account — for example an unrooted holder of a
+  system-wide role — into its tenant and then take it over; adopting such
+  accounts needs a global actor.
+- **Breaking:** the superuser-target guard now also protects holders of an
+  active direct system-wide role: a tenant admin gets 403 when updating,
+  resetting the password of, changing the status of, restoring, deleting,
+  re-inviting or changing the roles, sessions or API keys of an in-tree global
+  administrator. Reads are unchanged.
+- **Breaking:** `POST /auth/invite` with an `entity_id` outside the inviter's
+  tenant answers 404 and creates no account.
+- **Breaking:** the roles router resolves a personal API key to its owner's
+  tenant scope. An unanchored personal key used to count as a global
+  credential there, so a tenant admin's key could read and edit other
+  tenants' roles (and create system-wide roles where hosts allow `create` on
+  personal keys). A key anchored at an entity reaches only the part of its
+  owner's scope its anchor covers; superuser owners stay global.
+- **Breaking:** entity-keyed routes check tenant scope before the permission
+  check, so an out-of-scope or nonexistent entity answers **404** where it
+  used to answer 403: `POST /memberships`, `GET /memberships/entity/{id}`
+  (and `/details`, `/members`), `PATCH`/`DELETE /memberships/{entity_id}/{user_id}`,
+  every `/entities/{id}...` route, `GET /roles/entity/{id}`,
+  `/admin/entities/{id}/api-keys*` and
+  `/admin/entities/{id}/integration-principals*`. In-scope entities still
+  answer 403 when the caller lacks the permission.
 - **Breaking:** `GET /memberships/user/{user_id}`, `GET /permissions/user/{user_id}`
   and `POST /permissions/check` apply the DD-056 target scope. A tenant-scoped
   caller asking about a user outside its tenant gets **404**, identical to a
@@ -32,7 +69,10 @@ noted.
   `POST /auth/invite` without `entity_id`, or reactivating a direct role
   membership — requires a global actor, because a direct system-wide role makes
   its holder global (DD-056). Refusals answer 403 with
-  `details.system_wide_role_ids`.
+  `details.system_wide_role_ids`. The guard itself counts a global principal
+  without a user record (a service token or an unanchored integration
+  principal) as global; the HTTP grant routes still need a human actor
+  because SEC-2 delegation is evaluated against a user (unchanged).
 - **Breaking:** tenant-scoped actors can only root new accounts inside their
   scope: `POST /users` with another tenant's `root_entity_id` answers 403; with
   no root, the new account (and an invitee without an entity) inherits the
@@ -47,7 +87,7 @@ noted.
   layer) reject unknown operators, attribute paths outside `user.` /
   `resource.` / `env.` / `time.`, and values that do not fit the operator or
   `value_type` (400 with `details.reason = invalid_abac_condition`). Operators
-  are stored lowercase.
+  and `value_type` are stored lowercase.
 - **Breaking:** ABAC evaluation fails closed: a missing attribute no longer
   satisfies `is_false`; `not_in` with a non-list value and `not_contains` on a
   non-collection attribute evaluate false; a stored condition that cannot be
@@ -99,6 +139,9 @@ noted.
 
 ### Changed
 
+- Host-minted service tokens resolve to global scope on the roles router, as
+  they already did on the other scoped routers (the roles router used to give
+  them an empty scope).
 - The example seeds now exercise every console persona and lifecycle state:
   the EnterpriseRBAC seed installs the library permission catalog verbatim
   (legacy `apikey:*` and `user:manage` are gone), scoped personas hold
@@ -113,7 +156,7 @@ noted.
   profile declares an account-linking landing.
 - The ABAC cookbook seeds through migrations with a valid secret and editable
   ABAC definitions, and its smoke runs in release CI. The EnterpriseRBAC
-  integration suite adds tenant-scope checks (53 checks).
+  integration suite adds tenant-scope checks (56 checks).
 
 ### Database migrations
 
@@ -122,10 +165,22 @@ noted.
 ### Operational upgrade notes
 
 - Tenant-scoped admins that relied on cross-tenant entity, membership or
-  permission access, on creating/promoting/archiving roots, or on granting
-  system-wide roles directly need a global actor (a superuser assigns a
+  permission access, on creating/promoting/archiving roots, on granting
+  system-wide roles directly, on adopting unaffiliated accounts or on managing
+  in-tree global administrators need a global actor (a superuser assigns a
   system-wide role) — see DD-061. `enforce_user_scope=False` still restores
-  the unscoped behavior for one more alpha cycle.
+  the unscoped behavior (including the unbounded entity-context reach of
+  direct org-scoped roles) for one more alpha cycle.
+- Users who authorized work in other trees through a direct org-scoped role
+  (for example an "administration" root whose org role managed other
+  tenants) need a system-wide role, or memberships in the trees they manage.
+- Permission-check verdicts cached before the upgrade can still allow a
+  cross-tree entity check until they expire (`cache_permission_ttl`, 15
+  minutes by default). Run
+  `await auth.cache_service.publish_all_permissions_invalidation()` once after
+  deploying to drop them immediately.
+- Clients that treated a 403 from entity-keyed routes as "not allowed" should
+  treat 404 the same way for entities outside the caller's tenant.
 - Review stored ABAC conditions: rows with legacy operators (for example
   `eq`) or unsupported attribute contexts now evaluate false; rewrite them with
   the documented operators and contexts.

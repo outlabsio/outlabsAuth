@@ -375,6 +375,11 @@ async def test_add_member_requires_membership_create_tree_in_target_context(
             parent_id=org.id,
         )
 
+        # DD-061: a tenant-scoped admin only adds users already inside its
+        # tenant; an unaffiliated account is invisible to it (404).
+        target_user.root_entity_id = org.id
+        session.add(target_user)
+
         membership_service = MembershipService(enterprise_auth.config)
         await membership_service.add_member(
             session=session,

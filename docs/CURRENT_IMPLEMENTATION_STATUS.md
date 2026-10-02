@@ -14,7 +14,10 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 - DD-061 extends DD-056 tenant isolation to membership, effective-permission
   and entity routes; root create/move/archive need a global actor; direct
   system-wide grants need a global actor; new accounts stay in the creator's
-  tenant; reactivation re-runs delegation containment.
+  tenant; reactivation re-runs delegation containment. Direct org-scoped roles
+  only grant inside their own tree in entity context; tenant admins cannot
+  adopt unaffiliated accounts, invite into other tenants or mutate in-tree
+  global administrators; personal API keys carry their owner's scope.
 - ABAC condition writes are validated and evaluation fails closed.
 - Console contract additions: `/auth/config` password policy, access-code
   length and registration mode; session `is_current` via the `sid` claim and

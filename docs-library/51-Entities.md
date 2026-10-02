@@ -73,7 +73,8 @@ to a global create check.
 route applies the same tenant scope as the user routes: non-global actors only
 list and open entities inside their resolved scope (their root tree plus
 membership subtrees; archived entities stay visible to their own tenant), and
-out-of-scope entities answer **404**. Changes that
+out-of-scope entities answer **404** — the scope check runs before the
+permission check, so this holds on tree-permission routes too. Changes that
 create or remove a tenant — creating a root, moving an entity to the root
 level, archiving a root — require a global actor (superuser or active
 system-wide role holder) and answer **403** otherwise. Moving to the root level

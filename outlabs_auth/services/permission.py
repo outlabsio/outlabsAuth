@@ -16,7 +16,11 @@ from sqlalchemy import inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from outlabs_auth.services.abac_validation import validate_condition_definition, validate_condition_update
+from outlabs_auth.services.abac_validation import (
+    normalize_value_type,
+    validate_condition_definition,
+    validate_condition_update,
+)
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     InvalidInputError,
@@ -238,6 +242,84 @@ class PermissionService(BaseService[Permission]):
         return await request_cache.get_or_load(
             ("ancestor_depths", entity_id), _loader
         )
+
+    async def _load_direct_role_context_ancestor_ids(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        *,
+        max_depth: int = 64,
+    ) -> Set[UUID]:
+        """Ancestor-or-self ids of ``entity_id`` used to bound direct role grants.
+
+        Reads the closure table first (shared, request-cached). Archiving an
+        entity removes its closure rows, so an archived entity falls back to
+        its ``parent_id`` chain: a direct org-scoped role still reaches the
+        archived entities of its own tree, never another tree's.
+        """
+
+        async def _loader() -> Set[UUID]:
+            depth_by_ancestor = await self._load_ancestor_depths(session, entity_id)
+            if depth_by_ancestor:
+                return set(depth_by_ancestor.keys())
+            ancestor_ids: Set[UUID] = set()
+            current = await session.get(Entity, entity_id)
+            for _ in range(max_depth):
+                if current is None or current.id in ancestor_ids:
+                    break
+                ancestor_ids.add(current.id)
+                if current.parent_id is None:
+                    break
+                current = await session.get(Entity, current.parent_id)
+            return ancestor_ids
+
+        return cast(
+            Set[UUID],
+            await request_cache.get_or_load(("direct_role_context_ancestors", entity_id), _loader),
+        )
+
+    @staticmethod
+    def _direct_role_applies_at_entity(
+        role: Role,
+        target_entity_id: UUID,
+        target_ancestor_ids: Set[UUID],
+    ) -> bool:
+        """DD-054 matrix for a *direct* (UserRoleMembership) role in an entity context.
+
+        * system-wide role (no root, no scope entity) → everywhere;
+        * org-scoped role (``root_entity_id``) → only inside its own root's tree;
+        * entity-local role (``scope_entity_id``) → at its scope entity
+          (``entity_only``) or the scope entity and its descendants
+          (``hierarchy``).
+
+        Without this bound a tenant-scoped direct role granted its permissions
+        at any entity of any tenant (DD-061).
+        """
+        scope_entity_id = getattr(role, "scope_entity_id", None)
+        if scope_entity_id is not None:
+            if getattr(role, "scope", None) == RoleScope.ENTITY_ONLY:
+                return scope_entity_id == target_entity_id
+            return scope_entity_id in target_ancestor_ids
+        root_entity_id = getattr(role, "root_entity_id", None)
+        if root_entity_id is not None:
+            return root_entity_id in target_ancestor_ids
+        return True
+
+    async def _direct_role_reaches_entity(
+        self,
+        session: AsyncSession,
+        role: Role,
+        target_entity_id: Optional[UUID],
+    ) -> bool:
+        if target_entity_id is None:
+            return True
+        if not getattr(self.config, "enforce_user_scope", True):
+            # Transitional escape hatch (DD-056/DD-061): legacy unbounded reach.
+            return True
+        if getattr(role, "scope_entity_id", None) is None and getattr(role, "root_entity_id", None) is None:
+            return True
+        ancestor_ids = await self._load_direct_role_context_ancestor_ids(session, target_entity_id)
+        return self._direct_role_applies_at_entity(role, target_entity_id, ancestor_ids)
 
     async def _resolve_context_entity_type(
         self,
@@ -470,6 +552,7 @@ class PermissionService(BaseService[Permission]):
                     user_id=user_id,
                     include_entity_local=True,
                     entity_type=target_entity_type,
+                    target_entity_id=entity_id,
                 )
             if self._permission_set_allows(permission, user_permissions):
                 await self._cache_permission_result(
@@ -492,6 +575,7 @@ class PermissionService(BaseService[Permission]):
                 engine=abac_engine,
                 include_entity_local=(entity_id is not None),
                 entity_type=target_entity_type,
+                target_entity_id=entity_id,
             ):
                 self._log_permission_check(user_id, permission, "granted", start_time, "global_match_abac")
                 return True
@@ -904,6 +988,7 @@ class PermissionService(BaseService[Permission]):
         engine: PolicyEvaluationEngine,
         include_entity_local: bool = True,
         entity_type: Optional[str] = None,
+        target_entity_id: Optional[UUID] = None,
     ) -> bool:
         """
         Check permission via user roles with ABAC evaluation.
@@ -915,6 +1000,8 @@ class PermissionService(BaseService[Permission]):
             context: ABAC evaluation context
             engine: Policy evaluation engine
             include_entity_local: If False, exclude entity-local roles (DD-054)
+            target_entity_id: Entity context of the check; direct roles only
+                count where they reach it (DD-054 matrix, DD-061)
 
         Returns:
             True if permission granted, False otherwise
@@ -939,6 +1026,9 @@ class PermissionService(BaseService[Permission]):
 
             granted = self._role_context_names_cached(role, entity_type)
             if not self._permission_set_allows(permission, granted):
+                continue
+
+            if not await self._direct_role_reaches_entity(session, role, target_entity_id):
                 continue
 
             if not await self._abac_allows_role_and_permission(
@@ -1032,11 +1122,15 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         include_entity_local: bool = True,
         entity_type: Optional[str] = None,
+        target_entity_id: Optional[UUID] = None,
     ) -> Set[str]:
         """
         Collect permission names from active UserRoleMembership links only.
 
-        This excludes EntityMembership role grants by design.
+        This excludes EntityMembership role grants by design. With
+        ``target_entity_id`` only the direct roles that reach that entity count
+        (DD-054 matrix): org-scoped roles inside their own tree, entity-local
+        roles inside their scope, system-wide roles everywhere.
         """
         memberships = await self._load_user_role_memberships(session, user_id, entity_type)
 
@@ -1048,6 +1142,8 @@ class PermissionService(BaseService[Permission]):
             if not self._role_definition_is_live(role):
                 continue
             if not include_entity_local and role.scope_entity_id is not None:
+                continue
+            if not await self._direct_role_reaches_entity(session, role, target_entity_id):
                 continue
             for perm in self._get_role_permissions_for_context(role, entity_type):
                 permissions.add(perm.name)
@@ -1286,6 +1382,7 @@ class PermissionService(BaseService[Permission]):
             user_id=user_id,
             include_entity_local=True,
             entity_type=target_entity_type,
+            target_entity_id=entity_id,
         )
         membership_direct_permissions, ancestor_permissions = (
             await self._get_entity_context_membership_permission_names(
@@ -2299,8 +2396,8 @@ class PermissionService(BaseService[Permission]):
             condition_group_id=condition_group_id,
             attribute=attribute.strip(),
             operator=cast(Any, normalized_operator.value),
-            value=serialize_condition_value(value, value_type),
-            value_type=value_type,
+            value=serialize_condition_value(value, normalize_value_type(value_type)),
+            value_type=normalize_value_type(value_type),
             description=description,
         )
         session.add(condition)
@@ -2381,11 +2478,11 @@ class PermissionService(BaseService[Permission]):
         if "operator" in fields_set and operator is not None:
             condition.operator = cast(Any, normalized_operator.value)
         if "value_type" in fields_set and value_type is not None:
-            condition.value_type = value_type
+            condition.value_type = normalize_value_type(value_type)
         if "value" in fields_set or "value_type" in fields_set:
             condition.value = serialize_condition_value(
                 value,
-                value_type or condition.value_type,
+                normalize_value_type(value_type or condition.value_type),
             )
         if "description" in fields_set:
             condition.description = description

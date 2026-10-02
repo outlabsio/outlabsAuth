@@ -101,6 +101,11 @@ def _is_number(value: Any) -> bool:
     return True
 
 
+def normalize_value_type(value_type: Any) -> str:
+    """Canonical (lower-case, trimmed) spelling of an ABAC ``value_type`` for storage."""
+    return str(value_type or "string").strip().lower()
+
+
 def validate_condition_definition(
     *,
     attribute: Any,

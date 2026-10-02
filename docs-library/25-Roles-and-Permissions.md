@@ -110,7 +110,13 @@ Rationale and history: DD-060 in `docs/DESIGN_DECISIONS.md`.
 Enterprise tips:
 
 - Non-global actors only manage roles in their trees; system-wide roles they
-  cannot touch → **403**; out-of-tree → **404**
+  cannot touch → **403**; out-of-tree → **404**. A personal API key carries
+  its owner's tenant scope (narrowed to its anchor when it has one), never
+  global scope on its own (DD-061)
+- In an entity-context check a role assigned directly to a user follows the
+  same reach as a membership role: an org-scoped role only inside its own
+  organization's tree, an entity-local role only inside its scope,
+  system-wide roles everywhere (DD-054, DD-061)
 - SimpleRBAC treats list/create visibility as effectively global
 - `assignable_at_types` limits which entity types may receive the role; an
   empty list means *assignable everywhere*, so clearing it counts as widening

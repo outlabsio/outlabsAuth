@@ -141,7 +141,9 @@ async def test_api_key_admin_inventory_routes_stay_within_query_budgets(
             f"/v1/admin/entities/{admin_context.department_id}/integration-principals/{admin_context.entity_principal_id}/api-keys",
             None,
             admin_context.entity_admin_headers,
-            15,
+            # +1 over 0.1.0a34: the DD-061 entity scope guard resolves the
+            # caller's tenant scope before the tree-permission check.
+            16,
         ),
         (
             "system_principal_api_keys",

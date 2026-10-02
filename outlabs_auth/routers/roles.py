@@ -30,6 +30,7 @@ from outlabs_auth.schemas.abac import (
     parse_uuid,
 )
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
+from outlabs_auth.routers._scope import entity_scope_guard, resolve_principal_scope
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.definition_history import (
@@ -125,14 +126,10 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         session: AsyncSession,
         auth_result: dict[str, Any],
     ) -> dict[str, Any]:
-        scope = cast(
-            dict[str, Any],
-            await auth.access_scope_service.resolve_for_auth_result(
-                session,
-                auth_result,
-                include_member_user_ids=False,
-            ),
-        )
+        # DD-061: the same principal scope as the users, memberships,
+        # permissions and entities routers. A personal API key resolves to its
+        # owner's scope (never global just because it has no entity anchor).
+        scope = dict(await resolve_principal_scope(auth, session, auth_result))
         if not auth.config.enable_entity_hierarchy:
             scope["is_global"] = True
         return scope
@@ -302,6 +299,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("role:read", "entity_id", source="path")),
         obs: ObservabilityContext = Depends(get_obs),
     ):

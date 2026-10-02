@@ -15,10 +15,10 @@ routes. Keeping the predicate in one module guarantees a single contract:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional, cast
+from typing import Any, Callable, Iterable, Optional, cast
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,42 @@ async def resolve_user_scope(auth: Any, session: AsyncSession, user: Any) -> dic
     return scope
 
 
+async def _load_auth_result_api_key(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: dict[str, Any],
+) -> Optional[Any]:
+    api_key = auth_result.get("api_key")
+    if api_key is not None:
+        return api_key
+    raw_key_id = (auth_result.get("metadata") or {}).get("key_id")
+    if not raw_key_id or getattr(auth, "api_key_service", None) is None:
+        return None
+    try:
+        return await auth.api_key_service.get_api_key(session, UUID(str(raw_key_id)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _intersect_user_and_key_scope(user_scope: dict[str, Any], key_scope: dict[str, Any]) -> dict[str, Any]:
+    """A personal key anchored at an entity never reaches past its owner or its anchor."""
+    if user_scope.get("is_global"):
+        # A global owner's anchored key keeps the key's own anchor scope.
+        return key_scope
+    key_entity_ids = scope_entity_ids(key_scope)
+    entity_ids = sorted(entity_id for entity_id in scope_entity_ids(user_scope) if entity_id in key_entity_ids)
+    allowed = set(entity_ids)
+    return {
+        **user_scope,
+        "is_global": False,
+        "api_key_id": key_scope.get("api_key_id"),
+        "api_key_entity_id": key_scope.get("api_key_entity_id"),
+        "entity_ids": entity_ids,
+        "root_entity_ids": [str(e) for e in (user_scope.get("root_entity_ids") or []) if str(e) in allowed],
+        "direct_entity_ids": [str(e) for e in (user_scope.get("direct_entity_ids") or []) if str(e) in allowed],
+    }
+
+
 async def resolve_principal_scope(
     auth: Any,
     session: AsyncSession,
@@ -75,7 +111,11 @@ async def resolve_principal_scope(
 ) -> dict[str, Any]:
     """Resolve the tenant scope of any authenticated principal.
 
-    * a human (JWT or personal API key) resolves to the user's DD-056 scope;
+    * a human (JWT) resolves to the user's DD-056 scope;
+    * a personal API key resolves to its owner's DD-056 scope — never to
+      global scope just because the key has no entity anchor — and, when the
+      key is anchored at an entity, to the part of that scope the anchor
+      covers (a superuser owner stays global);
     * an integration principal resolves to its key anchor (no anchor = global);
     * a host-minted service token is a platform credential with no tenant
       anchor and is treated as global;
@@ -94,20 +134,32 @@ async def resolve_principal_scope(
         except (TypeError, ValueError):
             user = None
     if user is not None:
-        return await resolve_user_scope(auth, session, user)
+        user_scope = await resolve_user_scope(auth, session, user)
+        if source != "api_key" or bool(getattr(user, "is_superuser", False)):
+            return user_scope
+        raw_key = auth_result.get("api_key")
+        if raw_key is not None:
+            anchored = getattr(raw_key, "entity_id", None) is not None
+        else:
+            anchored = bool((auth_result.get("metadata") or {}).get("entity_id"))
+        if not anchored:
+            return user_scope
+        api_key = await _load_auth_result_api_key(auth, session, auth_result)
+        if api_key is None:
+            # Anchored key we cannot load: fail closed rather than widen.
+            return _empty_scope(source)
+        key_scope = await auth.access_scope_service.resolve_for_api_key(
+            session,
+            api_key=api_key,
+            include_member_user_ids=False,
+        )
+        return _intersect_user_and_key_scope(user_scope, cast(dict[str, Any], key_scope.to_dict()))
 
     if source == "service_token":
         return _global_scope(source)
 
     if source == "api_key":
-        api_key = auth_result.get("api_key")
-        if api_key is None:
-            raw_key_id = (auth_result.get("metadata") or {}).get("key_id")
-            if raw_key_id and getattr(auth, "api_key_service", None) is not None:
-                try:
-                    api_key = await auth.api_key_service.get_api_key(session, UUID(str(raw_key_id)))
-                except (TypeError, ValueError):
-                    api_key = None
+        api_key = await _load_auth_result_api_key(auth, session, auth_result)
         if api_key is None:
             return _empty_scope(source)
         resolved = await auth.access_scope_service.resolve_for_api_key(
@@ -212,11 +264,13 @@ async def get_visible_user_or_404(
     session: AsyncSession,
     auth_result: Optional[dict[str, Any]],
     target_user_id: UUID,
+    *,
+    scope: Optional[dict[str, Any]] = None,
 ) -> Any:
     """Load a target user and apply the DD-056 read predicate for any principal.
 
     Self-requests always pass. Out-of-scope users answer 404 exactly like
-    nonexistent ones.
+    nonexistent ones. ``scope`` reuses an already-resolved principal scope.
     """
     target_user = await auth.user_service.get_user_by_id(session, target_user_id)
     if not target_user:
@@ -228,7 +282,8 @@ async def get_visible_user_or_404(
     if actor_user_id is not None and str(actor_user_id) == str(target_user.id):
         return target_user
 
-    scope = await resolve_principal_scope(auth, session, auth_result)
+    if scope is None:
+        scope = await resolve_principal_scope(auth, session, auth_result)
     if scope.get("is_global"):
         return target_user
     if not await target_user_in_scope(session, target_user, scope):
@@ -245,18 +300,97 @@ def role_is_system_wide(role: Any) -> bool:
     )
 
 
+async def user_holds_global_scope(auth: Any, session: AsyncSession, user: Any) -> bool:
+    """Whether a user spans every tree: superuser or active direct system-wide role (DD-056)."""
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+    if not auth.config.enable_entity_hierarchy:
+        return False
+    scope = await resolve_user_scope(auth, session, user)
+    return bool(scope.get("is_global"))
+
+
+async def require_entity_visible_or_404(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: Optional[dict[str, Any]],
+    entity_id: Any,
+    *,
+    scope: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """404 unless the entity is inside the principal's scope (DD-061).
+
+    Returns the resolved scope so callers can reuse it.
+    """
+    if scope is None:
+        if not scope_enforced(auth):
+            return _global_scope("unscoped")
+        scope = await resolve_principal_scope(auth, session, auth_result)
+    if scope.get("is_global"):
+        return scope
+    if not await entity_visible_in_scope(session, scope, entity_id):
+        raise entity_not_found()
+    return scope
+
+
+def entity_scope_guard(auth: Any, entity_id_field: str, *, source: str = "path") -> Callable[..., Any]:
+    """FastAPI dependency: answer 404 for an entity outside the caller's scope.
+
+    Declare it *before* an entity-context permission dependency
+    (``require_tree_permission`` / ``require_entity_permission``) so a
+    tenant-scoped caller learns nothing about another tenant's entities: out
+    of scope and nonexistent IDs both answer 404 (DD-061), while an in-scope
+    entity still gets the permission check's 403 when the caller lacks the
+    permission. ``source`` is ``path``, ``query`` or ``body``; a missing or
+    malformed value is left to the permission dependency.
+    """
+    if source not in ("path", "query", "body"):
+        raise ValueError("source must be one of: path, query, body")
+
+    async def dependency(
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result: Any = Depends(auth.deps.require_auth()),
+    ) -> None:
+        if not scope_enforced(auth):
+            return None
+        if source == "path":
+            raw = request.path_params.get(entity_id_field)
+        elif source == "query":
+            raw = request.query_params.get(entity_id_field)
+        else:
+            try:
+                body = await request.json()
+            except Exception:
+                return None
+            raw = body.get(entity_id_field) if isinstance(body, dict) else None
+        if raw in (None, ""):
+            return None
+        try:
+            entity_id = raw if isinstance(raw, UUID) else UUID(str(raw))
+        except (TypeError, ValueError):
+            return None
+        await require_entity_visible_or_404(auth, session, auth_result, entity_id)
+        return None
+
+    return dependency
+
+
 async def require_global_actor_for_system_wide_roles(
     auth: Any,
     session: AsyncSession,
     *,
     actor_user: Optional[Any],
     role_ids: Iterable[UUID],
+    auth_result: Optional[dict[str, Any]] = None,
 ) -> None:
     """Directly granting a system-wide role grants global scope (DD-056).
 
-    Only an actor who already spans every tree (superuser or system-wide role
-    holder) may make that grant. Entity-membership role grants are not
-    affected: membership roles never widen scope.
+    Only an actor who already spans every tree may make that grant: a
+    superuser, a system-wide role holder, or — for host automation with no
+    user record — a global principal (service token, unanchored integration
+    principal) identified by ``auth_result``. Entity-membership role grants
+    are not affected: membership roles never widen scope.
     """
     if not scope_enforced(auth):
         return
@@ -271,6 +405,10 @@ async def require_global_actor_for_system_wide_roles(
         if bool(getattr(actor_user, "is_superuser", False)):
             return
         scope = await resolve_user_scope(auth, session, actor_user)
+        if scope.get("is_global"):
+            return
+    elif auth_result:
+        scope = await resolve_principal_scope(auth, session, auth_result)
         if scope.get("is_global"):
             return
     raise PermissionDeniedError(

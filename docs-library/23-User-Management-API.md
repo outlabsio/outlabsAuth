@@ -54,7 +54,7 @@ Same router for both presets. Behavior depends on flags:
 |---------|----------|
 | **SimpleRBAC** (`enable_entity_hierarchy=False`) | Scope filtering is effectively off — list/get are system-wide for permitted actors |
 | **Enterprise** + `enforce_user_scope=True` (default) | Non-global actors only see/mutate users in their entity trees. Out of scope → **404** (not 403). Self always allowed. The same rule protects `GET /memberships/user/{id}`, `GET /permissions/user/{id}` and `POST /permissions/check` |
-| Global actors | Superusers and holders of an active **direct** system-wide role. Only a global actor may grant a system-wide role directly (`POST /{user_id}/roles`, invite without entity, reactivation) |
+| Global actors | Superusers and holders of an active **direct** system-wide role. Only a global actor may grant a system-wide role directly (`POST /{user_id}/roles`, invite without entity, reactivation), and only a global actor may mutate a global actor's account (profile, password, status, delete, roles, sessions, API keys → 403 for tenant admins; reads stay allowed) |
 | `root_entity_id` on list | Narrows within the actor’s scope; never widens it |
 | `/orphaned`, `/{id}/membership-history` | Meaningful when membership service exists (Enterprise); otherwise empty pages |
 

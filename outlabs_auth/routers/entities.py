@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.routers._scope import (
     entity_in_scope,
+    entity_scope_guard,
     entity_not_found,
     entity_visible_in_scope,
     resolve_principal_scope,
@@ -207,6 +208,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def create_entity(
         data: EntityCreateRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "parent_entity_id", source="body")),
         auth_result=Depends(auth.require_tree_permission("entity:create", "parent_entity_id", source="body")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -265,6 +267,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             pattern="^(structural|access_group)$",
             description="Optional entity class filter for suggestions.",
         ),
+        _in_scope: None = Depends(entity_scope_guard(auth, "parent_id", source="query")),
         auth_result=Depends(auth.require_tree_permission("entity:create", "parent_id", source="query")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -290,6 +293,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_entity(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -309,6 +313,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def update_entity(
         entity_id: UUID,
         data: EntityUpdateRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:update")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -332,6 +337,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def move_entity(
         entity_id: UUID,
         data: EntityMoveRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_entity_permission("entity:update", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -381,6 +387,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def delete_entity(
         entity_id: UUID,
         cascade: bool = Query(False, description="Cascade delete children"),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:delete")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -408,6 +415,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_children(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -425,6 +433,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def get_descendants(
         entity_id: UUID,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("entity:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -445,6 +454,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_entity_path(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -467,6 +477,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
         entity_id: UUID,
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):

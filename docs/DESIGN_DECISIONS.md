@@ -3416,6 +3416,11 @@ The ROLE's scope determines when its permissions apply, not the permission itsel
 - **Org-scoped role** → permissions work globally within the org
 - **Entity-local role** → permissions only work in entity context
 
+> **Update (DD-061, 0.1.0a35):** until 0.1.0a35 the "if entity in org" and
+> "if scope matches" rows held for entity-membership roles only; a *direct*
+> (`UserRoleMembership`) role granted at any entity. Direct roles now follow
+> this matrix too.
+
 ### Implementation
 
 **`outlabs_auth/services/permission.py`**:
@@ -3590,6 +3595,7 @@ Entities do not store live direct permission grants. Access is granted through:
 
 3. **Superuser-target guard.** A non-global actor can never mutate a user with `is_superuser=True`
    (403), even if that user is inside the actor's tree. Reads of in-tree superusers remain allowed.
+   DD-061 extends the guard to holders of an active direct system-wide role.
 
 4. **Rollout**: enforcement is **on by default** (`enforce_user_scope=True`). A transitional config
    flag (`enforce_user_scope=False`) restores the legacy behavior for one alpha cycle and will be
@@ -3886,6 +3892,18 @@ assignment runs; clearing `assignable_at_types` was not treated as widening;
 and ABAC condition writes accepted operators and attribute contexts the
 engine cannot evaluate, some of which then failed open.
 
+The release-candidate review then found the root cause behind several
+remaining cross-tenant paths: in an entity-context check, a **direct**
+(`UserRoleMembership`) org-scoped role granted its permissions at any entity
+of any tenant, although DD-054 documents "org-scoped role → yes, if the entity
+is in the org". A tenant admin holding `membership:create_tree` through such a
+role could invite into, or add members to, another tenant's entities. It also
+found that `POST /memberships` let a tenant admin pull an unaffiliated account
+(possibly a system-wide-role holder) into its tenant and then reset its
+password, that the DD-056 superuser-target guard did not cover system-wide-role
+holders, and that the roles router treated an unanchored personal API key as a
+global credential.
+
 ### Options Considered
 
 1. **Extend the DD-056 model to every route that exposes or changes the identity graph** (chosen)
@@ -3905,12 +3923,18 @@ engine cannot evaluate, some of which then failed open.
 ### Decision
 
 1. **One scope predicate.** `outlabs_auth/routers/_scope.py` owns the DD-056
-   predicate for all routers. A principal's scope is: a human (JWT or personal
-   API key) → the user's DD-056 scope; an integration principal → its key
-   anchor (no anchor = global); a host-minted service token → global (a
-   platform credential with no tenant anchor); anything else → empty. Global
-   actors remain superusers and holders of an active **direct** system-wide
-   role. `enforce_user_scope=False` and SimpleRBAC keep the unscoped behavior.
+   predicate for all routers. A principal's scope is: a human with a JWT → the
+   user's DD-056 scope; a personal API key → its owner's scope — an unanchored
+   key is never global on its own, and a key anchored at an entity reaches only
+   the part of its owner's scope the anchor covers (superuser owners stay
+   global); an integration principal → its key anchor (no anchor = global); a
+   host-minted service token → global (a platform credential with no tenant
+   anchor); anything else → empty. The roles, memberships, permissions,
+   entities, integration-principal and API-key inventory routers all resolve
+   scope this way; the users router keeps DD-056's owner scope for personal
+   keys. Global actors remain superusers and holders of an active **direct**
+   system-wide role. `enforce_user_scope=False` and SimpleRBAC keep the
+   unscoped behavior.
 2. **Membership and permission reads** (`GET /memberships/user/{id}`,
    `GET /permissions/user/{id}`, `POST /permissions/check`) require the target
    user to be in scope; out of scope answers **404**, identical to a
@@ -3924,12 +3948,23 @@ engine cannot evaluate, some of which then failed open.
    visible to its own tenant (archived roots: global actors only). Creating a root, moving an entity to the root level and
    archiving a root create or remove a tenant, so they need a global actor
    (**403** otherwise); a move to the root level must also satisfy the
-   configured root entity types.
+   configured root entity types. The scope check runs *before* the
+   entity-context permission check (`entity_scope_guard`), so out-of-scope and
+   nonexistent entities both answer 404 even where the permission check would
+   answer 403. The same guard covers the entity-keyed membership routes
+   (`POST /memberships`, `GET /memberships/entity/{id}` and its `/details` and
+   `/members` variants, `PATCH`/`DELETE /memberships/{entity_id}/{user_id}`),
+   `GET /roles/entity/{id}`, `/admin/entities/{id}/api-keys*` and
+   `/admin/entities/{id}/integration-principals*`.
 4. **Global scope is granted only by global actors.** A direct assignment of
    a system-wide role — `POST /users/{id}/roles`, `POST /auth/invite` without
    an entity, reactivation of a direct role — is refused (**403**, with
-   `details.system_wide_role_ids`) unless the actor is global. Roles granted
-   through entity memberships never widen scope and are unaffected.
+   `details.system_wide_role_ids`) unless the actor is global. The guard
+   counts a global principal without a user record (a service token, an
+   unanchored integration principal) as global; the HTTP grant routes still
+   require a human actor because SEC-2 delegation is evaluated against a user.
+   Roles granted through entity memberships never widen scope and are
+   unaffected.
 5. **New accounts stay in the creator's tenant.** A non-global actor may only
    root an account (`POST /users`, invite without entity) at an entity in its
    scope; with no root named, the account inherits the actor's own root.
@@ -3950,6 +3985,34 @@ engine cannot evaluate, some of which then failed open.
    evaluation, a missing attribute satisfies neither `is_true` nor `is_false`,
    `not_in` / `not_contains` with a mismatched type are false, and a stored
    row that cannot be interpreted evaluates to false instead of raising.
+   `value_type` is stored in its canonical lower-case spelling.
+10. **Direct roles reach only their own tree in an entity context** (the
+    DD-054 matrix, now enforced for `UserRoleMembership` roles too): a
+    system-wide role grants everywhere; an org-scoped role (`root_entity_id`)
+    only at entities inside its root's tree, archived ones included (found
+    through their `parent_id` chain); an entity-local role (`scope_entity_id`)
+    only at its scope entity (`entity_only`) or there and below (`hierarchy`).
+    This applies to `check_permission`, effective permission names, SEC-2
+    delegation containment and API-key grantable scopes, so it also protects
+    host routes that use `require_permission` with an entity context,
+    `require_entity_permission` or `require_tree_permission`. Checks without
+    an entity keep DD-054's flat behavior. `enforce_user_scope=False` (the
+    DD-056 transitional escape hatch) also restores the old unbounded reach.
+11. **Tenant admins cannot adopt unaffiliated accounts.** `POST /memberships`
+    requires the target user to be inside the actor's scope (rooted in it or
+    holding an active membership in it); otherwise **404**, like a
+    nonexistent user. Adopting an account with no root — which DD-056 already
+    hides from tenant admins — is a global-actor operation, because the
+    tenant would gain control over that account (password, email, status).
+12. **Global-scope accounts are managed only by global actors.** The DD-056
+    superuser-target guard now covers holders of an active direct system-wide
+    role on every user mutation route (profile, password, status, restore,
+    delete, invite resend, role grants, sessions, API keys): a tenant admin
+    gets **403** even when the account is rooted in its tenant. Reads are
+    unchanged.
+13. **Invites stay in the inviter's tenant.** `POST /auth/invite` with an
+    `entity_id` outside the inviter's scope answers **404** before any
+    account is created.
 
 ### Judgement calls (conservative, backward-compatible)
 
@@ -3981,34 +4044,60 @@ engine cannot evaluate, some of which then failed open.
   `details.missing_permissions` from delegation errors, which already carry it.
 - **No optimistic concurrency yet.** Responses now expose `updated_at`;
   `If-Match` / version preconditions are not introduced.
+- **Target scope, not a separate "unrooted" rule, gates `POST /memberships`.**
+  It also refuses unrooted accounts that hold memberships in another tenant,
+  and it matches what tenant admins can already see.
+- **Anchored personal keys are intersected, not widened.** Before this
+  release the roles router gave an anchored key its anchor scope only; it now
+  gets the overlap of anchor and owner scope, never more than either. The
+  users router keeps DD-056's owner scope for personal keys (unchanged).
+- **Service tokens are global on the roles router too.** It used to resolve
+  them to an empty scope while every other scoped router treated them as
+  global platform credentials.
+- **Entity-local roles cannot be assigned directly through the API**; the
+  bound in decision 10 still applies to any such rows already stored.
 
 ### Consequences
 
 - **Positive**: the membership graph, effective permissions and entity trees
   of one tenant are no longer readable or writable from another; global scope
-  can only be handed out by someone who already has it.
+  can only be handed out, taken over or pulled into a tenant by someone who
+  already has it; a tenant-scoped direct role no longer authorizes anything in
+  another tenant, including host routes.
 - **Positive**: one error contract (404 out of scope, 403 for platform-level
   operations) across users, roles, memberships, permissions and entities.
 - **Negative (breaking for scoped admins)**: tenant-scoped actors lose
   cross-tenant entity, membership and permission visibility, root
   create/move/archive, direct system-wide grants and reactivation of grants
-  they could not assign; ABAC policies that relied on fail-open evaluation now
-  deny. Global actors and SimpleRBAC are unaffected.
+  they could not assign, adoption of unaffiliated accounts, mutation of
+  in-tree global administrators, and any entity-context grant from a direct
+  org-scoped role outside its own tree (including the "administration root"
+  pattern DD-056 already moved to system-wide roles); out-of-scope entities
+  answer 404 on entity-keyed routes that used to answer 403; ABAC policies
+  that relied on fail-open evaluation now deny. Global actors and SimpleRBAC
+  are unaffected.
+- **Neutral**: permission-check verdicts cached before the upgrade can still
+  allow a cross-tree entity check until they expire (`cache_permission_ttl`);
+  `await auth.cache_service.publish_all_permissions_invalidation()` drops them
+  at once.
 - **Neutral**: more routes pay DD-056's scope resolution (2–3 indexed
   queries).
 
 ### Implementation
 
-- `outlabs_auth/routers/_scope.py` — principal scope, target predicate,
-  system-wide grant guard, scoped root resolution
+- `outlabs_auth/routers/_scope.py` — principal scope (including personal-key
+  anchors), target predicate, `entity_scope_guard`, global-target and
+  system-wide grant guards, scoped root resolution
 - `outlabs_auth/routers/entities.py`, `memberships.py`, `permissions.py`,
-  `users.py`, `auth.py`, `roles.py`; `outlabs_auth/routers/_authz_utils.py`
+  `users.py`, `auth.py`, `roles.py`, `api_key_admin.py`,
+  `integration_principals.py`; `outlabs_auth/routers/_authz_utils.py`
   (`lifecycle_update_grants_access`)
 - `outlabs_auth/services/abac_validation.py`, `policy_engine.py`,
-  `permission.py`, `role.py`, `entity.py` (move-to-root type rules, audit
-  events), `membership.py` (orphan scope)
+  `permission.py` (direct-role entity bound), `role.py`, `entity.py`
+  (move-to-root type rules, audit events), `membership.py` (orphan scope)
 - Tests: `tests/integration/test_console_scope_hardening.py`,
-  `tests/unit/services/test_abac_write_validation_and_fail_closed.py`; HTTP
+  `tests/unit/services/test_abac_write_validation_and_fail_closed.py`,
+  `tests/unit/services/test_permission_scope.py` (direct-role matrix); HTTP
   release checks in `examples/enterprise_rbac/api_integration_check.py`
 
 ### Related Decisions
@@ -4018,5 +4107,5 @@ engine cannot evaluate, some of which then failed open.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors)
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context)
 **Next Review**: After testing all examples

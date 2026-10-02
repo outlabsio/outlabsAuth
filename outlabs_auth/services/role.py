@@ -13,7 +13,11 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from outlabs_auth.services.abac_validation import validate_condition_definition, validate_condition_update
+from outlabs_auth.services.abac_validation import (
+    normalize_value_type,
+    validate_condition_definition,
+    validate_condition_update,
+)
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
@@ -822,8 +826,8 @@ class RoleService(BaseService[Role]):
             condition_group_id=condition_group_id,
             attribute=attribute.strip(),
             operator=cast(Any, normalized_operator.value),
-            value=serialize_condition_value(value, value_type),
-            value_type=value_type,
+            value=serialize_condition_value(value, normalize_value_type(value_type)),
+            value_type=normalize_value_type(value_type),
             description=description,
         )
         session.add(condition)
@@ -893,11 +897,11 @@ class RoleService(BaseService[Role]):
         if "operator" in fields_set and operator is not None:
             condition.operator = cast(Any, normalized_operator.value)
         if "value_type" in fields_set and value_type is not None:
-            condition.value_type = value_type
+            condition.value_type = normalize_value_type(value_type)
         if "value" in fields_set or "value_type" in fields_set:
             condition.value = serialize_condition_value(
                 value,
-                value_type or condition.value_type,
+                normalize_value_type(value_type or condition.value_type),
             )
         if "description" in fields_set:
             condition.description = description

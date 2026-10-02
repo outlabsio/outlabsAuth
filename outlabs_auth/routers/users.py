@@ -50,6 +50,7 @@ from outlabs_auth.routers._scope import (
     resolve_root_for_scoped_create,
     resolve_user_scope,
     target_user_in_scope,
+    user_holds_global_scope,
 )
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
@@ -179,6 +180,16 @@ def get_users_router(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only global administrators can modify a superuser account",
+            )
+
+        # DD-061: the superuser-target guard also covers holders of an active
+        # direct system-wide role. They span every tree, so a tenant admin who
+        # could reset their password, email, status or grants would take over
+        # global scope.
+        if for_mutation and await user_holds_global_scope(auth, session, target_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only global administrators can modify a global administrator account",
             )
 
     async def _get_target_user_or_404(

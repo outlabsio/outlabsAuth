@@ -18,6 +18,7 @@ from outlabs_auth.routers._api_key_response import (
     build_api_key_response,
     build_api_key_responses,
 )
+from outlabs_auth.routers._scope import entity_scope_guard
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateResponse,
@@ -152,6 +153,7 @@ def get_integration_principals_router(
         status_filter: Optional[IntegrationPrincipalStatus] = Query(default=None, alias="status"),
         search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -183,6 +185,7 @@ def get_integration_principals_router(
         entity_id: UUID,
         data: IntegrationPrincipalCreateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:create", "entity_id", source="path")),
     ):
         actor_user_id = _actor_user_id(auth_result)
@@ -214,6 +217,7 @@ def get_integration_principals_router(
     async def get_entity_integration_principal_grantable_scopes(
         entity_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:create", "entity_id", source="path")),
     ):
         return await _grantable_scopes_response(
@@ -232,6 +236,7 @@ def get_integration_principals_router(
         entity_id: UUID,
         principal_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -248,6 +253,7 @@ def get_integration_principals_router(
         principal_id: UUID,
         data: IntegrationPrincipalUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:update", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
@@ -276,6 +282,7 @@ def get_integration_principals_router(
         entity_id: UUID,
         principal_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:delete", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
@@ -302,6 +309,7 @@ def get_integration_principals_router(
         status_filter: Optional[APIKeyStatus] = Query(default=None, alias="status"),
         search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -334,6 +342,7 @@ def get_integration_principals_router(
         principal_id: UUID,
         data: SystemIntegrationApiKeyCreateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:create", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
@@ -368,6 +377,7 @@ def get_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -386,6 +396,7 @@ def get_integration_principals_router(
         key_id: UUID,
         data: SystemIntegrationApiKeyUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:update", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
@@ -414,6 +425,7 @@ def get_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:delete", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
@@ -439,6 +451,7 @@ def get_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:update", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)

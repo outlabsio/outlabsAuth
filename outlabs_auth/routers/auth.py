@@ -32,6 +32,7 @@ from outlabs_auth.observability import (
 from outlabs_auth.response_builders import build_user_response_async
 from outlabs_auth.routers._authz_utils import require_can_delegate_roles
 from outlabs_auth.routers._scope import (
+    require_entity_visible_or_404,
     require_global_actor_for_system_wide_roles,
     resolve_root_for_scoped_create,
 )
@@ -847,6 +848,11 @@ def get_auth_router(
 
             role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
             target_entity_id = UUID(data.entity_id) if data.entity_id else None
+            actor_auth_result = getattr(
+                getattr(getattr(obs, "request", None), "state", None),
+                "_outlabs_auth_result",
+                None,
+            )
             containment_role_ids = role_ids
             if target_entity_id is not None:
                 if actor_user_id is None:
@@ -854,6 +860,14 @@ def get_auth_router(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authenticated actor is required for membership delegation",
                     )
+                # DD-061: an inviter can only place the invitee in an entity of
+                # its own tenant. Out of scope answers 404, like the entity routes.
+                await require_entity_visible_or_404(
+                    auth,
+                    session,
+                    actor_auth_result or {"source": "jwt", "user_id": str(actor_user_id), "user": actor_user},
+                    target_entity_id,
+                )
                 can_create_membership = await auth.permission_service.check_permission(
                     session,
                     actor_user_id,
@@ -895,6 +909,7 @@ def get_auth_router(
                         session,
                         actor_user=actor_user,
                         role_ids=role_ids,
+                        auth_result=actor_auth_result,
                     )
                 # DD-056 creation rule: a tenant-scoped inviter places the
                 # invitee in its own tenant instead of outside every tree.
@@ -902,11 +917,7 @@ def get_auth_router(
                     auth,
                     session,
                     actor_user=actor_user,
-                    auth_result=getattr(
-                        getattr(getattr(obs, "request", None), "state", None),
-                        "_outlabs_auth_result",
-                        None,
-                    ),
+                    auth_result=actor_auth_result,
                     requested_root_entity_id=None,
                 )
 

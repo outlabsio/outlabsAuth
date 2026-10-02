@@ -197,8 +197,10 @@ class AuthConfig(BaseModel):
     enforce_user_scope: bool = Field(
         default=True,
         description=(
-            "Enforce entity-scope (tenant) isolation on user-management routes (DD-056). "
-            "Transitional escape hatch only — set False to restore pre-DD-056 cross-tree access."
+            "Enforce entity-scope (tenant) isolation on user, role, membership, permission and entity "
+            "routes, and bound direct org-scoped roles to their own tree in entity-context checks "
+            "(DD-056, DD-061). Transitional escape hatch only — set False to restore pre-DD-056 "
+            "cross-tree access."
         ),
     )
     enable_caching: bool = Field(

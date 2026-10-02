@@ -49,7 +49,7 @@ the same membership different windows.
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/me` | Authenticated | Own memberships; `include_inactive`. Rows include `entity_name`, `entity_display_name`, `entity_type` and `role_names` |
-| `POST` | `/` | Tree `membership:create` | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason` |
+| `POST` | `/` | Tree `membership:create` + entity and user in tenant scope | Add member. Body: `user_id`, `entity_id`, `role_ids`, optional `status` (`active`\|`suspended`), validity, `reason`. Out-of-scope entity or user → 404; adopting an account with no tenant needs a global actor |
 | `GET` | `/entity/{entity_id}` | Tree `membership:read` | Members of one entity (paginated) |
 | `GET` | `/entity/{entity_id}/details` | Tree `membership:read` | Same + user/role summaries (bare list) |
 | `GET` | `/entity/{entity_id}/members` | Tree `membership:read` | Paginated details envelope with `total`; optional `search` (email / name) |
@@ -58,6 +58,11 @@ the same membership different windows.
 | `DELETE` | `/{entity_id}/{user_id}` | Tree `membership:delete` | Soft revoke → `revoked`; reactivate later with `PATCH` `status=active` |
 
 List/detail queries: `page`, `limit`, `include_inactive` (default false).
+
+Tenant scope (DD-061): every route keyed by `entity_id` checks the caller's
+tenant scope before the permission check, so an entity in another tenant (or
+one that does not exist) answers **404**; an in-scope entity still answers 403
+without the permission.
 
 Roles on create/update are validated against the entity context. Role pickers:
 `GET /v1/roles/entity/{entity_id}` — [25](./25-Roles-and-Permissions.md).
