@@ -17,6 +17,7 @@ from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import build_permission_response
+from outlabs_auth.routers._abac_errors import condition_write_refused
 from outlabs_auth.routers._scope import actor_is_global, get_visible_user_or_404, scope_enforced
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.abac import (
@@ -516,7 +517,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -552,7 +553,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if group is None:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -587,7 +588,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if not deleted:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -654,7 +655,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -700,7 +701,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if cond is None:
             raise HTTPException(status_code=404, detail="Condition not found")
@@ -739,7 +740,7 @@ def get_permissions_router(
         except PermissionNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if not deleted:
             raise HTTPException(status_code=404, detail="Condition not found")

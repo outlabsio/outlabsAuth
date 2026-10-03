@@ -72,7 +72,23 @@ offending `field`) when:
   `integer` / `float` / `boolean` values must parse; value-taking operators
   need a value.
 
-Updates are validated against the condition they would produce.
+Updates are validated against the condition they would produce. The refusal
+uses the library error envelope (`instrument_fastapi()` installs its handler):
+
+```json
+{
+  "error": "INVALID_INPUT",
+  "message": "Unknown ABAC operator 'eq'",
+  "details": {
+    "reason": "invalid_abac_condition",
+    "field": "operator",
+    "allowed": ["equals", "not_equals", "..."]
+  }
+}
+```
+
+A write to a system role or permission is refused the same way (400,
+`INVALID_INPUT`, with the role or permission id in `details`).
 
 **Fail closed.** At check time a condition never grants on missing or bad data:
 a missing attribute satisfies neither `is_true` nor `is_false`; `not_in` with a

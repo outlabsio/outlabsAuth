@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.core.exceptions import InvalidInputError, PermissionNotFoundError
 from outlabs_auth.routers import get_permissions_router
+from outlabs_auth.routers._abac_errors import ConditionWriteRefusedError
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
     AbacConditionUpdateRequest,
@@ -328,7 +329,7 @@ async def test_permissions_router_callback_list_and_abac_paths(
         assert exc.value.status_code == 404
 
         monkeypatch.setattr(auth_instance.permission_service, "create_permission_condition_group", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await create_group(
                 permission_id=permission.id,
                 data=ConditionGroupCreateRequest(operator="AND", description="group"),
@@ -590,7 +591,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
             raise InvalidInputError(message="Bad request")
 
         monkeypatch.setattr(auth_instance.permission_service, "update_permission_condition_group", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await update_group(
                 permission_id=permission.id,
                 group_id=group.id,
@@ -647,7 +648,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
         )
 
         monkeypatch.setattr(auth_instance.permission_service, "create_permission_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await create_condition(
                 permission_id=permission.id,
                 data=AbacConditionCreateRequest(
@@ -661,7 +662,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
         assert exc.value.status_code == 400
 
         monkeypatch.setattr(auth_instance.permission_service, "update_permission_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await update_condition(
                 permission_id=permission.id,
                 condition_id=condition.id,
@@ -698,7 +699,7 @@ async def test_permissions_router_callback_success_paths_cover_read_update_delet
         assert updated_condition.attribute == "resource.region"
 
         monkeypatch.setattr(auth_instance.permission_service, "delete_permission_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await delete_condition(
                 permission_id=permission.id,
                 condition_id=condition.id,

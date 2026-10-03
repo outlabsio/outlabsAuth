@@ -25,13 +25,19 @@ async def auth(test_engine) -> OutlabsAuth:
     await auth.shutdown()
 
 
-@pytest_asyncio.fixture
-async def app(auth: OutlabsAuth) -> FastAPI:
+def _abac_app(auth: OutlabsAuth, *, exception_handler_mode: str = "auth_only") -> FastAPI:
     app = FastAPI()
     app.add_middleware(ResourceContextMiddleware, trust_client_header=True)
+    # The documented host setup: library errors render as {error, message, details}.
+    auth.instrument_fastapi(app, exception_handler_mode=exception_handler_mode)
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     return app
+
+
+@pytest_asyncio.fixture
+async def app(auth: OutlabsAuth) -> FastAPI:
+    return _abac_app(auth)
 
 
 @pytest_asyncio.fixture
@@ -398,6 +404,12 @@ async def test_system_permissions_reject_permission_abac_mutations(
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert create_group_response.status_code == 400, create_group_response.text
+    system_permission_refusal = {
+        "error": "INVALID_INPUT",
+        "message": "Cannot modify system permission",
+        "details": {"permission_id": str(permission.id), "permission_name": permission.name},
+    }
+    assert create_group_response.json() == system_permission_refusal
 
     create_condition_response = await client.post(
         f"/v1/permissions/{permission.id}/conditions",
@@ -410,3 +422,83 @@ async def test_system_permissions_reject_permission_abac_mutations(
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert create_condition_response.status_code == 400, create_condition_response.text
+    assert create_condition_response.json() == system_permission_refusal
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exception_handler_mode", ["auth_only", "global"])
+async def test_invalid_abac_condition_writes_keep_reason_and_field(
+    auth: OutlabsAuth, abac_setup: dict, exception_handler_mode: str
+):
+    """A refused condition write answers 400 with the library envelope (0.1.0a35 contract).
+
+    The routers used to re-raise the service error as ``HTTPException(400,
+    detail=message)``, so a superuser writing ``operator: "eq"`` got
+    ``HTTP_ERROR`` (or a bare ``detail``) without ``details.reason`` or
+    ``details.field``.
+    """
+    headers = {"Authorization": f"Bearer {abac_setup['admin_token']}"}
+    app = _abac_app(auth, exception_handler_mode=exception_handler_mode)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=20.0) as client:
+        permission_response = await client.post(
+            "/v1/permissions/",
+            json={
+                "name": f"abac:{uuid.uuid4().hex[:6]}",
+                "display_name": "ABAC Permission",
+                "description": "ABAC refusal contract",
+                "is_system": False,
+                "is_active": True,
+                "tags": [],
+            },
+            headers=headers,
+        )
+        assert permission_response.status_code == 201, permission_response.text
+        permission_id = permission_response.json()["id"]
+
+        valid_condition = {
+            "attribute": "user.department",
+            "operator": "equals",
+            "value": "sales",
+            "value_type": "string",
+        }
+        for base in (f"/v1/permissions/{permission_id}", f"/v1/roles/{abac_setup['role_id']}"):
+            refused = await client.post(
+                f"{base}/conditions",
+                json={**valid_condition, "operator": "eq"},
+                headers=headers,
+            )
+            assert refused.status_code == 400, refused.text
+            body = refused.json()
+            assert body["error"] == "INVALID_INPUT", body
+            assert body["message"] == "Unknown ABAC operator 'eq'", body
+            assert body["details"]["reason"] == "invalid_abac_condition", body
+            assert body["details"]["field"] == "operator", body
+            assert "equals" in body["details"]["allowed"], body
+
+            created = await client.post(f"{base}/conditions", json=valid_condition, headers=headers)
+            assert created.status_code == 201, created.text
+            condition_id = created.json()["id"]
+
+            refused_update = await client.patch(
+                f"{base}/conditions/{condition_id}",
+                json={"attribute": "subject.team"},
+                headers=headers,
+            )
+            assert refused_update.status_code == 400, refused_update.text
+            assert refused_update.json() == {
+                "error": "INVALID_INPUT",
+                "message": "ABAC attribute context must be one of user, resource, env, time",
+                "details": {
+                    "reason": "invalid_abac_condition",
+                    "field": "attribute",
+                    "attribute": "subject.team",
+                    "allowed_contexts": ["user", "resource", "env", "time"],
+                },
+            }
+
+            # Neither refusal wrote anything.
+            listed = await client.get(f"{base}/conditions", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert [(c["attribute"], c["operator"]) for c in listed.json()] == [("user.department", "equals")]

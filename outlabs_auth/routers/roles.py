@@ -29,6 +29,7 @@ from outlabs_auth.schemas.abac import (
     ConditionGroupUpdateRequest,
     parse_uuid,
 )
+from outlabs_auth.routers._abac_errors import condition_write_refused
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.routers._scope import (
     entity_scope_guard,
@@ -665,7 +666,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -703,7 +704,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if group is None:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -740,7 +741,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if not deleted:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -806,7 +807,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -852,7 +853,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if cond is None:
             raise HTTPException(status_code=404, detail="Condition not found")
@@ -891,7 +892,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         except RoleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc.message)) from exc
         except InvalidInputError as exc:
-            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
+            raise condition_write_refused(exc) from exc
 
         if not deleted:
             raise HTTPException(status_code=404, detail="Condition not found")

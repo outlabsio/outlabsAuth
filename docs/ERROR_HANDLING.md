@@ -207,7 +207,7 @@ is the authoritative value emitted in the `error` field of an API response.
 | `USER_ALREADY_EXISTS` | 409 | Email already registered |
 | `INVALID_PASSWORD` | 400 | Password fails policy requirements |
 | `EMAIL_NOT_VERIFIED` | 400 | Email address not verified |
-| `INVALID_INPUT` | 422 | Input data invalid |
+| `INVALID_INPUT` | 422 | Input data invalid. The ABAC condition and condition-group write routes answer it with 400 (`details.reason = invalid_abac_condition` and `details.field` for a condition the policy engine cannot honor) |
 | `ENTITY_MOVE_CARRIES_ACCESS` | 422 | A move would change an entity's root while its subtree still carries access (DD-061 decision 17); `details.access` counts what to revoke first |
 | `MISSING_REQUIRED_FIELD` | 422 | Required field absent |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit hit |
