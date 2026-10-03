@@ -120,7 +120,7 @@ Portable Grafana/Prometheus stack: [`observability/`](../observability/).
 | Symptom | Check |
 |---------|--------|
 | No auth metrics on host `/metrics` | `enable_metrics=True`; same registry for scrape and `observability_metrics_registry` |
-| Middleware missing | Call `instrument_fastapi` at import time (before the app starts serving) |
+| Middleware missing, or library errors (for example a refused ABAC condition write) answer 500 | Call `instrument_fastapi` at import time (before the app starts serving); called inside `lifespan`, neither its middleware nor its exception handlers take effect |
 | Host handlers overwritten | Stay on `exception_handler_mode="auth_only"` or `register_outlabs_exception_handler(app)` |
 
 ---

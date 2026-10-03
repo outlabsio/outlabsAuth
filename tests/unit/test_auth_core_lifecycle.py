@@ -1079,6 +1079,9 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
 
     assert len(caught) == 1
     assert "middleware was skipped" in str(caught[0].message)
+    # Starlette copies exception handlers when it builds the middleware stack,
+    # so handlers registered after start are inert too.
+    assert "exception handlers it registered do not run" in str(caught[0].message)
 
 
 @pytest.mark.unit

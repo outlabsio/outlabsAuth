@@ -23,7 +23,14 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   is unchanged. Like the other refusals on these routers, the error is now an
   `InvalidInputError` rendered by the `OutlabsAuthException` handler that
   `instrument_fastapi()` installs; a host that mounts the routers without that
-  handler gets a 500 instead of a 400 for it.
+  handler, or installs it inside `lifespan`, gets a 500 instead of a 400 for
+  it.
+- The ABAC cookbook example calls `instrument_fastapi()` at import time.
+  Called inside `lifespan`, its middleware was skipped and its exception
+  handlers never ran (Starlette copies them when it builds the middleware
+  stack), so every library error in the example answered 500. The late-call
+  warning from `instrument_fastapi()` now says that the exception handlers do
+  not run either, and the cookbook smoke checks the refusal envelope above.
 
 ## [0.1.0a35] - 2026-10-02
 

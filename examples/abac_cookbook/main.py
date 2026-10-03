@@ -41,7 +41,21 @@ if not SECRET_KEY:
         'SECRET_KEY is required; generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
     )
 
-auth: Optional[OutlabsAuth] = None
+# Constructing OutlabsAuth is synchronous; the async startup work happens in
+# lifespan via auth.initialize(). The instance must exist at import time so
+# auth.instrument_fastapi() below runs before the app starts serving: Starlette
+# builds its middleware stack and exception handlers on the first request (or
+# lifespan event), so anything installed later — inside lifespan — is skipped,
+# and library errors such as an invalid ABAC condition would answer 500.
+_obs_config = ObservabilityPresets.development()
+_obs_config.enable_metrics = False
+
+auth = OutlabsAuth(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_abac=True,
+    observability_config=_obs_config,
+)
 
 
 class DocumentCreateRequest(BaseModel):
@@ -99,17 +113,6 @@ async def _document_resource_context(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global auth
-
-    obs_config = ObservabilityPresets.development()
-    obs_config.enable_metrics = False
-
-    auth = OutlabsAuth(
-        database_url=DATABASE_URL,
-        secret_key=SECRET_KEY,
-        enable_abac=True,
-        observability_config=obs_config,
-    )
     await auth.initialize()
 
     # Auth tables come from the library migrations (reset_test_env.py runs
@@ -117,15 +120,9 @@ async def lifespan(app: FastAPI):
     async with auth.engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: SQLModel.metadata.create_all(sync_conn, tables=[Document.__table__]))
 
-    auth.instrument_fastapi(
-        app,
-        debug=True,
-        exception_handler_mode="global",
-        include_metrics=False,
-        include_correlation_id=True,
-        include_resource_context=True,
-    )
-
+    # The router factories build dependencies from auth.deps, which only exists
+    # after auth.initialize(). Adding routes during lifespan is fine; only
+    # middleware and exception handlers must be installed at import time.
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
     app.include_router(get_users_router(auth, prefix="/v1/users"))
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
@@ -135,6 +132,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ABAC Cookbook", version="0.1.0", lifespan=lifespan)
+
+# Global JSON error envelopes, the unit-of-work middleware, request-scoped
+# permission memos, correlation IDs and the resource-context middleware.
+auth.instrument_fastapi(
+    app,
+    debug=True,
+    exception_handler_mode="global",
+    include_metrics=False,
+    include_correlation_id=True,
+    include_resource_context=True,
+)
 
 
 def get_auth() -> OutlabsAuth:
