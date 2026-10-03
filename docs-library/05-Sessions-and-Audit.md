@@ -36,6 +36,10 @@ mark `is_current: true` on the caller's own session and
 devices". Tokens minted before 0.1.0a35 carry no `sid`: they match no row, and
 `keep_current=true` answers 400 until the user signs in again.
 
+With frontend profiles configured (`0.1.0a25+`), sessions also record which
+frontend minted them as an `azp` claim — preserved and re-validated at refresh
+rotation. See [Multi-Frontend Support](../docs/MULTI_FRONTEND_SUPPORT.md).
+
 ### Admin
 
 | Method | Path | Permission |

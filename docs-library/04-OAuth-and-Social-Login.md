@@ -21,8 +21,7 @@ OAuth is **not** a constructor flag. You mount a router per provider:
 
 ```python
 from outlabs_auth.oauth.providers import get_google_client  # or GitHub / Facebook helpers
-from outlabs_auth.routers.oauth import get_oauth_router
-from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
+from outlabs_auth.routers import get_oauth_router, get_oauth_associate_router
 
 google = get_google_client(
     client_id=os.environ["GOOGLE_CLIENT_ID"],
@@ -59,10 +58,21 @@ app.include_router(
 )
 ```
 
-These factories are imported from their modules — they are **not** re-exported
-from `outlabs_auth.routers`.
+Both factories are exported from `outlabs_auth.routers` since `0.1.0a25`
+(the module paths `outlabs_auth.routers.oauth` and
+`outlabs_auth.routers.oauth_associate` still work).
 
 Register the callback URLs with the provider console exactly as mounted.
+
+### Multi-frontend OAuth
+
+When your mount serves several frontends, `/authorize` accepts a registered
+frontend profile key (`?app=portal`). The signed + persisted state binds that
+profile and a per-flow nonce — concurrent same-provider flows from different
+frontends coexist — and the callback lands on the bound profile's registered
+`oauth_success` / `oauth_error` routes. Construction-time
+`success_redirect_url` / `error_redirect_url` remain the single-profile
+degenerate case. See [Multi-Frontend Support](../docs/MULTI_FRONTEND_SUPPORT.md).
 
 ## Important flags
 
@@ -116,11 +126,13 @@ Enabling storage without an encryption key fails at construction.
 - Keep `state_secret` high-entropy and stable across instances
 - OutlabsAuth UI offers OAuth sign-in (`/auth/oauth/callback`) and account linking
   (under `/app/account`) when its `authUi.oauthProviders` lists the provider and the users
-  router is mounted; the console and API must be same-site because the OAuth state cookie is
-  `SameSite=Lax`. Customer-facing sign-in still lives in your product frontend
+  and OAuth associate routers are mounted; the console and API must be same-site because
+  the OAuth state cookie is `SameSite=Lax`. Customer-facing sign-in still lives in your
+  product frontend
 
 ## Related
 
 - [02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md)
 - [05-Sessions-and-Audit.md](./05-Sessions-and-Audit.md)
+- [Multi-Frontend Support](../docs/MULTI_FRONTEND_SUPPORT.md)
 - [`docs/AUTH_UI.md`](../docs/AUTH_UI.md)
