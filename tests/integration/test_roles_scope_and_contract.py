@@ -732,6 +732,12 @@ async def test_system_roles_reject_role_abac_mutations(
         json={"operator": "AND", "description": "should fail"},
     )
     assert create_group_response.status_code == 400, create_group_response.text
+    system_role_refusal = {
+        "error": "INVALID_INPUT",
+        "message": "Cannot modify system role",
+        "details": {"role_id": str(role.id), "role_name": role.name},
+    }
+    assert create_group_response.json() == system_role_refusal
 
     create_condition_response = await client.post(
         f"/v1/roles/{role.id}/conditions",
@@ -744,3 +750,4 @@ async def test_system_roles_reject_role_abac_mutations(
         },
     )
     assert create_condition_response.status_code == 400, create_condition_response.text
+    assert create_condition_response.json() == system_role_refusal

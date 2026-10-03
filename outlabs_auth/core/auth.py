@@ -1494,6 +1494,8 @@ class OutlabsAuth:
         if not middleware_added:
             warnings.warn(
                 "instrument_fastapi() called after app started - middleware was skipped. "
+                "The exception handlers it registered do not run either, so library errors "
+                "(for example a refused ABAC condition write) answer 500. "
                 "Move instrument_fastapi() call to module level (before lifespan) for "
                 "full functionality including UnitOfWorkMiddleware (commit-before-response "
                 "read-your-writes), CorrelationIDMiddleware and ResourceContextMiddleware.",

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Fixed
+
+- ABAC condition and condition-group write refusals on the roles and
+  permissions routers (`POST`/`PATCH`/`DELETE /roles/{id}/conditions...`,
+  `/roles/{id}/condition-groups...` and their `/permissions/{id}/...`
+  counterparts) now carry the library error envelope documented in 0.1.0a35:
+  **400** with `error = INVALID_INPUT`, the service message and its
+  `details` — `details.reason = invalid_abac_condition` plus the offending
+  `details.field` for a condition the policy engine cannot honor (for example
+  `operator: "eq"`), and the role or permission id for a write to a system
+  role or permission. The routes re-raised the service error as a bare
+  `HTTPException(400)`, so clients received `HTTP_ERROR` (or a plain `detail`
+  string without the global handlers) and no `reason` or `field`. The status
+  is unchanged. Like the other refusals on these routers, the error is now an
+  `InvalidInputError` rendered by the `OutlabsAuthException` handler that
+  `instrument_fastapi()` installs; a host that mounts the routers without that
+  handler, or installs it inside `lifespan`, gets a 500 instead of a 400 for
+  it.
+- The ABAC cookbook example calls `instrument_fastapi()` at import time.
+  Called inside `lifespan`, its middleware was skipped and its exception
+  handlers never ran (Starlette copies them when it builds the middleware
+  stack), so every library error in the example answered 500. The late-call
+  warning from `instrument_fastapi()` now says that the exception handlers do
+  not run either, and the cookbook smoke checks the refusal envelope above.
+
 ## [0.1.0a35] - 2026-10-02
 
 Admin-console hardening release: closes the backend scope and delegation gaps

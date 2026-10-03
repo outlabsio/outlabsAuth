@@ -7,6 +7,7 @@ Assumes examples/abac_cookbook/main.py is running and seeded via:
 
 This test demonstrates:
   - Permission-level ABAC conditions (not role-level)
+  - An invalid condition is refused with 400 and details.reason / details.field
   - Editor can read all documents
   - Editor can only update documents with status "draft" or "review"
   - Editor cannot update "published" documents
@@ -122,6 +123,37 @@ async def main() -> None:
                 },
             )
         print("ABAC conditions added to document:update permission")
+
+        # =====================================================================
+        # 4b. A condition the policy engine cannot honor is refused with the
+        #     library error envelope (400, reason + field), and nothing is stored
+        # =====================================================================
+        print("Checking that an invalid ABAC condition is refused...")
+        refused = await client.post(
+            f"/permissions/{perm_id}/conditions",
+            json={
+                "attribute": "resource.status",
+                "operator": "eq",
+                "value": "draft",
+                "value_type": "string",
+            },
+        )
+        body = refused.json() if refused.headers.get("content-type", "").startswith("application/json") else {}
+        details = body.get("details") or {}
+        if (
+            refused.status_code != 400
+            or body.get("error") != "INVALID_INPUT"
+            or details.get("reason") != "invalid_abac_condition"
+            or details.get("field") != "operator"
+        ):
+            raise RuntimeError(
+                f"Invalid ABAC condition: expected 400 INVALID_INPUT with reason/field, "
+                f"got {refused.status_code}: {refused.text}"
+            )
+        stored = await _request(client, "GET", f"/permissions/{perm_id}/conditions")
+        if len(stored.json()) != 2:
+            raise RuntimeError(f"Refused condition changed the stored conditions: {stored.text}")
+        print("  Correctly refused (400, details.reason = invalid_abac_condition, field = operator)")
 
         # =====================================================================
         # 5. Login as editor (non-superuser) to verify ABAC enforcement

@@ -10,6 +10,7 @@ from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.core.exceptions import InvalidInputError, RoleNotFoundError
 from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.routers import get_roles_router
+from outlabs_auth.routers._abac_errors import ConditionWriteRefusedError
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
     AbacConditionUpdateRequest,
@@ -269,7 +270,7 @@ async def test_roles_router_callback_permission_and_abac_paths(
             raise InvalidInputError(message="Invalid role group")
 
         monkeypatch.setattr(auth_instance.role_service, "create_role_condition_group", _invalid_group)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await create_group(
                 role_id=role.id,
                 data=ConditionGroupCreateRequest(operator="AND", description="group"),
@@ -627,7 +628,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
 
         monkeypatch.setattr(auth_instance.role_service, "create_role_condition_group", _runtime_raiser("unused"))
         monkeypatch.setattr(auth_instance.role_service, "update_role_condition_group", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await update_group(
                 role_id=role.id,
                 group_id=group.id,
@@ -657,7 +658,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         assert updated_group.operator == "OR"
 
         monkeypatch.setattr(auth_instance.role_service, "delete_role_condition_group", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await delete_group(
                 role_id=role.id,
                 group_id=group.id,
@@ -681,7 +682,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         )
 
         monkeypatch.setattr(auth_instance.role_service, "create_role_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await create_condition(
                 role_id=role.id,
                 data=AbacConditionCreateRequest(
@@ -695,7 +696,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         assert exc.value.status_code == 400
 
         monkeypatch.setattr(auth_instance.role_service, "update_role_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await update_condition(
                 role_id=role.id,
                 condition_id=condition.id,
@@ -732,7 +733,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         assert updated_condition.attribute == "resource.region"
 
         monkeypatch.setattr(auth_instance.role_service, "delete_role_condition", _invalid_input)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ConditionWriteRefusedError) as exc:
             await delete_condition(
                 role_id=role.id,
                 condition_id=condition.id,
