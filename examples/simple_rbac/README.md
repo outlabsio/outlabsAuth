@@ -48,14 +48,18 @@ export REDIS_URL=redis://localhost:6379/0
 
 ### Optional: OutlabsAuth UI
 
-[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) can manage this SimpleRBAC
-backend (flat roles — no entity controls):
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) (a Nuxt static admin console;
+Bun 1.3.3+ and Node.js 22.18+) can manage this SimpleRBAC backend (flat roles — no entity
+controls):
 
 ```bash
 cd ../../../OutlabsAuthUI   # sibling of the outlabsAuth repo
 bun install
 cp public/app-config.template.json public/app-config.json
 ```
+
+Point the copied `public/app-config.json` (untracked) at this example and remove the
+template's `frontendProfileKey`: this example declares no frontend profiles.
 
 ```json
 {
@@ -69,10 +73,10 @@ cp public/app-config.template.json public/app-config.json
 ```
 
 ```bash
-bun run dev
+bun run dev   # http://localhost:3000
 ```
 
-Sign in with `admin@test.com` / `Test123!!`. Details: [`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
+Open `http://localhost:3000` and sign in with `admin@test.com` / `Test123!!`. Details: [`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
 
 ## Development & Testing
 

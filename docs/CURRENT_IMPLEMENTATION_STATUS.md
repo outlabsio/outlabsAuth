@@ -312,7 +312,7 @@ These are intentional implementation details that are slightly more specific tha
 
 ### Admin UI Repository Boundary
 
-- The admin console is the sister repository [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React), not an in-tree frontend.
+- The admin console is the sister repository [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI), not an in-tree frontend. Since 2026-10-02 it is a Nuxt 4 + Nuxt UI static SPA (it replaced the earlier Vite/React console); its `CAPABILITIES.md` tracks what it covers.
 - Local clone is typically `../OutlabsAuthUI`. Contract and wiring: `docs/AUTH_UI.md`.
 - Reason: backend and frontend lifecycle move independently; this package stays library-first.
 
@@ -338,11 +338,14 @@ These are intentional implementation details that are slightly more specific tha
 - Some legacy API naming still suggests hard delete even where the implementation is now retained lifecycle.
 - Stored-but-ineffective API keys are currently exposed through derived runtime
   state rather than a dedicated persisted status.
-- The backend host/admin API key surface is implemented, but the external admin
-  UI in `../OutlabsAuthUI` has not adopted it yet.
-- Session inventory, social unlink, and audit-search HTTP surfaces are implemented
-  and covered by focused integration tests; OutlabsAuth UI adoption of those
-  screens may still lag the backend.
+- The external admin console in `../OutlabsAuthUI` consumes the API-key admin,
+  integration-principal (service accounts), session inventory, social link/unlink and
+  audit-search surfaces, with Playwright coverage run against both examples (audit
+  search and the entity key inventory on EnterpriseRBAC only). Its
+  `CAPABILITIES.md` marks the rows still limited by backend gaps (organization scoping of
+  entity, membership and account-creation routes; published password policy and
+  has-password state; messaging deliverability; role, permission and machine-key audit
+  history; write versioning) — see `NEXT_PASS_BACKLOG.md` "UI / Consumer Adoption Gaps".
 - The new integration-principal and system-key backend surface is implemented,
   but host-product UX and operational guidance for when to prefer
   `system_integration` keys versus JWT service tokens still needs more product
@@ -371,8 +374,9 @@ These are intentional implementation details that are slightly more specific tha
   - add a few more edge-case tests around pagination/search/filter extremes
   - add backend tests for IP-whitelist and rate-limit edge cases on both
     personal and system-integration keys
-  - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
-    consuming the new admin and host integration surfaces
+  - Playwright coverage of the admin and integration surfaces now exists in
+    `../OutlabsAuthUI`; the remaining gap there is a spec that authenticates with a
+    minted key (`X-API-Key`)
 
 - Focused coverage for the 2026-07 auth surface slice:
   - `tests/integration/test_user_sessions_api.py`

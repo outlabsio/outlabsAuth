@@ -40,7 +40,7 @@ Full persona table: [README.md § Demo Credentials](./README.md#demo-credentials
 
 ## Optional: OutlabsAuth UI
 
-See [README.md § Connect Admin UI](./README.md#connect-admin-ui) or
+See [README.md § Connect Admin UI](./README.md#-connect-admin-ui) or
 [`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
 
 ## More

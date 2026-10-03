@@ -4,6 +4,13 @@
 **Updated**: 2026-04-06
 **Audience**: OutlabsAuth maintainers and host-application integrators
 
+> **Status update (2026-10-02):** UI adoption is done. The OutlabsAuthUI console (Nuxt)
+> manages personal keys, service accounts (integration principals) and their keys, and the
+> Enterprise key inventory, with Playwright coverage against the EnterpriseRBAC and
+> SimpleRBAC examples (its `CAPABILITIES.md`, "Personal API keys" and "Service accounts and
+> machine keys"). Statements below that UI adoption is pending are superseded; the open
+> backend follow-ups are in `NEXT_PASS_BACKLOG.md`.
+
 ## Purpose
 
 Define and record the API key ownership model for OutlabsAuth:

@@ -13,7 +13,7 @@ Pick a **base prefix** for the auth surface and keep it consistent:
 
 | Context | Common base | Auth login path | UI `authApiPrefix` |
 |---------|-------------|-----------------|--------------------|
-| Root README quickstart | `/auth` | `/auth/login` | `""` or mount under `/auth` only for auth |
+| Root README quickstart | `/auth` | `/auth/login` | `/` (the console requires a value starting with `/`) |
 | Examples (`simple_rbac`, `enterprise_rbac`) | `/v1` | `/v1/auth/login` | `/v1` |
 | Production (README guidance) | `/iam` | `/iam/auth/login` | `/iam` |
 

@@ -114,8 +114,10 @@ Enabling storage without an encryption key fails at construction.
 - Only set `associate_by_email=True` when you trust provider email verification
 - Use HTTPS + `cookie_secure=True` in production
 - Keep `state_secret` high-entropy and stable across instances
-- OutlabsAuth UI can manage linked accounts when the users router is mounted; login
-  UX for the OAuth redirect still lives in your product frontend
+- OutlabsAuth UI offers OAuth sign-in (`/auth/oauth/callback`) and account linking
+  (under `/app/account`) when its `authUi.oauthProviders` lists the provider and the users
+  router is mounted; the console and API must be same-site because the OAuth state cookie is
+  `SameSite=Lax`. Customer-facing sign-in still lives in your product frontend
 
 ## Related
 
