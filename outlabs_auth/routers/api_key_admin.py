@@ -12,6 +12,7 @@ from outlabs_auth.routers._api_key_response import (
     build_api_key_response,
     build_api_key_responses,
 )
+from outlabs_auth.routers._scope import entity_scope_guard
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.api_key import ApiKeyResponse
 from outlabs_auth.schemas.common import PaginatedResponse
@@ -52,6 +53,7 @@ def get_api_key_admin_router(
         key_kind: Optional[APIKeyKind] = Query(default=None),
         search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -84,6 +86,7 @@ def get_api_key_admin_router(
         entity_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
@@ -100,6 +103,7 @@ def get_api_key_admin_router(
         entity_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("api_key:delete", "entity_id", source="path")),
     ):
         await _get_entity_api_key(session, entity_id, key_id)

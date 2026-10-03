@@ -911,12 +911,14 @@ async def test_entities_and_memberships_smoke(
     r_members = await client.get(f"/v1/entities/{org['id']}/members", params={"page": 1, "limit": 50})
     assert r_members.status_code == 200, r_members.text
 
-    # Move team to root and then delete.
-    r_move = await client.post(
-        f"/v1/entities/{team['id']}/move",
-        json={"new_parent_id": None},
-    )
-    assert r_move.status_code == 200, r_move.text
+    # Moving to the root level must satisfy the root-type rules (F-076): a
+    # "team" is not an allowed root type, so the promotion is refused. (This
+    # app mounts no exception handlers, so the domain error surfaces raw.)
+    with pytest.raises(InvalidInputError, match="not allowed for structural root entities"):
+        await client.post(
+            f"/v1/entities/{team['id']}/move",
+            json={"new_parent_id": None},
+        )
 
     r_delete = await client.delete(f"/v1/entities/{team['id']}")
     assert r_delete.status_code == 204, r_delete.text

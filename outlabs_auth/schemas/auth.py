@@ -1,7 +1,7 @@
 """Authentication request/response schemas."""
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -270,6 +270,21 @@ class AcceptInviteRequest(BaseModel):
     )
 
 
+class PasswordPolicyResponse(BaseModel):
+    """Server-enforced password rules, published so UIs validate identically."""
+
+    min_length: int
+    max_length: int
+    require_uppercase: bool
+    require_lowercase: bool
+    require_digit: bool
+    require_special_char: bool
+    special_characters: str = Field(
+        ...,
+        description="Exactly the characters that satisfy require_special_char.",
+    )
+
+
 class AuthConfigResponse(BaseModel):
     """
     Auth configuration response schema.
@@ -295,4 +310,23 @@ class AuthConfigResponse(BaseModel):
     mounted_surfaces: List[str] = Field(
         default_factory=list,
         description="Stable names of OutlabsAuth router surfaces actually mounted by this host.",
+    )
+    registration_mode: Literal["open", "invite_only", "closed"] = Field(
+        default="open",
+        description=(
+            "How new accounts appear: 'open' (public self-registration), 'invite_only' "
+            "(registration closed, invitations enabled) or 'closed' (admin-provisioned only)."
+        ),
+    )
+    password_policy: Optional[PasswordPolicyResponse] = Field(
+        default=None,
+        description="Server-enforced password rules.",
+    )
+    access_code_length: int = Field(
+        default=6,
+        description="Number of digits in one-time access codes and phone verification codes.",
+    )
+    self_service_email_change: bool = Field(
+        default=False,
+        description="Whether PATCH /users/me may change the email (requires current_password).",
     )

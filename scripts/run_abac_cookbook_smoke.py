@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_DIR = ROOT / "examples" / "abac_cookbook"
 RESET_SCRIPT = EXAMPLE_DIR / "reset_test_env.py"
 SMOKE_SCRIPT = ROOT / "scripts" / "smoke_abac_cookbook.py"
+# Run against the CURRENT library checkout (with uvicorn from the extras), not
+# whatever an ambient environment resolves.
+UV_RUN = ["uv", "run", "--project", str(ROOT), "--extra", "all"]
 
 
 def _env(name: str, default: str) -> str:
@@ -87,12 +90,11 @@ async def main() -> None:
         env["DATABASE_URL"] = database_url
 
     print("\n==> Resetting example DB/seed data")
-    await _run(["uv", "run", "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)
+    await _run([*UV_RUN, "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)
 
     print("\n==> Starting uvicorn")
     server_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
+        *UV_RUN,
         "uvicorn",
         "main:app",
         "--host",
@@ -121,7 +123,7 @@ async def main() -> None:
         print("\n==> Running smoke script")
         smoke_env = env.copy()
         smoke_env["BASE_URL"] = f"{base_url}/v1"
-        await _run(["uv", "run", "python", str(SMOKE_SCRIPT)], cwd=ROOT, env=smoke_env)
+        await _run([*UV_RUN, "python", str(SMOKE_SCRIPT)], cwd=ROOT, env=smoke_env)
 
         print("\n==> Smoke OK")
     finally:

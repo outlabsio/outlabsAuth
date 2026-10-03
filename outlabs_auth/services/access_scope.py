@@ -305,6 +305,37 @@ class AccessScopeService:
         result = await session.execute(stmt)
         return result.first() is not None
 
+    async def user_has_system_wide_role_grant(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> bool:
+        """
+        True if the user has *any* direct membership row of a system-wide role.
+
+        Unlike :meth:`_user_has_active_system_wide_role` (which decides whether
+        the user is global right now), this ignores the membership status, its
+        validity window and the role definition's status: a scheduled,
+        suspended, expired or revoked system-wide grant can become active later
+        (when ``valid_from`` passes, or when a global admin reactivates it or
+        the role), so the account must be managed as a global account today
+        (DD-061 decision 12).
+        """
+        stmt = (
+            select(literal(True))
+            .select_from(UserRoleMembership)
+            .join(Role, cast(Any, Role.id) == cast(Any, UserRoleMembership.role_id))
+            .where(
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, Role.is_global).is_(True),
+                cast(Any, Role.root_entity_id).is_(None),
+                cast(Any, Role.scope_entity_id).is_(None),
+            )
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.first() is not None
+
     async def _resolve_user_scope_inputs(
         self,
         session: AsyncSession,

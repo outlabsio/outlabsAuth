@@ -17,6 +17,7 @@ from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import build_permission_response
+from outlabs_auth.routers._scope import actor_is_global, get_visible_user_or_404, scope_enforced
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
@@ -28,6 +29,10 @@ from outlabs_auth.schemas.abac import (
     parse_uuid,
 )
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.definition_history import (
+    DefinitionHistoryEventResponse,
+    permission_history_event_response,
+)
 from outlabs_auth.schemas.permission import (
     PermissionCheckRequest,
     PermissionCheckResponse,
@@ -71,6 +76,24 @@ def get_permissions_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["permissions"])
+
+    async def _require_global_catalog_actor(session: AsyncSession, auth_result: Any) -> None:
+        """Permission definitions and their ABAC conditions are shared by every tenant.
+
+        Creating, changing or deleting them changes authorization in every
+        tenant, so with tenant scope enforced only a global actor (superuser,
+        system-wide role holder, service token or unanchored integration
+        principal) may write them — like system-wide roles on the roles router
+        (DD-061). Reads are unchanged.
+        """
+        if not scope_enforced(auth):
+            return
+        if await actor_is_global(auth, session, auth_result):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only global administrators can change the shared permission catalog",
+        )
 
     @router.get(
         "/",
@@ -124,6 +147,7 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:create")),
     ):
         """Create a new permission."""
+        await _require_global_catalog_actor(session, auth_result)
         if auth.observability:
             auth.observability.logger.debug(
                 "permission_create_request",
@@ -166,11 +190,51 @@ def get_permissions_router(
 
         return build_permission_response(permission)
 
+    def _parse_entity_id(raw_entity_id: Optional[str]) -> Optional[UUID]:
+        if not raw_entity_id:
+            return None
+        try:
+            return UUID(raw_entity_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid entity_id: {raw_entity_id}",
+            )
+
+    async def _permissions_in_context(
+        session: AsyncSession,
+        user: Any,
+        entity_id: Optional[UUID],
+    ) -> List[str]:
+        """Permission names for ``user``, optionally in one entity's context.
+
+        Without ``entity_id`` this is the historical global aggregate
+        (``get_user_permissions``). With it, the names are the catalog
+        permissions the user holds *at that entity* — direct grants there plus
+        ``_tree``/``_all`` grants inherited from ancestors — mirroring
+        ``POST /permissions/check``. Superusers keep the ``*:*`` contract.
+        """
+        if entity_id is None:
+            return list(await auth.permission_service.get_user_permissions(session, user_id=user.id))
+        if bool(getattr(user, "is_superuser", False)):
+            return ["*:*"]
+        granted = await auth.permission_service.get_effective_permission_names(
+            session,
+            user.id,
+            entity_id=entity_id,
+            user=user,
+        )
+        return sorted(granted)
+
     @router.get(
         "/me",
         response_model=List[str],
         summary="Get current user's permissions",
-        description="Get all permissions for the authenticated user",
+        description=(
+            "Get all permissions for the authenticated user. With entity_id, returns the "
+            "permissions effective at that entity (direct grants plus tree grants inherited "
+            "from ancestors), which is what entity-level UI actions should gate on."
+        ),
     )
     async def get_my_permissions(
         entity_id: Optional[str] = None,
@@ -180,18 +244,29 @@ def get_permissions_router(
         """
         Get all permissions for the currently authenticated user.
 
-        Optionally filter by entity context (for EnterpriseRBAC).
+        Optionally evaluated in an entity context (EnterpriseRBAC).
         """
-        user_id = UUID(auth_result["user_id"])
-        return await auth.permission_service.get_user_permissions(
-            session, user_id=user_id
-        )
+        context_entity_id = _parse_entity_id(entity_id)
+        user = auth_result.get("user")
+        if user is None:
+            if not auth_result.get("user_id"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A user principal is required to list your own permissions",
+                )
+            user = await auth.user_service.get_user_by_id(session, UUID(str(auth_result["user_id"])))
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        return await _permissions_in_context(session, user, context_entity_id)
 
     @router.post(
         "/check",
         response_model=PermissionCheckResponse,
         summary="Check permissions",
-        description="Check if user has specific permissions (requires permission:check permission)",
+        description=(
+            "Check if user has specific permissions (requires permission:check permission). "
+            "The target user must be inside the caller's tenant scope (DD-056)."
+        ),
     )
     async def check_permissions(
         data: PermissionCheckRequest,
@@ -199,21 +274,16 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:check")),
     ):
         """Check if a user has specific permissions."""
-        user = await auth.user_service.get_user_by_id(session, UUID(data.user_id))
-        if not user:
+        try:
+            target_user_id = UUID(data.user_id)
+        except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid user_id: {data.user_id}",
             )
+        user = await get_visible_user_or_404(auth, session, auth_result, target_user_id)
 
-        entity_id: Optional[UUID] = None
-        if data.entity_id:
-            try:
-                entity_id = UUID(data.entity_id)
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid entity_id: {data.entity_id}",
-                )
+        entity_id = _parse_entity_id(data.entity_id)
 
         # One membership-graph load + in-memory matching instead of a full
         # check_permission round (multiple SELECTs) per requested name. With
@@ -238,7 +308,11 @@ def get_permissions_router(
         "/user/{user_id}",
         response_model=List[str],
         summary="Get user permissions",
-        description="Get all permissions for a user (requires permission:read permission)",
+        description=(
+            "Get all permissions for a user (requires permission:read permission), optionally "
+            "evaluated at entity_id. The target user must be inside the caller's tenant scope "
+            "(DD-056)."
+        ),
     )
     async def get_user_permissions(
         user_id: UUID,
@@ -247,15 +321,9 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         """Get all permissions for a user, optionally in a specific entity context."""
-        user = await auth.user_service.get_user_by_id(session, user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
-
-        return await auth.permission_service.get_user_permissions(
-            session, user_id=user_id
-        )
+        context_entity_id = _parse_entity_id(entity_id)
+        user = await get_visible_user_or_404(auth, session, auth_result, user_id)
+        return await _permissions_in_context(session, user, context_entity_id)
 
     @router.get(
         "/{permission_id}",
@@ -279,6 +347,45 @@ def get_permissions_router(
 
         return build_permission_response(permission)
 
+    @router.get(
+        "/{permission_id}/history",
+        response_model=PaginatedResponse[DefinitionHistoryEventResponse],
+        summary="Get permission definition history",
+        description=(
+            "Append-only history of changes to this permission's definition, tags and ABAC "
+            "conditions (requires permission:read permission)."
+        ),
+    )
+    async def get_permission_history(
+        permission_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        event_type: Optional[str] = Query(None, description="Filter by event type"),
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+    ):
+        permission = await auth.permission_service.get_permission_by_id(session, permission_id)
+        if not permission:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found")
+        history_service = getattr(auth, "permission_history_service", None)
+        if history_service is None:
+            return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+        events, total = await history_service.list_permission_events(
+            session,
+            permission_id,
+            page=page,
+            limit=limit,
+            event_type=event_type,
+        )
+        pages = (total + limit - 1) // limit if total > 0 else 0
+        return PaginatedResponse(
+            items=[permission_history_event_response(event) for event in events],
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+        )
+
     @router.patch(
         "/{permission_id}",
         response_model=PermissionResponse,
@@ -292,6 +399,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
     ):
         """Update permission details."""
+        await _require_global_catalog_actor(session, auth_result)
         await auth.permission_service.update_permission(
             session,
             permission_id,
@@ -333,6 +441,7 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:delete")),
     ):
         """Delete permission by ID."""
+        await _require_global_catalog_actor(session, auth_result)
         deleted = await auth.permission_service.delete_permission(
             session,
             permission_id,
@@ -395,6 +504,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             group = await auth.permission_service.create_permission_condition_group(
                 session,
@@ -428,6 +538,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             group = await auth.permission_service.update_permission_condition_group(
                 session,
@@ -465,6 +576,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             deleted = await auth.permission_service.delete_permission_condition_group(
                 session,
@@ -526,6 +638,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             cond = await auth.permission_service.create_permission_condition(
                 session,
@@ -567,6 +680,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             cond = await auth.permission_service.update_permission_condition(
                 session,
@@ -614,6 +728,7 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        await _require_global_catalog_actor(session, auth_result)
         try:
             deleted = await auth.permission_service.delete_permission_condition(
                 session,

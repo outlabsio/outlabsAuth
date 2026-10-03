@@ -112,8 +112,10 @@ async def lifespan(app: FastAPI):
     )
     await auth.initialize()
 
+    # Auth tables come from the library migrations (reset_test_env.py runs
+    # them); create only the example's own table here.
     async with auth.engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(lambda sync_conn: SQLModel.metadata.create_all(sync_conn, tables=[Document.__table__]))
 
     auth.instrument_fastapi(
         app,

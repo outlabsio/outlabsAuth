@@ -35,6 +35,7 @@ from outlabs_auth import (
     UserRoleMembership,
     UserStatus,
 )
+from outlabs_auth.cli import run_migrations
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.utils.password import generate_password_hash
 
@@ -42,6 +43,10 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/abac_cookbook",
 )
+# Only used to configure password hashing for the seeded users; it signs
+# nothing. The library requires >=32 characters, so a local fallback keeps the
+# script runnable without SECRET_KEY.
+SECRET_KEY = os.getenv("SECRET_KEY") or "abac-cookbook-local-password-hashing-secret-key"
 
 
 async def _ensure_database_exists(database_url: str) -> None:
@@ -74,27 +79,30 @@ async def _ensure_database_exists(database_url: str) -> None:
 
 async def reset_database() -> None:
     await _ensure_database_exists(DATABASE_URL)
+    # Auth tables are owned by the library's Alembic migrations (the same path
+    # a real host uses); only the example's own table is created here.
+    await run_migrations(DATABASE_URL)
     engine = create_async_engine(DATABASE_URL, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(lambda sync_conn: SQLModel.metadata.create_all(sync_conn, tables=[Document.__table__]))
 
     async with async_session() as session:
-        tables_to_clear = [
-            "user_role_memberships",
-            "role_permissions",
-            "documents",
-            "roles",
-            "permissions",
-            "users",
-        ]
-        for table in tables_to_clear:
-            try:
-                await session.execute(text(f"DELETE FROM {table}"))
-            except Exception:
-                pass
+        table_names_result = await session.execute(
+            text(
+                """
+                SELECT quote_ident(tablename)
+                FROM pg_tables
+                WHERE schemaname = current_schema()
+                  AND tablename != 'outlabs_auth_alembic_version'
+                ORDER BY tablename
+                """
+            )
+        )
+        table_names = [str(row[0]) for row in table_names_result]
+        if table_names:
+            await session.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
         await session.commit()
 
         permissions = [
@@ -105,6 +113,10 @@ async def reset_database() -> None:
             ("role:update", "Role Update", "role", "update"),
         ]
 
+        # document:update carries the ABAC conditions the smoke configures
+        # over the API, so it must be editable: system definitions are
+        # immutable once created (DD-060).
+        mutable_permissions = {"document:update"}
         perm_map: dict[str, Permission] = {}
         for name, display, resource, action in permissions:
             p = Permission(
@@ -113,7 +125,7 @@ async def reset_database() -> None:
                 resource=resource,
                 action=action,
                 description=f"{name} (cookbook)",
-                is_system=True,
+                is_system=name not in mutable_permissions,
                 is_active=True,
             )
             session.add(p)
@@ -124,7 +136,7 @@ async def reset_database() -> None:
             name="editor",
             display_name="Editor",
             description="Can update documents (ABAC constrained)",
-            is_system_role=True,
+            is_system_role=False,
             is_global=True,
         )
         session.add(editor_role)
@@ -143,7 +155,7 @@ async def reset_database() -> None:
                 )
             )
 
-        config = AuthConfig(secret_key="test-secret-key")
+        config = AuthConfig(secret_key=SECRET_KEY)
         admin = User(
             email="admin@cookbook.example.com",
             hashed_password=generate_password_hash("Test123!!", config),

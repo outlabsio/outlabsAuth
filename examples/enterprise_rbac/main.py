@@ -146,6 +146,25 @@ TWILIO_SMS_FROM = os.getenv("TWILIO_SMS_FROM")
 FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
 
 
+def _optional_int_env(name: str) -> Optional[int]:
+    """Read an optional positive integer setting (unset/blank = library default)."""
+    raw = os.getenv(name, "").strip()
+    return int(raw) if raw else None
+
+
+# Password-login throttling. The library defaults (20 attempts per 300s per
+# client IP) are right for production; E2E suites that log in many personas
+# from one IP can relax them here instead of sleeping between runs.
+LOGIN_RATE_LIMIT_SETTINGS = {
+    key: value
+    for key, value in {
+        "login_ip_rate_limit_max": _optional_int_env("LOGIN_IP_RATE_LIMIT_MAX"),
+        "login_ip_rate_limit_window_seconds": _optional_int_env("LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS"),
+    }.items()
+    if value is not None
+}
+
+
 # ============================================================================
 # Pydantic Schemas
 # ============================================================================
@@ -243,6 +262,7 @@ auth = EnterpriseRBAC(
     # resource_context_provider) instead of trusting the client.
     trust_resource_context_header=True,
     observability_config=obs_config,
+    **LOGIN_RATE_LIMIT_SETTINGS,
     transactional_mail_service=build_enterprise_example_transactional_mail_service(
         frontend_url=FRONTEND_URL,
         portal_frontend_url=PORTAL_FRONTEND_URL,

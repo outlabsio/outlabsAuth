@@ -7,7 +7,8 @@ from fastapi import APIRouter, Request
 from fastapi.routing import APIRoute
 
 from outlabs_auth._version import __version__
-from outlabs_auth.schemas.auth import AuthConfigResponse
+from outlabs_auth.schemas.auth import AuthConfigResponse, PasswordPolicyResponse
+from outlabs_auth.utils.password import PASSWORD_MAX_LENGTH, PASSWORD_SPECIAL_CHARACTERS
 
 AUTH_SURFACE_OPENAPI_EXTENSION = "x-outlabs-auth-surface"
 
@@ -84,12 +85,34 @@ def build_auth_config_response(auth: Any, request: Request) -> AuthConfigRespons
         "magic_link": auth.config.enable_magic_links,
         "access_code": auth.config.enable_access_codes,
     }
+    config = auth.config
+    registration_enabled = bool(getattr(config, "enable_registration", True))
+    if registration_enabled:
+        registration_mode = "open"
+    elif getattr(config, "enable_invitations", True):
+        registration_mode = "invite_only"
+    else:
+        registration_mode = "closed"
+    features["registration"] = registration_enabled
+    features["self_service_email_change"] = bool(getattr(config, "allow_self_service_email_change", False))
     return AuthConfigResponse(
         library_version=__version__,
         preset=auth.__class__.__name__,
         features=features,
         auth_methods=auth_methods,
         mounted_surfaces=discover_mounted_auth_surfaces(request.app),
+        registration_mode=registration_mode,
+        password_policy=PasswordPolicyResponse(
+            min_length=int(getattr(config, "password_min_length", 8)),
+            max_length=PASSWORD_MAX_LENGTH,
+            require_uppercase=bool(getattr(config, "require_uppercase", True)),
+            require_lowercase=True,
+            require_digit=bool(getattr(config, "require_digit", True)),
+            require_special_char=bool(getattr(config, "require_special_char", True)),
+            special_characters=PASSWORD_SPECIAL_CHARACTERS,
+        ),
+        access_code_length=int(getattr(config, "access_code_length", 6)),
+        self_service_email_change=bool(getattr(config, "allow_self_service_email_change", False)),
     )
 
 

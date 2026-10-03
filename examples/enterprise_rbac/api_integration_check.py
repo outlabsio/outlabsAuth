@@ -38,6 +38,7 @@ PERSONAS = {
     "auditor": "auditor@acme.com",
     "summit_agent": "agent@austin.summit.com",
     "summit_admin": "summit-admin@summit.com",
+    "permissions_admin": "permissions-admin@acme.com",
 }
 
 RESULTS: list[tuple[str, bool, str]] = []
@@ -523,6 +524,197 @@ def main() -> int:
         "other-root admin cannot read ACME user (404 anti-enumeration)",
         response.status_code == 404,
         f"http {response.status_code}",
+    )
+
+    # ---- 15. Tenant scope beyond the users router (0.1.0a35) ----------------
+    summit_headers = {"Authorization": f"Bearer {tokens['summit_admin']}"}
+    response = client.get(f"/v1/memberships/user/{auditor_id}", headers=summit_headers)
+    check(
+        "other-root admin cannot read ACME membership graph (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.get(f"/v1/permissions/user/{auditor_id}", headers=summit_headers)
+    check(
+        "other-root admin cannot read ACME user permissions (403/404)",
+        response.status_code in (403, 404),
+        f"http {response.status_code}",
+    )
+    summit_entities = client.get("/v1/entities/", params={"limit": 1000}, headers=summit_headers)
+    summit_visible = {row["id"] for row in summit_entities.json().get("items", [])}
+    check(
+        "other-root admin entity list excludes ACME (DD-061)",
+        summit_entities.status_code == 200 and bool(acme_org) and acme_org not in summit_visible,
+        f"http {summit_entities.status_code}, {len(summit_visible)} visible",
+    )
+    response = client.get(f"/v1/entities/{sf_residential}", headers=summit_headers)
+    check(
+        "other-root admin cannot open ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
+    # Entity-keyed writes into another tenant answer 404 before any permission
+    # check, and a tenant role never authorizes anything in another tenant.
+    response = client.post(
+        "/v1/memberships/",
+        json={"entity_id": sf_residential, "user_id": auditor_id, "role_ids": []},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot add members to an ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.patch(
+        f"/v1/memberships/{sf_residential}/{auditor_id}",
+        json={"status": "suspended"},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot change ACME memberships (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.post(
+        "/v1/auth/invite",
+        json={"email": f"cross-tenant-{uuid.uuid4().hex[:8]}@example.com", "entity_id": sf_residential, "role_ids": []},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot invite into an ACME entity (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
+    # Another tenant's role cannot be granted directly either: to itself, or
+    # through an invite without an entity (both look like a missing role).
+    acme_admin_role = next((r for r in role_rows if r["name"] == "acme_org_admin"), None)
+    summit_me = client.get("/v1/users/me", headers=summit_headers).json()
+    response = client.post(
+        f"/v1/users/{summit_me.get('id')}/roles",
+        json={"role_id": (acme_admin_role or {}).get("id")},
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot assign itself an ACME role (404)",
+        acme_admin_role is not None and response.status_code == 404,
+        f"http {response.status_code}",
+    )
+    response = client.post(
+        "/v1/auth/invite",
+        json={
+            "email": f"cross-role-{uuid.uuid4().hex[:8]}@example.com",
+            "role_ids": [(acme_admin_role or {}).get("id")],
+        },
+        headers=summit_headers,
+    )
+    check(
+        "other-root admin cannot invite with an ACME role (404)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
+
+    # A move that changes an entity's root fails closed while the moved
+    # subtree carries access (DD-061 decision 17), even for a superuser: a
+    # populated ACME team cannot be moved into Summit, and Summit sees none
+    # of it. The operator procedure — revoke the team's access, move it,
+    # re-grant in the destination — then moves it without handing Summit an
+    # ACME account or letting it revive the revoked membership. The team is
+    # archived after.
+    austin_office = by_name.get("austin_office")
+    acme_sf_office = by_name.get("sf_office")
+    moved_team = client.post(
+        "/v1/entities/",
+        json={
+            "name": f"itc_moved_{marker}",
+            "display_name": f"ITC Moved {marker}",
+            "slug": f"itc-moved-{marker}",
+            "entity_class": "access_group",
+            "entity_type": "team",
+            "parent_entity_id": acme_sf_office,
+        },
+        headers=admin_headers,
+    )
+    moved_team_id = moved_team.json().get("id")
+    moved_user_id, _ = register_user("moved")
+    client.post(
+        "/v1/memberships/",
+        json={"entity_id": moved_team_id, "user_id": moved_user_id, "role_ids": []},
+        headers=admin_headers,
+    )
+    refused = client.post(
+        f"/v1/entities/{moved_team_id}/move", json={"new_parent_id": austin_office}, headers=admin_headers
+    )
+    seen = client.get(f"/v1/users/{moved_user_id}", headers=summit_headers)
+    refused_error = refused.json().get("error") if refused.status_code == 422 else None
+    check(
+        "superuser cannot move a populated ACME team into Summit (422 ENTITY_MOVE_CARRIES_ACCESS)",
+        refused.status_code == 422 and refused_error == "ENTITY_MOVE_CARRIES_ACCESS" and seen.status_code == 404,
+        f"move http {refused.status_code} {refused_error}, Summit read http {seen.status_code}",
+    )
+    revoked = client.delete(f"/v1/memberships/{moved_team_id}/{moved_user_id}", headers=admin_headers)
+    moved = client.post(
+        f"/v1/entities/{moved_team_id}/move", json={"new_parent_id": austin_office}, headers=admin_headers
+    )
+    seen = client.get(f"/v1/users/{moved_user_id}", headers=summit_headers)
+    reset = client.patch(
+        f"/v1/users/{moved_user_id}/password", json={"new_password": "Hijacked1!x"}, headers=summit_headers
+    )
+    revived = client.patch(
+        f"/v1/memberships/{moved_team_id}/{moved_user_id}", json={"status": "active"}, headers=summit_headers
+    )
+    check(
+        "emptied ACME team moves into Summit; Summit gets no ACME account (404) or revoked membership (422)",
+        revoked.status_code == 204
+        and moved.status_code == 200
+        and seen.status_code == 404
+        and reset.status_code == 404
+        and revived.status_code == 422,
+        f"revoke http {revoked.status_code}, move http {moved.status_code}, read http {seen.status_code}, "
+        f"reset http {reset.status_code}, revive http {revived.status_code}",
+    )
+    if moved_team_id:
+        client.delete(f"/v1/entities/{moved_team_id}", headers=admin_headers)
+
+    # The permission catalog is shared by every tenant: the deliberately
+    # global catalog admin can still write it.
+    catalog_headers = {"Authorization": f"Bearer {tokens['permissions_admin']}"}
+    created = client.post(
+        "/v1/permissions/",
+        json={"name": f"smoke:{uuid.uuid4().hex[:8]}", "display_name": "Smoke"},
+        headers=catalog_headers,
+    )
+    deleted = (
+        client.delete(f"/v1/permissions/{created.json()['id']}", headers=catalog_headers)
+        if created.status_code == 201
+        else None
+    )
+    check(
+        "global catalog admin can create and delete a permission",
+        created.status_code == 201 and deleted is not None and deleted.status_code == 204,
+        f"create http {created.status_code}, delete http {getattr(deleted, 'status_code', None)}",
+    )
+
+    # The West Coast admin holds only org-scoped (never system-wide) roles, so
+    # it is NOT a global actor: its user scope is the ACME tenant.
+    regional_headers = {"Authorization": f"Bearer {tokens['regional_admin']}"}
+    regional_users = client.get("/v1/users/", params={"limit": 100}, headers=regional_headers)
+    regional_emails = {row["email"] for row in regional_users.json().get("items", [])}
+    check(
+        "regional admin is tenant-scoped, not global",
+        regional_users.status_code == 200
+        and PERSONAS["sf_agent"] in regional_emails
+        and PERSONAS["summit_admin"] not in regional_emails
+        and PERSONAS["summit_agent"] not in regional_emails,
+        f"http {regional_users.status_code}, {len(regional_emails)} users",
+    )
+
+    config = client.get("/v1/auth/config").json()
+    check(
+        "/auth/config publishes password policy and registration mode",
+        bool(config.get("password_policy")) and config.get("registration_mode") in {"open", "invite_only", "closed"},
+        f"registration_mode={config.get('registration_mode')}",
     )
 
     return finish()

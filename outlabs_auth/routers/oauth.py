@@ -555,7 +555,9 @@ async def oauth_callback(
     created_user = False
 
     if user is None:
-        if require_existing_user:
+        # A host that closed self-registration (enable_registration=False) gets
+        # invite-only OAuth too, whatever this router was built with.
+        if require_existing_user or not getattr(auth.config, "enable_registration", True):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No account found for this email",

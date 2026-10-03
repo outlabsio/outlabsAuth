@@ -67,6 +67,7 @@ async def main() -> None:
     port = int(os.getenv("PORT", "8003"))
     base_url = f"http://{host}:{port}"
     env = os.environ.copy()
+    env["SIMPLE_EXAMPLE_BASE_URL"] = base_url
 
     print("\n==> Resetting SimpleRBAC example DB/seed data")
     await _run([*UV_RUN, "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)

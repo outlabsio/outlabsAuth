@@ -27,6 +27,8 @@ class EntityResponse(BaseModel):
     child_display_name_pattern: Optional[str] = None
     child_slug_pattern: Optional[str] = None
     child_naming_guidance: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

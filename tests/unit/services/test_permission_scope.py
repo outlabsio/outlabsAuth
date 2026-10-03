@@ -841,3 +841,40 @@ async def test_get_effective_permission_names_excludes_entity_local_roles_withou
 
     assert global_projection == set()
     assert entity_projection == {perm_local.name}
+
+
+# =============================================================================
+# DD-061: direct (UserRoleMembership) roles follow the DD-054 matrix in an
+# entity context: org-scoped roles only inside their own root's tree,
+# entity-local roles only inside their scope, system-wide roles everywhere.
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_direct_role_applies_at_entity_follows_dd054_matrix():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    root_a, child_a, grandchild_a, root_b = uuid4(), uuid4(), uuid4(), uuid4()
+    ancestors_of_grandchild_a = {grandchild_a, child_a, root_a}
+    ancestors_of_child_a = {child_a, root_a}
+    ancestors_of_root_b = {root_b}
+    applies = PermissionService._direct_role_applies_at_entity
+
+    system_wide = SimpleNamespace(scope_entity_id=None, root_entity_id=None, scope=RoleScope.HIERARCHY)
+    assert applies(system_wide, root_b, ancestors_of_root_b)
+
+    org_scoped = SimpleNamespace(scope_entity_id=None, root_entity_id=root_a, scope=RoleScope.HIERARCHY)
+    assert applies(org_scoped, grandchild_a, ancestors_of_grandchild_a)
+    assert not applies(org_scoped, root_b, ancestors_of_root_b)
+    assert not applies(org_scoped, uuid4(), set())  # nonexistent entity
+
+    local_only = SimpleNamespace(scope_entity_id=child_a, root_entity_id=root_a, scope=RoleScope.ENTITY_ONLY)
+    assert applies(local_only, child_a, ancestors_of_child_a)
+    assert not applies(local_only, grandchild_a, ancestors_of_grandchild_a)
+    assert not applies(local_only, root_a, {root_a})
+
+    local_tree = SimpleNamespace(scope_entity_id=child_a, root_entity_id=root_a, scope=RoleScope.HIERARCHY)
+    assert applies(local_tree, grandchild_a, ancestors_of_grandchild_a)
+    assert not applies(local_tree, root_a, {root_a})
+    assert not applies(local_tree, root_b, ancestors_of_root_b)

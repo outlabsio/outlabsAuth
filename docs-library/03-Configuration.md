@@ -87,6 +87,9 @@ Other common toggles:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `enable_invitations` | `True` | Invite-by-email flow |
+| `enable_registration` | `True` | Public self-registration (`POST /auth/register` and new accounts from OAuth sign-in). Set `False` for invite-only or admin-provisioned deployments |
+| `allow_self_service_email_change` | `False` | Let users change their own email via `PATCH /users/me`; when enabled the request must include `current_password` |
+| `enforce_user_scope` | `True` | Tenant isolation for user, membership, permission and entity routes (transitional escape hatch) |
 | `enable_magic_links` | `False` | Passwordless magic links |
 | `enable_access_codes` | `False` | Passwordless access codes |
 | `enable_audit_log` | `False` | Legacy audit feature-status flag (does **not** gate session/audit HTTP routes) |
@@ -97,6 +100,13 @@ Other common toggles:
 | `login_ip_rate_limit_max` | `20` | Password-login attempts per client IP/window |
 | `login_ip_rate_limit_window_seconds` | `300` | Password-login IP window in seconds |
 | `login_ip_rate_limit_failure_mode` | `fail_closed` | Redis outage behavior (`local_fallback` is opt-in) |
+
+Public capability discovery (`GET /auth/config`) publishes the settings an
+admin UI must mirror: `registration_mode` (`open`, `invite_only` or `closed`),
+`password_policy` (minimum/maximum length, required character classes and the
+exact `special_characters` set), `access_code_length` and
+`self_service_email_change`. Build client-side validation from these values
+instead of hard-coding the defaults.
 
 `background_job_mode` accepts `"disabled"` (default) or `"embedded"`.
 Embedded mode is only a single-process development convenience. TaskQ, Celery,

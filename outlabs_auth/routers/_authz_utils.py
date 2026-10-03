@@ -21,6 +21,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth.core.exceptions import PermissionDeniedError
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.services.permission import PermissionService
+from outlabs_auth.utils.lifecycle import lifecycle_update_grants_access
+
+__all__ = [
+    "grantor_missing_permissions",
+    "lifecycle_update_grants_access",
+    "require_can_delegate_direct_roles",
+    "require_can_delegate_permissions",
+    "require_can_delegate_roles",
+]
 
 
 def grantor_missing_permissions(required: Iterable[str], granted: Set[str]) -> List[str]:
@@ -104,3 +113,46 @@ async def require_can_delegate_roles(
         permission_names=permission_names,
         entity_id=entity_id,
     )
+
+
+def _direct_role_grant_context(auth: Any, role: Any) -> Optional[UUID]:
+    """Entity where a *direct* role's grants take effect for SEC-2 containment.
+
+    With tenant scope enforced (EnterpriseRBAC, ``enforce_user_scope``), a
+    direct org-scoped role grants inside its root's tree and an entity-local
+    one inside its scope entity (DD-054 / DD-061 decision 10), so the grantor
+    must hold the permissions *there*. A system-wide role, SimpleRBAC and the
+    ``enforce_user_scope=False`` escape hatch keep the flat (no entity) check.
+    """
+    config = getattr(auth, "config", None)
+    if not (getattr(config, "enable_entity_hierarchy", False) and getattr(config, "enforce_user_scope", True)):
+        return None
+    return getattr(role, "scope_entity_id", None) or getattr(role, "root_entity_id", None)
+
+
+async def require_can_delegate_direct_roles(
+    session: AsyncSession,
+    *,
+    auth: Any,
+    actor_user_id: UUID,
+    roles: Iterable[Any],
+) -> None:
+    """SEC-2 containment for direct (``UserRoleMembership``) role grants.
+
+    Every permission a role can carry — its base permissions and its
+    entity-type-contextual ones, since a direct role reaches entities of every
+    type in its tree — must be held by the grantor at the role's own entity
+    context (see :func:`_direct_role_grant_context`).
+    """
+    for role in roles:
+        permission_names: Set[str] = set(await auth.role_service.get_role_permission_names(session, role.id))
+        contextual = await auth.role_service.get_role_entity_type_permission_names(session, role.id)
+        for names in contextual.values():
+            permission_names.update(names)
+        await require_can_delegate_permissions(
+            session,
+            auth=auth,
+            actor_user_id=actor_user_id,
+            permission_names=permission_names,
+            entity_id=_direct_role_grant_context(auth, role),
+        )

@@ -7,10 +7,17 @@ Tests the complete API flow including:
 - Blog post CRUD operations
 - Comment functionality
 """
-import requests
+import os
 import time
 
-BASE_URL = "http://localhost:8003"
+import requests
+
+# Target the server the smoke runner started (it exports HOST/PORT), so a
+# different process listening on the default port can never be tested instead.
+BASE_URL = os.getenv(
+    "SIMPLE_EXAMPLE_BASE_URL",
+    f"http://{os.getenv('HOST', 'localhost')}:{os.getenv('PORT', '8003')}",
+).rstrip("/")
 
 
 def test_health_check():

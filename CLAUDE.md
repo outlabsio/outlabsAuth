@@ -242,7 +242,7 @@ Validation" and "Database Upgrade Rehearsal".
 
 ```bash
 # ONE command: seed -> boot the EnterpriseRBAC example -> admin/ABAC smoke ->
-# 45-check HTTP assertion suite -> teardown. Non-zero exit on any failure.
+# 62-check HTTP assertion suite -> teardown. Non-zero exit on any failure.
 uv run python scripts/run_enterprise_example_smoke.py
 
 # The assertion suite alone, against an already-running instance (or staging):

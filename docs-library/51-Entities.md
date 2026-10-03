@@ -50,6 +50,12 @@ over querying closure yourself. Deeper write-up:
 Users get access via **memberships on entities**, not by appearing on the
 entity row alone — [Entity Memberships](./54-Entity-Memberships.md).
 
+An entity's `status` (`inactive`) and validity window do **not** suspend the
+access its members hold through their memberships — membership status and
+windows do that. They block entity-anchored API keys and integration
+principals (service accounts). Archiving an entity (`DELETE`) is different: it
+revokes the entity's memberships, anchored keys and principals.
+
 ---
 
 ## Permissions (short)
@@ -63,6 +69,62 @@ entity row alone — [Entity Memberships](./54-Entity-Memberships.md).
 Create under a parent uses tree create on that parent; root create falls back
 to a global create check.
 
+**Tenant scope (DD-061).** With `enforce_user_scope=True` (default) every entity
+route applies the same tenant scope as the user routes: non-global actors only
+list and open entities inside their resolved scope (their root tree plus
+membership subtrees; archived entities stay visible to their own tenant), and
+out-of-scope entities answer **404** — the scope check runs before the
+permission check, so this holds on tree-permission routes too. Changes that
+create, remove or reshape a tenant — creating a root, moving an entity to the
+root level or under another root, archiving a root — require a global actor
+(superuser or active system-wide role holder) and answer **403** otherwise.
+Moving to the root level must also satisfy the configured root entity types.
+
+**Root-changing moves fail closed (DD-061 decision 17).** A move that changes
+the subtree's root — under another root, to the root level, or a root under
+any parent — is refused for every caller, superusers included, while the
+subtree still carries access: **422** with error code
+`ENTITY_MOVE_CARRIES_ACCESS` (`details.reason =
+cross_root_move_carries_access`) and `details.access` counting each category:
+
+| Category | Counted while |
+|----------|---------------|
+| `memberships` | an entity membership in the subtree is not revoked (active, suspended, pending, expired) |
+| `pending_invitations` | an invited, not yet accepted account has such a membership or is rooted in the subtree |
+| `role_assignments` | a role anchored in the subtree (entity-local, or the org roles of a root inside it) is held through a non-revoked direct grant, a membership elsewhere or a non-archived integration principal |
+| `api_keys` | an API key anchored at a subtree entity is not revoked |
+| `integration_principals` | an integration principal anchored at a subtree entity is not archived |
+| `accounts` | an account (any status) is rooted in the subtree — only when a root is demoted |
+
+`await auth.entity_service.get_subtree_access(session, entity_id)` returns the
+same counts. To reorganize across tenants: revoke or archive the subtree's
+access (`DELETE /memberships/{entity_id}/{user_id}`, revoke direct grants and
+keys, archive principals), move it, then re-grant in the destination with the
+destination's own accounts and roles. Accounts never change tenant: a root
+that holds accounts cannot be demoted — move its children instead. An allowed
+move re-anchors the subtree's entity-local role definitions at the new root
+and is audited (`entity.moved` with `changes_root`, `previous_root_entity_id`
+and `reanchored_role_ids`). Moves within one root are unchanged.
+
+Revoked memberships stay behind as history and cannot be re-granted across the
+boundary: reactivating, widening or adding roles to a membership whose holder
+is rooted in another tree answers **422** (`membership_root_mismatch`) for
+every actor.
+
+**Subtrees moved on earlier releases.** Moves before 0.1.0a35 did not re-root
+members, so such a subtree can still hold memberships of another tenant's
+accounts. An account belongs to the tenant whose tree holds its root (DD-061
+decision 16): the member's root tenant keeps managing it, while the
+destination tenant sees it only through its membership and gets **403** on
+every account change (password, email, status, roles, sessions, keys) and on
+adding it elsewhere; it can still suspend or revoke the membership. The member
+cannot grant access in the destination tenant either — inviting into, adding
+members to, or re-granting memberships in an entity outside its own root's
+tree answers **403**, and so do creating an account rooted there
+(`POST /users`) and writing an entity-local role defined there. Revoke such
+memberships (see the 0.1.0a35 upgrade notes
+for the audit queries).
+
 ---
 
 ## HTTP API
@@ -74,10 +136,10 @@ Paths relative to `/v1/entities`.
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/` | `entity:read` | Paginated active entities. Query: `search`, `entity_class`, `entity_type`, `parent_id`, `root_only`, `page`, `limit` |
-| `POST` | `/` | Tree `entity:create` on `parent_entity_id` (or global if root) | `EntityCreateRequest` → `EntityResponse` (201) |
+| `POST` | `/` | Tree `entity:create` on `parent_entity_id` (root create: global actor) | `EntityCreateRequest` → `EntityResponse` (201) |
 | `GET` | `/{entity_id}` | `entity:read` | `EntityResponse` |
 | `PATCH` | `/{entity_id}` | `entity:update` | Partial `EntityUpdateRequest` (identity / parent not renamed here) |
-| `DELETE` | `/{entity_id}` | `entity:delete` | Query `cascade` (default false) → 204 |
+| `DELETE` | `/{entity_id}` | `entity:delete` | Query `cascade` (default false) → 204. Archiving a root needs a global actor |
 
 ### Tree navigation
 
@@ -86,7 +148,7 @@ Paths relative to `/v1/entities`.
 | `GET` | `/{entity_id}/children` | `entity:read` | Direct active children |
 | `GET` | `/{entity_id}/descendants` | Tree `entity:read` | Subtree; optional `entity_type` filter |
 | `GET` | `/{entity_id}/path` | `entity:read` | Breadcrumb root → entity |
-| `POST` | `/{entity_id}/move` | Entity `entity:update`; tree create on new parent if set | `EntityMoveRequest` (`new_parent_id` optional → promote to root). Rewrites closure |
+| `POST` | `/{entity_id}/move` | Entity `entity:update`; tree create on new parent if set | `EntityMoveRequest` (`new_parent_id` optional → promote to root: global actor and an allowed root type; under another root: global actor). A root-changing move of a subtree that carries access answers 422 `ENTITY_MOVE_CARRIES_ACCESS`. Rewrites closure |
 
 ### Create UX helper
 
@@ -120,7 +182,11 @@ Per-parent child rules still use the entity’s `allowed_child_*` fields.
 
 **`EntityResponse`:** `id`, `name`, `display_name`, `slug`, `description`,
 `entity_class`, `entity_type`, `parent_entity_id`, `status`, validity window,
-`allowed_child_classes` / `allowed_child_types`, optional naming governance.
+`allowed_child_classes` / `allowed_child_types`, optional naming governance,
+`created_at` / `updated_at` when loaded.
+
+Create, update (field-level diff), move and archive emit retained audit events
+(`category=entity`) — [Sessions & Audit](./05-Sessions-and-Audit.md).
 
 **`MemberResponse`:** `user_id`, email/names, `role_ids`, `role_names`.
 

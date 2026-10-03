@@ -1395,6 +1395,7 @@ async def test_tree_permission_allows_descendant_membership_create(
             last_name="Tree",
             is_superuser=False,
         )
+        # DD-061: the target must already be inside the actor's tenant.
         target = await auth_instance.user_service.create_user(
             session=session,
             email="target-tree@example.com",
@@ -1402,6 +1403,7 @@ async def test_tree_permission_allows_descendant_membership_create(
             first_name="Target",
             last_name="Tree",
             is_superuser=False,
+            root_entity_id=root.id,
         )
         await auth_instance.membership_service.add_member(
             session=session,

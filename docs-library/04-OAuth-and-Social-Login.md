@@ -68,7 +68,7 @@ Register the callback URLs with the provider console exactly as mounted.
 
 | Flag | Meaning |
 |------|---------|
-| `require_existing_user=True` | Invite-only OAuth; unknown emails are rejected |
+| `require_existing_user=True` | Invite-only OAuth; unknown emails are rejected (also forced when the host sets `enable_registration=False`) |
 | `associate_by_email=True` | Link provider identity to an existing local user with the same email — only for providers whose email verification you trust |
 | `is_verified_by_default` | Whether to treat the provider email as verified at link time |
 | `state_secret` | Required; signs OAuth state |
@@ -84,6 +84,14 @@ With `get_users_router` mounted (e.g. `/v1/users`):
 
 Associate flow (authenticated link) uses `get_oauth_associate_router`, not these
 list/unlink routes.
+
+When the associate router knows a landing URL (the state-bound frontend
+profile's `oauth_associate_success` route, else `error_redirect_url`, else
+`success_redirect_url`), the callback always returns to the SPA: success adds
+`?linked=<provider>`, failure adds `?link_error=<code>&provider=<provider>` with
+`code` one of `cancelled`, `provider`, `invalid_state`, `already_linked`,
+`provider_conflict` or `auth`. Without any landing URL the callback keeps
+answering JSON (API clients).
 
 ## Provider token storage (optional)
 

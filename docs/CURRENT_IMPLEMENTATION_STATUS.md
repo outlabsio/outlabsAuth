@@ -9,6 +9,38 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 
 ## Completed Slices
 
+### Admin-Console Authorization Hardening (0.1.0a35)
+
+- DD-061 extends DD-056 tenant isolation to membership, effective-permission
+  and entity routes; root create/move/archive need a global actor; direct
+  system-wide grants need a global actor; new accounts stay in the creator's
+  tenant; reactivation re-runs delegation containment. Direct org-scoped roles
+  only grant inside their own tree in entity context; tenant admins cannot
+  adopt unaffiliated accounts, invite into other tenants or mutate in-tree
+  global administrators (or accounts with a dormant system-wide grant);
+  personal API keys carry their owner's scope. Direct role grants are
+  tenant-bound (404 for another tenant's role, org roles only to users rooted
+  in their organization) and the permission catalog is global-only. Accounts
+  are managed only by the tenant that holds their root: membership-only
+  visibility (unrooted legacy members, members of a subtree moved across
+  roots on an earlier release) is read-only. A move that changes an entity's
+  root fails closed while the subtree carries access (memberships,
+  invitations, role assignments, keys, principals, rooted accounts) — for
+  superusers too — so cross-tenant reorganizations are revoke → move →
+  re-grant; memberships of another tree's accounts are never re-granted, and
+  only an entity's own tenant grants access in it, creates accounts rooted
+  in it (`POST /users`, invites) or changes its entity-local roles.
+- ABAC condition writes are validated and evaluation fails closed.
+- Console contract additions: `/auth/config` password policy, access-code
+  length and registration mode; session `is_current` via the `sid` claim and
+  `keep_current`; paginated member details with totals; names on
+  `/memberships/me`; role/permission definition history endpoints;
+  `has_password`; `updated_at`; entity/config audit events; system-integration
+  grantable scopes; OAuth associate failures redirect to the SPA.
+- Known, documented behavior: tenant scope is per tenant root (a first
+  membership roots the user), and ABAC-mode flat checks count direct role
+  assignments only (DD-061 judgement calls).
+
 ### Agent-First CLI Foundation
 
 - Local database lifecycle commands remain available under their published

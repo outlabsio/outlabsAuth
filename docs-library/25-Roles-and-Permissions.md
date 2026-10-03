@@ -33,27 +33,37 @@ app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
 | `GET` | `/` | `permission:read` | Paginated. Query: `page`, `limit`, `resource` |
-| `POST` | `/` | `permission:create` | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate). `is_system` must be false (422 otherwise) — see [System definitions](#system-definitions) |
+| `POST` | `/` | `permission:create` + global actor (Enterprise) | `PermissionCreateRequest` — `name` must be `resource:action` (409 on duplicate). `is_system` must be false (422 otherwise) — see [System definitions](#system-definitions) |
 | `GET` | `/{permission_id}` | `permission:read` | One permission |
-| `PATCH` | `/{permission_id}` | `permission:update` | Display/status/tags — **not** rename. System permissions rejected |
-| `DELETE` | `/{permission_id}` | `permission:delete` | System permissions rejected |
-| `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`) |
-| `GET` | `/user/{user_id}` | `permission:read` | Another user’s permission names |
-| `POST` | `/check` | `permission:check` | Batch check; optional `entity_id` for entity/tree context |
+| `PATCH` | `/{permission_id}` | `permission:update` + global actor (Enterprise) | Display/status/tags — **not** rename. System permissions rejected |
+| `DELETE` | `/{permission_id}` | `permission:delete` + global actor (Enterprise) | System permissions rejected |
+| `GET` | `/me` | Authenticated | Current user’s permission **names** (`list[str]`); optional `entity_id` |
+| `GET` | `/user/{user_id}` | `permission:read` + target in tenant scope | Another user’s permission names; optional `entity_id`. Out-of-scope users → 404 |
+| `POST` | `/check` | `permission:check` + target in tenant scope | Batch check; optional `entity_id` for entity/tree context |
+| `GET` | `/{permission_id}/history` | `permission:read` | Append-only definition history |
 
 **Schemas:** `PermissionResponse`, `PermissionCreateRequest`,
 `PermissionUpdateRequest`, `PermissionCheckRequest` /
 `PermissionCheckResponse` (`has_all_permissions`, `results` map).
 
-> `/me` and `/user/{id}` accept `entity_id` in query today but the service path
-> may not apply it. For “can they do X **here**?”, prefer
-> `POST /check` with `entity_id`.
+> Without `entity_id`, `/me` and `/user/{id}` return the historical aggregate
+> (the union across contexts, `*:*` for superusers). With `entity_id` they
+> return the catalog permissions held **at that entity** — direct grants there
+> plus `_tree` / `_all` grants inherited from ancestors — the same semantics as
+> `POST /check`. Gate entity-level UI actions on the entity-context set.
 
 For effective permissions **with sources** (role vs membership), use
 `GET /v1/users/{id}/permissions` on the users router.
 
 ABAC condition groups/conditions also hang off `/{permission_id}/…` when you
 use ABAC — same pattern as roles below.
+
+> **The catalog is shared by every tenant.** On EnterpriseRBAC with
+> `enforce_user_scope` (the default), creating, updating or deleting a
+> permission, and every write to its conditions or condition groups, needs a
+> global actor — a superuser, a holder of a direct system-wide role, a service
+> token or an unanchored integration principal. A tenant-scoped holder of
+> `permission:*` gets **403** (DD-061). Reads are unchanged.
 
 ### System definitions
 
@@ -85,7 +95,8 @@ Rationale and history: DD-060 in `docs/DESIGN_DECISIONS.md`.
 | `GET` | `/` | `role:read` | Paginated. Query: `page`, `limit`, `search`, `is_global`, `root_entity_id` |
 | `POST` | `/` | `role:create` | `RoleCreateRequest`. Actor must already hold every permission they attach |
 | `GET` | `/{role_id}` | `role:read` | One role |
-| `PATCH` | `/{role_id}` | `role:update` | `RoleUpdateRequest`; `permissions` replaces the set when sent |
+| `PATCH` | `/{role_id}` | `role:update` | `RoleUpdateRequest`; `permissions` replaces the set when sent. Widening changes (activation, `is_global`, hierarchy scope, auto-assign, new or **cleared** `assignable_at_types`) re-run containment for the role's permissions |
+| `GET` | `/{role_id}/history` | `role:read` | Append-only definition history (visibility rules apply) |
 | `DELETE` | `/{role_id}` | `role:delete` | 204 |
 | `POST` | `/{role_id}/permissions` | `role:update` | Body: `list[str]` permission names to add |
 | `DELETE` | `/{role_id}/permissions` | `role:update` | Body: `list[str]` to remove |
@@ -106,9 +117,22 @@ Rationale and history: DD-060 in `docs/DESIGN_DECISIONS.md`.
 Enterprise tips:
 
 - Non-global actors only manage roles in their trees; system-wide roles they
-  cannot touch → **403**; out-of-tree → **404**
+  cannot touch → **403**; out-of-tree → **404**. A personal API key carries
+  its owner's tenant scope (narrowed to its anchor when it has one), never
+  global scope on its own (DD-061)
+- Writes to an entity-local role (create with `scope_entity_id`, update,
+  delete, permission and ABAC condition changes) also need its scope entity
+  in the tree of a non-global actor's own root (**403** otherwise, DD-061
+  decision 17): a role seen only through a membership left in another
+  tenant's tree by an earlier cross-root move is read-only, and unrooted
+  legacy administrators change no entity-local roles
+- In an entity-context check a role assigned directly to a user follows the
+  same reach as a membership role: an org-scoped role only inside its own
+  organization's tree, an entity-local role only inside its scope,
+  system-wide roles everywhere (DD-054, DD-061)
 - SimpleRBAC treats list/create visibility as effectively global
-- `assignable_at_types` limits which entity types may receive the role
+- `assignable_at_types` limits which entity types may receive the role; an
+  empty list means *assignable everywhere*, so clearing it counts as widening
 - `is_auto_assigned` can auto-apply on membership create/update
 
 ### ABAC on roles (when enabled)

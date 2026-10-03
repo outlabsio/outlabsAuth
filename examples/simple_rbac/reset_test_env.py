@@ -277,6 +277,17 @@ async def reset_database():
                 "is_superuser": True,
             },
             {
+                # Non-superuser administrator: holds the Administrator role, so
+                # consoles can be tested against a delegated admin whose access
+                # comes from permissions rather than the superuser flag.
+                "email": "simple-admin@test.com",
+                "password": "Test123!!",
+                "first_name": "Delegated",
+                "last_name": "Admin",
+                "role": "admin",
+                "is_superuser": False,
+            },
+            {
                 "email": "editor@test.com",
                 "password": "Test123!!",
                 "first_name": "Editor",

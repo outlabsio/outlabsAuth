@@ -314,7 +314,7 @@ async def test_roles_router_callback_permission_and_abac_paths(
                 role_id=role.id,
                 data=AbacConditionCreateRequest(
                     attribute="resource.environment",
-                    operator="eq",
+                    operator="equals",
                     value="prod",
                 ),
                 session=session,
@@ -354,7 +354,7 @@ async def test_roles_router_callback_permission_and_abac_paths(
             return SimpleNamespace(
                 id=uuid.uuid4(),
                 attribute="resource.environment",
-                operator="eq",
+                operator="equals",
                 value="prod",
                 value_type="string",
                 description="condition created",
@@ -376,7 +376,7 @@ async def test_roles_router_callback_permission_and_abac_paths(
             role_id=role.id,
             data=AbacConditionCreateRequest(
                 attribute="resource.environment",
-                operator="eq",
+                operator="equals",
                 value="prod",
             ),
             session=session,
@@ -426,6 +426,12 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
     async with auth_instance.get_session() as session:
         actor = await _create_user(auth_instance, session, email_prefix="role-success")
         root = await _create_root(auth_instance, session, label="role-success-root")
+        # The scope mocked below is the actor's own tenant, so root the actor
+        # there: entity-local role writes need the role's entity in the
+        # actor's own root tree (DD-061 decision 17).
+        actor.root_entity_id = root.id
+        session.add(actor)
+        await session.flush()
         team = await auth_instance.entity_service.create_entity(
             session=session,
             name=f"team-success-{_suffix()}",
@@ -596,7 +602,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
             role.id,
             condition_group_id=group.id,
             attribute="resource.environment",
-            operator="eq",
+            operator="equals",
             value="prod",
             value_type="string",
             description="condition listed",
@@ -680,7 +686,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
                 role_id=role.id,
                 data=AbacConditionCreateRequest(
                     attribute="resource.environment",
-                    operator="eq",
+                    operator="equals",
                     value="prod",
                 ),
                 session=session,
@@ -703,7 +709,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
             return SimpleNamespace(
                 id=condition.id,
                 attribute="resource.region",
-                operator="eq",
+                operator="equals",
                 value="latam",
                 value_type="string",
                 description="condition updated",
@@ -716,7 +722,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
             condition_id=condition.id,
             data=AbacConditionUpdateRequest(
                 attribute="resource.region",
-                operator="eq",
+                operator="equals",
                 value="latam",
                 description="condition updated",
             ),

@@ -99,7 +99,8 @@ This script:
 
 | Email | Password | Role | Use For |
 |-------|----------|------|---------|
-| `admin@test.com` | `Test123!!` | Admin | Full access testing |
+| `admin@test.com` | `Test123!!` | Admin | Full access testing (superuser) |
+| `simple-admin@test.com` | `Test123!!` | Admin | Delegated admin: Administrator role without the superuser flag |
 | `editor@test.com` | `Test123!!` | Editor | Content management testing |
 | `writer@test.com` | `Test123!!` | Writer | Basic content creation testing |
 

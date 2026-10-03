@@ -24,10 +24,17 @@ app.include_router(get_users_router(auth, prefix="/v1/users"))
 |--------|------|------------|
 | `GET` | `/v1/users/me/sessions` | Authenticated |
 | `DELETE` | `/v1/users/me/sessions/{session_id}` | Authenticated (own session) |
-| `DELETE` | `/v1/users/me/sessions` | Authenticated — revoke all |
+| `DELETE` | `/v1/users/me/sessions` | Authenticated — revoke all (`?keep_current=true` keeps the calling session) |
 
 Response fields (see `UserSessionResponse`): `id`, `device_name`, `ip_address`,
-`user_agent`, `created_at`, `last_used_at`, `expires_at`, `usage_count`.
+`user_agent`, `created_at`, `last_used_at`, `expires_at`, `usage_count`,
+`is_current`.
+
+Access tokens carry a `sid` claim naming their session family, so the list can
+mark `is_current: true` on the caller's own session and
+`DELETE /v1/users/me/sessions?keep_current=true` can implement "sign out other
+devices". Tokens minted before 0.1.0a35 carry no `sid`: they match no row, and
+`keep_current=true` answers 400 until the user signs in again.
 
 ### Admin
 
@@ -81,6 +88,22 @@ Query params include `category`, `event_type`, `subject_user_id`,
 Scoped Enterprise actors only receive events whose `root_entity_id` is in their
 access scope. Global/superuser actors see the wider set according to scope
 resolution.
+
+Besides user lifecycle events the log carries structural changes:
+`category=entity` (`entity.created`, `entity.updated` with a field-level diff,
+`entity.moved`, `entity.archived`, rooted at the entity's tenant) and
+`category=config` (`config.entity_types_updated`, platform-wide, visible to
+global actors only). These events have no subject user.
+
+### Definition history
+
+Role and permission definitions keep an append-only history (who changed what,
+with before/after snapshots):
+
+| Method | Path | Permission |
+|--------|------|------------|
+| `GET` | `/v1/roles/{role_id}/history` | `role:read` + role visibility |
+| `GET` | `/v1/permissions/{permission_id}/history` | `permission:read` |
 
 If `user_audit_service` is not available, search returns an empty page rather
 than failing hard.

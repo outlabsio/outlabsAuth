@@ -197,8 +197,10 @@ class AuthConfig(BaseModel):
     enforce_user_scope: bool = Field(
         default=True,
         description=(
-            "Enforce entity-scope (tenant) isolation on user-management routes (DD-056). "
-            "Transitional escape hatch only — set False to restore pre-DD-056 cross-tree access."
+            "Enforce entity-scope (tenant) isolation on user, role, membership, permission and entity "
+            "routes, and bound direct org-scoped roles to their own tree in entity-context checks "
+            "(DD-056, DD-061). Transitional escape hatch only — set False to restore pre-DD-056 "
+            "cross-tree access."
         ),
     )
     enable_caching: bool = Field(
@@ -221,6 +223,22 @@ class AuthConfig(BaseModel):
     enable_invitations: bool = Field(
         default=True,
         description="Enable user invitation system (invite by email, set password later)",
+    )
+    enable_registration: bool = Field(
+        default=True,
+        description=(
+            "Allow public self-registration (POST /auth/register and new-account creation "
+            "from OAuth sign-in). Disable for invite-only or admin-provisioned deployments; "
+            "advertised as registration_mode in /auth/config."
+        ),
+    )
+    allow_self_service_email_change: bool = Field(
+        default=False,
+        description=(
+            "Allow users to change their own email via PATCH /users/me. Disabled by default: "
+            "an email change combined with password recovery can turn a stolen session into "
+            "an account takeover. When enabled, the request must carry current_password."
+        ),
     )
     invite_token_expire_days: int = Field(
         default=7,

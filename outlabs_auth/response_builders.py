@@ -47,7 +47,18 @@ def build_user_response(user: Any, root_entity_name: Optional[str] = None) -> Us
         suspended_until=getattr(user, "suspended_until", None),
         locked_until=getattr(user, "locked_until", None),
         deleted_at=getattr(user, "deleted_at", None),
+        has_password=_user_has_password(user),
     )
+
+
+def _user_has_password(user: Any) -> bool:
+    """A usable password needs both a hash and the PASSWORD auth method."""
+    if not getattr(user, "hashed_password", None):
+        return False
+    methods = getattr(user, "auth_methods", None)
+    if methods is None:
+        return True
+    return "PASSWORD" in {str(method).upper() for method in methods}
 
 
 async def build_user_responses(

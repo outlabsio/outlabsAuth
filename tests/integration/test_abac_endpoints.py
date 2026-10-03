@@ -280,7 +280,7 @@ async def test_role_abac_updates_allow_explicit_ungrouping_and_description_clear
     condition_response = await client.post(
         f"/v1/roles/{role_id}/conditions",
         json={
-            "attribute": "context.region",
+            "attribute": "resource.region",
             "operator": "equals",
             "value": "latam",
             "value_type": "string",
@@ -344,7 +344,7 @@ async def test_permission_abac_updates_allow_explicit_ungrouping_and_description
     condition_response = await client.post(
         f"/v1/permissions/{permission_id}/conditions",
         json={
-            "attribute": "context.department",
+            "attribute": "resource.department",
             "operator": "equals",
             "value": "finance",
             "value_type": "string",

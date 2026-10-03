@@ -248,7 +248,7 @@ async def test_permission_definition_history_records_abac_condition_group_and_co
         f"/v1/permissions/{permission_id}/conditions",
         headers=headers,
         json={
-            "attribute": "context.department",
+            "attribute": "resource.department",
             "operator": "equals",
             "value": "finance",
             "value_type": "string",
@@ -317,7 +317,7 @@ async def test_permission_definition_history_records_abac_condition_group_and_co
             {
                 "id": condition_id,
                 "condition_group_id": None,
-                "attribute": "context.department",
+                "attribute": "resource.department",
                 "operator": "equals",
                 "value": "finance",
                 "value_type": "string",
@@ -356,7 +356,7 @@ async def test_permission_definition_history_records_abac_condition_group_and_co
         assert created_condition_event.event_metadata["condition"] == {
             "id": condition_id,
             "condition_group_id": group_id,
-            "attribute": "context.department",
+            "attribute": "resource.department",
             "operator": "equals",
             "value": "finance",
             "value_type": "string",

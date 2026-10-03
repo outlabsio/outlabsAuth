@@ -30,7 +30,16 @@ from outlabs_auth.observability import (
     get_observability_with_auth,
 )
 from outlabs_auth.response_builders import build_user_response_async
-from outlabs_auth.routers._authz_utils import require_can_delegate_roles
+from outlabs_auth.routers._authz_utils import require_can_delegate_direct_roles, require_can_delegate_roles
+from outlabs_auth.routers._scope import (
+    require_direct_role_grants_in_scope,
+    require_entity_visible_or_404,
+    require_membership_write_in_principal_tenant,
+    resolve_root_for_scoped_create,
+    role_not_found,
+    scope_enforced,
+)
+from outlabs_auth.services.role import require_direct_role_root_match
 from outlabs_auth.routers.capabilities import build_auth_config_response, mark_auth_surface
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
@@ -156,6 +165,14 @@ def get_auth_router(
 
         Triggers on_after_register hook.
         """
+        if not auth.config.enable_registration:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "registration_disabled",
+                    "message": "Self-registration is disabled on this server.",
+                },
+            )
         try:
             user = await auth.user_service.create_user(
                 session,
@@ -835,13 +852,41 @@ def get_auth_router(
 
             role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
             target_entity_id = UUID(data.entity_id) if data.entity_id else None
-            containment_role_ids = role_ids
+            actor_auth_result = getattr(
+                getattr(getattr(obs, "request", None), "state", None),
+                "_outlabs_auth_result",
+                None,
+            )
+            containment_role_ids = role_ids if target_entity_id is not None else []
             if target_entity_id is not None:
                 if actor_user_id is None:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authenticated actor is required for membership delegation",
                     )
+                # DD-061: an inviter can only place the invitee in an entity of
+                # its own tenant. Out of scope answers 404, like the entity routes;
+                # an entity the inviter reaches only through a membership in
+                # another tree answers 403 (decision 17): the invitee would be
+                # rooted in that tree.
+                inviter_auth_result = actor_auth_result or {
+                    "source": "jwt",
+                    "user_id": str(actor_user_id),
+                    "user": actor_user,
+                }
+                inviter_scope = await require_entity_visible_or_404(
+                    auth,
+                    session,
+                    inviter_auth_result,
+                    target_entity_id,
+                )
+                await require_membership_write_in_principal_tenant(
+                    auth,
+                    session,
+                    inviter_auth_result,
+                    target_entity_id,
+                    scope=inviter_scope,
+                )
                 can_create_membership = await auth.permission_service.check_permission(
                     session,
                     actor_user_id,
@@ -872,6 +917,63 @@ def get_auth_router(
                     entity_id=target_entity_id,
                 )
 
+            invite_root_entity_id = None
+            if target_entity_id is None:
+                # Without an entity the role_ids become direct assignments, with
+                # the same rules as POST /users/{id}/roles (DD-061): a
+                # system-wide role needs a global actor (403), another tenant's
+                # role answers 404, and SEC-2 containment runs where each role
+                # takes effect.
+                direct_roles: list[Any] = []
+                for role_id in role_ids:
+                    direct_role = await auth.role_service.get_role_by_id(session, role_id)
+                    if not direct_role:
+                        raise role_not_found()
+                    direct_roles.append(direct_role)
+                requested_root_entity_id = None
+                if direct_roles:
+                    if actor_user_id is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Authenticated actor is required for role delegation",
+                        )
+                    await require_direct_role_grants_in_scope(
+                        auth,
+                        session,
+                        roles=direct_roles,
+                        actor_user=actor_user,
+                        auth_result=actor_auth_result,
+                        check_target_root=False,
+                    )
+                    await require_can_delegate_direct_roles(
+                        session,
+                        auth=auth,
+                        actor_user_id=actor_user_id,
+                        roles=direct_roles,
+                    )
+                    if scope_enforced(auth):
+                        # A direct org-scoped role belongs to its holder's own
+                        # tree, so the invitee is rooted where its roles are.
+                        role_roots = {
+                            role.root_entity_id for role in direct_roles if role.root_entity_id is not None
+                        }
+                        if len(role_roots) == 1:
+                            requested_root_entity_id = next(iter(role_roots))
+                # DD-056 creation rule: a tenant-scoped inviter places the
+                # invitee in its own tenant instead of outside every tree.
+                invite_root_entity_id = await resolve_root_for_scoped_create(
+                    auth,
+                    session,
+                    actor_user=actor_user,
+                    auth_result=actor_auth_result,
+                    requested_root_entity_id=requested_root_entity_id,
+                )
+                # Roles from several organizations (or a root the inviter did
+                # not get) cannot all match one invitee root: 422 before any
+                # account is created.
+                for direct_role in direct_roles:
+                    require_direct_role_root_match(auth.config, direct_role, invite_root_entity_id)
+
             user, plain_token = await auth.user_service.invite_user(
                 session,
                 email=data.email,
@@ -879,7 +981,7 @@ def get_auth_router(
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
                 invited_by_id=actor_user_id,
-                root_entity_id=None,
+                root_entity_id=invite_root_entity_id,
             )
 
             # If entity_id is provided, roles are applied through the entity

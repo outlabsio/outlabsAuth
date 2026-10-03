@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 import click
@@ -57,6 +58,12 @@ def account_show():
 @click.option("--last-name", default=None)
 @click.option("--phone", default=None, help="E.164 WhatsApp/SMS number.")
 @click.option("--clear-phone", is_flag=True)
+@click.option(
+    "--current-password-stdin",
+    is_flag=True,
+    help="Read the current password from stdin (re-authentication for an email change).",
+)
+@click.option("--current-password-env", default="OUTLABS_AUTH_CURRENT_PASSWORD", show_default=True)
 def account_update(
     json_source: Optional[str],
     email: Optional[str],
@@ -64,8 +71,14 @@ def account_update(
     last_name: Optional[str],
     phone: Optional[str],
     clear_phone: bool,
+    current_password_stdin: bool,
+    current_password_env: str,
 ):
-    """Update the current profile; email or phone changes may require verification."""
+    """Update the current profile; email or phone changes may require verification.
+
+    Changing the email is refused unless the server enables self-service email
+    change, and then requires the current password (stdin or environment).
+    """
 
     if phone is not None and clear_phone:
         raise click.UsageError("Use --phone or --clear-phone, not both.")
@@ -79,6 +92,14 @@ def account_update(
     if clear_phone:
         payload["phone"] = None
     require_nonempty_payload(payload)
+    if payload.get("email") and "current_password" not in payload:
+        if current_password_stdin or os.environ.get(current_password_env):
+            payload["current_password"] = read_secret(
+                from_stdin=current_password_stdin,
+                env_name=current_password_env,
+                prompt="Current password",
+                missing_code="CURRENT_PASSWORD_MISSING",
+            )
     target, client = remote_client()
     result, meta = client.request("PATCH", "/users/me", json_body=payload)
     emit_remote_result(

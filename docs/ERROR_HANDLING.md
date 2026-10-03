@@ -124,6 +124,7 @@ OutlabsAuthException                       (AUTH_ERROR, 500)
 │
 ├── ValidationError                        (VALIDATION_ERROR, 422)
 │   ├── InvalidInputError                  (INVALID_INPUT)
+│   │   └── EntityMoveCarriesAccessError   (ENTITY_MOVE_CARRIES_ACCESS)  [EnterpriseRBAC]
 │   └── MissingRequiredFieldError          (MISSING_REQUIRED_FIELD)
 │
 ├── RateLimitError                         (RATE_LIMIT_EXCEEDED, 429)
@@ -207,6 +208,7 @@ is the authoritative value emitted in the `error` field of an API response.
 | `INVALID_PASSWORD` | 400 | Password fails policy requirements |
 | `EMAIL_NOT_VERIFIED` | 400 | Email address not verified |
 | `INVALID_INPUT` | 422 | Input data invalid |
+| `ENTITY_MOVE_CARRIES_ACCESS` | 422 | A move would change an entity's root while its subtree still carries access (DD-061 decision 17); `details.access` counts what to revoke first |
 | `MISSING_REQUIRED_FIELD` | 422 | Required field absent |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit hit |
 | `CONFIGURATION_ERROR` | 500 | Invalid library configuration |

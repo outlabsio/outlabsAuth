@@ -5,18 +5,374 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a35] - 2026-10-02
+
+Admin-console hardening release: closes the backend scope and delegation gaps
+found by the console audit (DD-061) and adds the contract fields consoles need.
+Items marked **Breaking** are security fixes that change behavior for
+tenant-scoped administrators or ABAC policies; global actors (superusers and
+holders of a direct system-wide role) and SimpleRBAC are unaffected unless
+noted.
 
 ### Security
 
-- Require `pyjwt[crypto]>=2.15.1`. PyJWT 2.13.0 and earlier are affected by PYSEC-2026-4140 to
-  PYSEC-2026-4152. These include an uncaught `RecursionError` in `jwt.decode()` on a deeply nested
-  token header, raw-token revocation bypass through non-canonical signature segments, HMAC versus
-  asymmetric key-confusion guard bypasses, and `PyJWKClient` JWKS fetching issues. Consumers should
-  also upgrade their own locked `pyjwt` to 2.15.1 without waiting for the next release.
-- Lock `urllib3` 2.8.0 (PYSEC-2026-4175 to PYSEC-2026-4177). It reaches the OAuth, notification and
-  stress dependency graphs transitively, so it is a lock-only change; consumers should refresh their
-  own lock too.
+- Require `pyjwt[crypto]>=2.15.1`. PyJWT 2.13.0 and earlier are affected by
+  PYSEC-2026-4140 to PYSEC-2026-4152: an uncaught `RecursionError` in
+  `jwt.decode()` on a deeply nested token header, raw-token revocation bypass
+  through non-canonical signature segments, HMAC versus asymmetric
+  key-confusion guard bypasses, and `PyJWKClient` JWKS fetching issues.
+  Consumers should also upgrade their own locked `pyjwt` to 2.15.1.
+- Lock `urllib3` 2.8.0 (PYSEC-2026-4175 to PYSEC-2026-4177). It reaches the
+  OAuth, notification and stress dependency graphs transitively, so it is a
+  lock-only change; consumers should refresh their own lock too.
+- **Breaking:** a move that changes an entity's root fails closed (DD-061
+  decision 17). `POST /entities/{id}/move` and `EntityService.move_entity`
+  refuse — for every caller, superusers included — to move a subtree under
+  another root, promote it to the root level or move a root under any parent
+  while the subtree still carries access: entity memberships that are not
+  revoked (active, suspended, pending, expired or rejected), pending
+  invitations into it, non-revoked direct role assignments of roles anchored
+  in it and memberships or integration principals elsewhere holding such a
+  role, non-revoked API keys and non-archived integration principals anchored
+  in it, or accounts rooted in it. The answer is **422** with error code
+  `ENTITY_MOVE_CARRIES_ACCESS` (`EntityMoveCarriesAccessError`,
+  `details.reason = cross_root_move_carries_access`, `details.access` with a
+  count per category). Moves within one root are unchanged. Before, the
+  memberships, role grants, keys and invitations of a moved subtree kept, or
+  let their holders create, authority in the destination tenant: a member of
+  a subtree a superuser moved under another root could invite a new account
+  into it — rooted in the destination tenant — with a destination role whose
+  permission names it held, and use that account to reset the destination
+  org admin's password. An allowed root-changing move re-anchors the
+  subtree's entity-local role definitions at the new root and records
+  `changes_root`, `previous_root_entity_id` and `reanchored_role_ids` on the
+  `entity.moved` audit event. Moving an entity under another root now also
+  needs a global actor (**403**), like moving one to the root level.
+- **Breaking:** a membership whose holder is rooted in another tree is never
+  re-granted: reactivating it, widening its validity window or adding roles
+  to it (`PATCH /memberships/{entity_id}/{user_id}`,
+  `MembershipService.update_membership`, `reactivate_membership`) answers
+  **422** (`details.reason = membership_root_mismatch`) for every actor — the
+  counterpart of `add_member`'s root rule. Suspending, narrowing and revoking
+  are unchanged. Revoked memberships left in a subtree that changed roots
+  therefore stay revoked.
+- **Breaking:** only an entity's own tenant grants access in it, creates
+  accounts in it or changes the roles defined there. For a non-global actor,
+  `POST /memberships`, `POST /auth/invite` with an `entity_id`, and
+  `PATCH /memberships/{entity_id}/{user_id}` edits that re-grant or add roles
+  answer **403** unless the entity lies in the tree of the actor's own root;
+  so do `POST /users` and `POST /auth/invite` without an `entity_id` for a
+  new account's root (`details.reason = root_entity_outside_tenant`), and
+  every write to an entity-local role on the roles router (`POST /roles`
+  with a `scope_entity_id`, `PATCH`/`DELETE /roles/{id}`,
+  `POST`/`DELETE /roles/{id}/permissions` and the role condition and
+  condition-group writes) unless the role's scope entity does. A personal
+  API key is judged by its owner's root. In consistent data that is every
+  entity in the actor's scope; the rule refuses members left in another
+  tenant's tree by a cross-root move on an earlier release, and unrooted
+  legacy administrators, who now create no accounts at all. Before, such a
+  member could still plant accounts in that tenant or hand out its roles: a
+  tenant admin with only a roleless membership in a subtree promoted to a
+  root created that tenant's accounts through `POST /users` (with a password
+  it knew, using its own tenant's `user:create`), which the new tenant then
+  managed as its own, and could rename, strip or delete the roles defined
+  there.
+- **Breaking:** direct role grants follow the DD-054 matrix in an entity
+  context. An org-scoped role assigned directly to a user (`root_entity_id`
+  set) now grants only at entities inside its own root's tree (archived ones
+  included), and an entity-local one only inside its scope; system-wide roles
+  still grant everywhere and checks without an entity are unchanged. Before,
+  a tenant admin's org-scoped direct role granted its permissions at any
+  entity of any tenant, which let it invite into or add members to another
+  tenant's entities and passed host routes guarded by `require_permission`
+  with an entity context, `require_entity_permission` or
+  `require_tree_permission`. Covers `check_permission`, effective permission
+  names, delegation containment and API-key grantable scopes.
+- **Breaking:** `POST /memberships` requires the target user to be inside the
+  actor's scope (404 otherwise, like a nonexistent user). A tenant admin can
+  no longer pull an unaffiliated account — for example an unrooted holder of a
+  system-wide role — into its tenant and then take it over; adopting such
+  accounts needs a global actor.
+- **Breaking:** an account is managed only by its own tenant. For a
+  non-global actor, every user mutation route (`PATCH /users/{id}`,
+  `PATCH /users/{id}/password`, `PATCH /users/{id}/status`,
+  `POST /users/{id}/restore`, `DELETE /users/{id}`,
+  `POST /users/{id}/resend-invite`, `POST`/`DELETE /users/{id}/roles...`,
+  `PATCH /users/{id}/role-memberships/{id}`, session and API-key revocation)
+  and `POST /memberships` now answer **403** unless the target account's root
+  is the actor's own root or lies below it. Visibility is unchanged: an
+  account seen only through an active membership in the actor's scope — an
+  unrooted legacy member, or a member of a subtree that a global actor moved
+  under another root or to the root level on an earlier release — stays
+  readable. Before, that
+  membership was enough to modify the account: after a superuser moved a
+  populated subtree under another tenant's root, the destination tenant's
+  admins could reset the passwords of the moved members, including the old
+  tenant's org admins, and sign in as them; a member of a moved subtree that
+  became a root could likewise take over the new tenant's accounts; and a
+  tenant admin could adopt an unrooted legacy member through
+  `POST /memberships`. Unrooted non-global actors no longer modify any
+  account. A personal API key is judged by its owner's root, so an entity
+  anchor does not stop it from adding its owner's tenant members it can see.
+- **Breaking:** the superuser-target guard now also protects every account
+  with a direct system-wide role row — active, scheduled (`valid_from` in the
+  future), suspended, expired or revoked, whatever the role definition's
+  status: a tenant admin gets 403 when updating, resetting the password of,
+  changing the status of, restoring, deleting, re-inviting or changing the
+  roles, sessions or API keys of such an account. A grant that is not active
+  yet can become active without anyone reviewing the account again, so a
+  tenant admin who reset its password today would inherit global scope later.
+  Reads are unchanged.
+- **Breaking:** direct role grants are tenant-bound. `POST /users/{id}/roles`,
+  `POST /auth/invite` without `entity_id`, and reactivating or widening a
+  direct role membership (`PATCH /users/{id}/role-memberships/{id}`) now
+  answer **404** for a role outside the actor's scope (another tenant's role
+  is indistinguishable from a nonexistent one, the roles router's read rule),
+  run SEC-2 containment at the role's own entity context (its root, or its
+  scope entity) counting its entity-type permissions instead of flat, and
+  refuse an org-scoped role whose root is not the target user's root (**422**,
+  `details.reason = role_root_mismatch`). The root rule applies to every
+  actor, superusers included, and is also enforced by
+  `RoleService.assign_role_to_user` and `update_user_role_membership`; a
+  global inviter's invitee without an entity is rooted in the organization of
+  its direct roles (roles from two organizations: 422, no account). Before, a
+  tenant admin who knew another tenant's role ID could grant it to itself, an
+  in-tree user or an invitee and, through the direct-role tree bound, pass
+  host routes and service checks inside that tenant. Narrowing or suspending a
+  direct role membership is never checked.
+- **Breaking:** the shared permission catalog is written by global actors
+  only. `POST /permissions`, `PATCH`/`DELETE /permissions/{id}` and every
+  `POST`/`PATCH`/`DELETE` under `/permissions/{id}/conditions` and
+  `/permissions/{id}/condition-groups` answer **403** for a tenant-scoped
+  actor, like system-wide roles on the roles router. Permission definitions
+  and their ABAC conditions apply in every tenant, so a tenant admin holding
+  `permission:update` could deactivate a permission or delete a condition
+  platform-wide. Reads are unchanged.
+- **Breaking:** `POST /auth/invite` with an `entity_id` outside the inviter's
+  tenant answers 404 and creates no account.
+- **Breaking:** the roles router resolves a personal API key to its owner's
+  tenant scope. An unanchored personal key used to count as a global
+  credential there, so a tenant admin's key could read and edit other
+  tenants' roles (and create system-wide roles where hosts allow `create` on
+  personal keys). A key anchored at an entity reaches only the part of its
+  owner's scope its anchor covers; superuser owners stay global.
+- **Breaking:** entity-keyed routes check tenant scope before the permission
+  check, so an out-of-scope or nonexistent entity answers **404** where it
+  used to answer 403: `POST /memberships`, `GET /memberships/entity/{id}`
+  (and `/details`, `/members`), `PATCH`/`DELETE /memberships/{entity_id}/{user_id}`,
+  every `/entities/{id}...` route, `GET /roles/entity/{id}`,
+  `/admin/entities/{id}/api-keys*` and
+  `/admin/entities/{id}/integration-principals*`. In-scope entities still
+  answer 403 when the caller lacks the permission.
+- **Breaking:** `GET /memberships/user/{user_id}`, `GET /permissions/user/{user_id}`
+  and `POST /permissions/check` apply the DD-056 target scope. A tenant-scoped
+  caller asking about a user outside its tenant gets **404**, identical to a
+  nonexistent user (unknown users on `/memberships/user/{id}` now also answer
+  404 instead of an empty list). Self-requests always pass.
+- **Breaking:** entity routes are tenant-scoped (DD-061). `GET /entities/`
+  lists only entities inside the caller's scope; get, children, path,
+  descendants, members, update, archive, move and type suggestions answer
+  **404** for out-of-scope entities. Creating a root entity, moving an entity
+  to the root level or under another root, and archiving a root now require a
+  global actor (**403** otherwise), and a move to the root level must satisfy
+  the configured root entity types (**422** otherwise).
+- **Breaking:** directly granting a system-wide role — `POST /users/{id}/roles`,
+  `POST /auth/invite` without `entity_id`, or reactivating a direct role
+  membership — requires a global actor, because a direct system-wide role makes
+  its holder global (DD-056). Refusals answer 403 with
+  `details.system_wide_role_ids`. The guard itself counts a global principal
+  without a user record (a service token or an unanchored integration
+  principal) as global; the HTTP grant routes still need a human actor
+  because SEC-2 delegation is evaluated against a user (unchanged).
+- **Breaking:** tenant-scoped actors can only root new accounts inside their
+  own tenant: `POST /users` with another tenant's `root_entity_id` answers
+  403 (also when a membership puts that root in the actor's scope, see
+  above); with no root, the new account (and an invitee without an entity)
+  inherits the actor's own root instead of being created outside every
+  tenant.
+- Reactivating a suspended/revoked direct role membership or entity membership,
+  or widening its validity window, re-runs SEC-2 delegation containment (403
+  with `details.missing_permissions`). Suspending or narrowing is never checked.
+- Clearing a role's `assignable_at_types` (which makes it assignable
+  everywhere) now counts as widening and requires containment; comparisons are
+  case-insensitive.
+- **Breaking:** ABAC condition writes (roles and permissions, HTTP and service
+  layer) reject unknown operators, attribute paths outside `user.` /
+  `resource.` / `env.` / `time.`, and values that do not fit the operator or
+  `value_type` (400 with `details.reason = invalid_abac_condition`). Operators
+  and `value_type` are stored lowercase.
+- **Breaking:** ABAC evaluation fails closed: a missing attribute no longer
+  satisfies `is_false`; `not_in` with a non-list value and `not_contains` on a
+  non-collection attribute evaluate false; a stored condition that cannot be
+  interpreted evaluates false instead of raising a 500.
+- **Breaking:** self-service email change is disabled by default.
+  `PATCH /users/me` with a different `email` answers 403
+  (`details.reason = self_service_email_change_disabled`) unless the host sets
+  `allow_self_service_email_change=True`, in which case the request must carry
+  `current_password` (422 when missing, 401 when wrong). Resending the
+  unchanged address is accepted; admin edits via `PATCH /users/{id}` are
+  unchanged.
+- `GET /users/orphaned` shows tenant-scoped actors the orphans rooted inside
+  their scope (it was always empty for them) and excludes soft-deleted
+  accounts unless `?status=deleted`; `status` filters by account status.
+
+### Added
+
+- `EntityService.get_subtree_access(session, entity_id)` counts the access a
+  subtree carries per category (the counts a root-changing move checks), and
+  `EntityService.get_root_entity_id(session, entity_id)` returns an entity's
+  root. `EntityMoveCarriesAccessError` (`outlabs_auth.core.exceptions`, a
+  422 `InvalidInputError`) carries the refused move's counts.
+- `GET /auth/config` publishes `password_policy` (lengths, required character
+  classes and the exact `special_characters` set), `access_code_length`,
+  `registration_mode` (`open` | `invite_only` | `closed`) and
+  `self_service_email_change`; `features` gains `registration` and
+  `self_service_email_change`.
+- `enable_registration` config flag (default `True`). When `False`,
+  `POST /auth/register` answers 403 (`code: registration_disabled`) and OAuth
+  sign-in no longer creates new accounts.
+- Access tokens carry a `sid` claim (the session family). Session lists return
+  `is_current`, and `DELETE /users/me/sessions?keep_current=true` signs out
+  every other session.
+- OAuth account linking redirects failures back to the SPA with
+  `?link_error=<code>&provider=<name>` whenever a landing URL is known;
+  `get_oauth_associate_router` accepts an optional `error_redirect_url`.
+- `GET /admin/entities/{entity_id}/integration-principals/grantable-scopes` and
+  `GET /admin/system/integration-principals/grantable-scopes` expose the
+  system-integration grant policy for service-account scope pickers.
+- `GET /memberships/entity/{entity_id}/members`: paginated member details with
+  `total` and optional `search`.
+- `/permissions/me` and `/permissions/user/{id}` honor `entity_id` (permissions
+  effective at that entity, like `POST /permissions/check`); without it they
+  keep returning the historical aggregate.
+- `GET /roles/{role_id}/history` and `GET /permissions/{permission_id}/history`
+  expose the existing append-only definition history.
+- Retained audit events for entity create, update (field diff), move and
+  archive (`category=entity`) and entity-type configuration changes
+  (`category=config`).
+- Response fields: `has_password` on users; `entity_name`,
+  `entity_display_name`, `entity_type`, `role_names` and `updated_at` on
+  memberships; `updated_at` on entity member details; `created_at` /
+  `updated_at` on entities.
+
+### Changed
+
+- Host-minted service tokens resolve to global scope on the roles router, as
+  they already did on the other scoped routers (the roles router used to give
+  them an empty scope).
+- The EnterpriseRBAC seed roots its SF team lead and agents at ACME, the
+  organization of their direct baseline roles (required by the direct-role
+  root rule).
+- The example seeds now exercise every console persona and lifecycle state:
+  the EnterpriseRBAC seed installs the library permission catalog verbatim
+  (legacy `apikey:*` and `user:manage` are gone), scoped personas hold
+  org-scoped roles instead of direct system-wide roles (the permission catalog
+  admin is the one deliberately global persona), and memberships, direct roles,
+  API keys, service accounts, sessions, entities and ABAC conditions are seeded
+  in every state with fixtures that no longer expire. SimpleRBAC seeds a
+  non-superuser administrator.
+- Both example apps read `LOGIN_IP_RATE_LIMIT_MAX` /
+  `LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS`; the SimpleRBAC example's CORS allows the
+  `FRONTEND_URL` origin like the EnterpriseRBAC example; the example console
+  profile declares an account-linking landing.
+- The ABAC cookbook seeds through migrations with a valid secret and editable
+  ABAC definitions, and its smoke runs in release CI. The EnterpriseRBAC
+  integration suite adds tenant-scope checks (62 checks).
+
+### Database migrations
+
+- None.
+
+### Operational upgrade notes
+
+- Tenant-scoped admins that relied on cross-tenant entity, membership or
+  permission access, on creating/promoting/archiving roots, on granting
+  system-wide roles directly, on adopting unaffiliated accounts or on managing
+  in-tree global administrators need a global actor (a superuser assigns a
+  system-wide role) — see DD-061. `enforce_user_scope=False` still restores
+  the unscoped behavior (including the unbounded entity-context reach of
+  direct org-scoped roles) for one more alpha cycle.
+- Permission-catalog administrators (create, update, delete permissions and
+  their ABAC conditions) need a global actor: give them a system-wide role, as
+  the example's permission catalog admin has.
+- Direct org-scoped role rows whose root differs from the holder's root (for
+  example an unrooted user holding a tenant role) keep their reach inside the
+  role's tree but can no longer be assigned, reactivated or widened. Find them
+  with `SELECT m.id FROM user_role_memberships m JOIN roles r ON r.id =
+  m.role_id JOIN users u ON u.id = m.user_id WHERE r.root_entity_id IS NOT
+  NULL AND r.root_entity_id IS DISTINCT FROM u.root_entity_id`. An unrooted
+  holder can move that access to entity memberships in the role's tree (its
+  first membership roots it there); a holder rooted in another tree cannot,
+  because memberships never cross trees either.
+- Accounts that have ever held a direct system-wide role (any row, including
+  revoked ones) are now managed by global actors only.
+- Users who authorized work in other trees through a direct org-scoped role
+  (for example an "administration" root whose org role managed other
+  tenants) need a system-wide role: `MembershipService.add_member` refuses a
+  user rooted in another tree, so memberships cannot carry authority across
+  trees.
+- Moving an entity to another root, to the root level, or a root under any
+  parent now fails with 422 `ENTITY_MOVE_CARRIES_ACCESS` while its subtree
+  carries access. The procedure for such a reorganization is:
+  1. list what the subtree carries — `details.access` of the 422, or
+     `await auth.entity_service.get_subtree_access(session, entity_id)`;
+  2. revoke or archive it: `DELETE /memberships/{entity_id}/{user_id}` for
+     every membership (suspended, expired and invited ones included),
+     `PATCH /users/{id}/role-memberships/{id}` with `status: revoked` for
+     direct grants of roles defined in the subtree, revoke the API keys
+     anchored there, archive the integration principals anchored there and
+     remove the subtree's roles from principals elsewhere;
+  3. move the entity (a global actor);
+  4. re-grant in the destination: its own accounts, memberships and roles.
+  Revoked rows stay as history; a membership of the old tenant cannot be
+  re-granted in the destination. Accounts never change tenant: a root that
+  holds accounts cannot be demoted under another root — move its children
+  instead. The subtree's entity-local role definitions move with it.
+- Subtrees moved across roots on an earlier release keep what they carried.
+  Audit them: the members query below lists memberships held by accounts of
+  another tree (revoke them); API keys anchored outside their owner's tree:
+  `SELECT k.id FROM api_keys k JOIN users u ON u.id = k.owner_id WHERE
+  k.entity_id IS NOT NULL AND k.status <> 'revoked' AND NOT EXISTS (SELECT 1
+  FROM entity_closure c WHERE c.ancestor_id = u.root_entity_id AND
+  c.descendant_id = k.entity_id)`; entity-local roles whose stored
+  organization is not their scope entity's root: `SELECT r.id FROM roles r
+  JOIN entity_closure c ON c.descendant_id = r.scope_entity_id JOIN entities
+  e ON e.id = c.ancestor_id AND e.parent_id IS NULL WHERE r.root_entity_id IS
+  DISTINCT FROM e.id`; and the integration principals anchored in those
+  subtrees. Until they are revoked, such members can no longer grant access,
+  create accounts or change entity-local roles in the destination tenant
+  (403) or have their memberships re-granted (422), and decision 16 keeps
+  their accounts out of its hands. Accounts that such a member created
+  there through `POST /users` before this release are rooted in the
+  destination tenant and look like its own in the database (admin-created
+  accounts record no creator column or audit row); the `user_created` log
+  event carries `created_by`, so review the destination accounts created by
+  the subtree's former members (when observability logging is on).
+- Accounts are managed by the tenant that holds their root. Entity moves on
+  earlier releases did not re-root members: their root tenant keeps managing
+  them, the destination tenant sees them read-only through their
+  memberships, and only global actors manage them from there. Unrooted legacy accounts with memberships are likewise
+  read-only for tenant admins until a global actor roots them (adding a
+  membership with `POST /memberships` roots an unrooted account in that
+  entity's tree), and unrooted non-global administrators can no longer modify
+  accounts. Find such members with `SELECT m.id FROM entity_memberships m
+  JOIN users u ON u.id = m.user_id WHERE u.root_entity_id IS NULL OR NOT
+  EXISTS (SELECT 1 FROM entity_closure c WHERE c.ancestor_id =
+  u.root_entity_id AND c.descendant_id = m.entity_id)`.
+- Permission-check verdicts cached before the upgrade can still allow a
+  cross-tree entity check until they expire (`cache_permission_ttl`, 15
+  minutes by default). Run
+  `await auth.cache_service.publish_all_permissions_invalidation()` once after
+  deploying to drop them immediately.
+- Clients that treated a 403 from entity-keyed routes as "not allowed" should
+  treat 404 the same way for entities outside the caller's tenant.
+- Review stored ABAC conditions: rows with legacy operators (for example
+  `eq`) or unsupported attribute contexts now evaluate false; rewrite them with
+  the documented operators and contexts.
+- Hosts that let users change their own email must opt in with
+  `allow_self_service_email_change=True` and send `current_password`.
+- Sessions created before the upgrade have no `sid`: they are never marked
+  current and cannot use `keep_current` until the user signs in again.
 
 ## [0.1.0a34] - 2026-08-23
 

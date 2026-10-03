@@ -1561,6 +1561,39 @@ def test_account_update_can_explicitly_clear_phone(monkeypatch: pytest.MonkeyPat
     assert _json_output(result)["result"]["phone"] is None
 
 
+def test_account_update_email_sends_current_password_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
+    monkeypatch.setenv("OUTLABS_AUTH_CURRENT_PASSWORD", "current-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/users/me"
+        assert json.loads(request.content) == {
+            "email": "new@example.test",
+            "current_password": "current-secret",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "id": "user-1",
+                "email": "new@example.test",
+                "status": "active",
+                "email_verified": False,
+                "phone_verified": False,
+                "is_superuser": False,
+            },
+        )
+
+    _patch_resource_client(monkeypatch, account_commands, handler)
+    result = CliRunner().invoke(
+        cli_main,
+        ["--output", "json", "account", "update", "--email", "new@example.test"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "current-secret" not in result.output
+    assert _json_output(result)["result"]["email"] == "new@example.test"
+
+
 def test_user_access_report_collects_redacted_authority_surfaces(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TEST_OUTLABS_TOKEN", "safe-token")
 

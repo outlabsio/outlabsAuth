@@ -43,7 +43,7 @@ Same shape on both catalogs ([25](./25-Roles-and-Permissions.md)):
 
 | Attach point | Paths | Auth |
 |--------------|-------|------|
-| Permission | `/v1/permissions/{id}/condition-groups` + `/conditions` | `permission:read` / `permission:update` |
+| Permission | `/v1/permissions/{id}/condition-groups` + `/conditions` | `permission:read` / `permission:update`; writes also need a global actor on EnterpriseRBAC (the catalog is shared by every tenant, DD-061) |
 | Role | `/v1/roles/{id}/condition-groups` + `/conditions` | `role:read` / `role:update` |
 
 **Group:** `operator` `AND` | `OR`, optional description.  
@@ -54,6 +54,31 @@ Same shape on both catalogs ([25](./25-Roles-and-Permissions.md)):
 Evaluation shape: ungrouped conditions AND together; within a group use the
 group operator; **groups AND together**. Empty conditions → RBAC-only for that
 attach point.
+
+**Write validation.** Every condition write (HTTP or service) is validated and
+rejected with **400** (`details.reason = invalid_abac_condition`, plus the
+offending `field`) when:
+
+- `operator` is not one of `equals`, `not_equals`, `less_than`,
+  `less_than_or_equal`, `greater_than`, `greater_than_or_equal`, `in`,
+  `not_in`, `contains`, `not_contains`, `starts_with`, `ends_with`,
+  `matches`, `exists`, `not_exists`, `is_true`, `is_false`, `before`, `after`
+  (case-insensitive; stored lowercase);
+- `attribute` is not a dotted path rooted in a context the engine populates:
+  `user.`, `resource.`, `env.` or `time.`;
+- the value does not fit the operator or `value_type`: `in` / `not_in` need
+  `value_type=list` and a list; numeric comparisons need a number; `before` /
+  `after` need an ISO 8601 datetime; `matches` needs a compilable regex;
+  `integer` / `float` / `boolean` values must parse; value-taking operators
+  need a value.
+
+Updates are validated against the condition they would produce.
+
+**Fail closed.** At check time a condition never grants on missing or bad data:
+a missing attribute satisfies neither `is_true` nor `is_false`; `not_in` with a
+non-list value and `not_contains` on a non-collection attribute are false; a
+stored row that cannot be interpreted (legacy operator, unsupported context,
+unparseable value) evaluates to false instead of raising.
 
 ---
 

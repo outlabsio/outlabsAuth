@@ -126,6 +126,19 @@ class ApiKeyGrantableScopesResponse(BaseModel):
     grantable_scopes: List[str]
 
 
+class SystemIntegrationGrantableScopesResponse(BaseModel):
+    """Scopes the calling admin may grant to a system-integration principal or key."""
+
+    actor_user_id: str
+    scope_kind: str = Field(..., description="platform_global or entity")
+    anchor_entity_id: Optional[str] = None
+    system_allowed_action_prefixes: List[str] = Field(
+        default_factory=list,
+        description="Action prefixes system-integration keys may carry at all (library allowlist)",
+    )
+    grantable_scopes: List[str]
+
+
 class SystemIntegrationApiKeyCreateRequest(BaseModel):
     """Nested create request for integration-principal-owned system keys."""
 

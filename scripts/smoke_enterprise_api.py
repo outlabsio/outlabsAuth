@@ -168,10 +168,32 @@ async def main() -> None:
             params={"page": 1, "limit": 50},
         )
 
-        # Move: move the created child to root (new_parent_id null)
-        await _request(
-            client, "POST", f"/entities/{child_id}/move", json={"new_parent_id": None}
+        # Move-to-root must satisfy the root-type rules (0.1.0a35): a "team"
+        # is not an allowed root type, so the promotion is refused.
+        to_root = await client.post(
+            f"/entities/{child_id}/move", json={"new_parent_id": None}
         )
+        if to_root.status_code != 422:
+            raise RuntimeError(
+                f"move team to root should be refused with 422, got {to_root.status_code}: {to_root.text}"
+            )
+
+        # Move: re-parent the created child under another office.
+        other_office = next(
+            (
+                e
+                for e in items
+                if e.get("entity_type") == "office" and e.get("id") != parent_id
+            ),
+            None,
+        )
+        if other_office is not None:
+            await _request(
+                client,
+                "POST",
+                f"/entities/{child_id}/move",
+                json={"new_parent_id": other_office["id"]},
+            )
 
         # Cleanup: archive the entity
         await _request(client, "DELETE", f"/entities/{child_id}")

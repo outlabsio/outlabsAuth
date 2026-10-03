@@ -81,6 +81,51 @@ The core trust boundaries are:
   grants because removing or changing a condition may broaden access.
 - Removing permissions or disabling a role remains possible during incident
   response even when the responder does not hold the removed grant.
+- Tenant isolation (DD-056, DD-061) covers user, membership-graph,
+  effective-permission and entity routes: non-global actors only reach targets
+  inside their scope, and out-of-scope targets answer 404 like nonexistent
+  ones. Creating, promoting to, moving under another root, or archiving a root
+  entity needs a global actor.
+- A move that changes an entity's root fails closed: while the moved subtree
+  carries access (memberships, pending invitations, role assignments anchored
+  in it, entity API keys, integration principals, rooted accounts) it is
+  refused for every caller, superusers included (422
+  `ENTITY_MOVE_CARRIES_ACCESS`); operators revoke, move, then re-grant in the
+  destination. A membership held by an account of another tree is never
+  re-granted, and only an entity's own tenant grants access in it, creates
+  accounts rooted in it or changes the roles defined there — a membership
+  left in another tenant's tree by an earlier move gives none of these.
+- Seeing an account is not owning it: only the tenant that holds an account's
+  root (or a global actor) can modify it or add it to an entity. An account
+  visible only through a membership — for example a member of a subtree a
+  superuser moved under another tenant on an earlier release — is read-only
+  (403), so such a move cannot hand one tenant's accounts, or its
+  administrators, to another.
+- Global scope is granted only by global actors: directly assigning a
+  system-wide role (including on invite and on reactivation) is refused for
+  tenant-scoped admins, and new accounts stay inside the creator's tenant.
+  Tenant admins cannot pull an account from outside their tenant into it,
+  invite into another tenant's entity, or mutate an in-tree global
+  administrator — including an account whose system-wide grant is scheduled,
+  suspended, expired or revoked; a personal API key carries its owner's scope,
+  never global scope on its own.
+- Direct role grants are tenant-bound: another tenant's role answers 404 on
+  assign, invite and reactivation, a direct org-scoped role only goes to users
+  rooted in its organization (for every actor), and containment is checked
+  where the role takes effect.
+- The permission catalog and its ABAC conditions are shared by every tenant
+  and are written by global actors only.
+- In entity-context checks a directly assigned org-scoped role only reaches
+  its own organization's tree (DD-054 matrix, enforced since 0.1.0a35), so a
+  tenant role cannot authorize library or host routes in another tenant.
+- Reactivating a suspended/revoked role or membership, or widening its
+  validity window, re-runs delegation containment; clearing a role's
+  `assignable_at_types` counts as widening.
+- ABAC condition writes are validated (operators, `user.` / `resource.` /
+  `env.` / `time.` attribute contexts, value types) and evaluation fails closed
+  on missing attributes and malformed stored rows.
+- Self-service email change is disabled by default; when a host enables it,
+  the request must re-authenticate with the current password.
 
 ## API keys
 

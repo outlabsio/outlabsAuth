@@ -122,6 +122,32 @@ def get_config_router(
             session, new_config, updated_by_id=user_id
         )
 
+        # Retained audit trail for platform configuration changes. Platform
+        # config belongs to no tenant (root_entity_id is NULL), so only global
+        # actors see it in /audit-events.
+        audit_service = getattr(auth, "user_audit_service", None)
+        if audit_service is not None:
+            before_payload = {
+                "allowed_root_types": current.allowed_root_types.model_dump(),
+                "default_child_types": current.default_child_types.model_dump(),
+            }
+            after_payload = {
+                "allowed_root_types": new_config.allowed_root_types.model_dump(),
+                "default_child_types": new_config.default_child_types.model_dump(),
+            }
+            if before_payload != after_payload:
+                await audit_service.record_event(
+                    session,
+                    event_category="config",
+                    event_type="config.entity_types_updated",
+                    event_source="config_router.update_entity_type_config",
+                    subject_user_id=None,
+                    subject_email_snapshot="",
+                    actor_user_id=user_id,
+                    before=before_payload,
+                    after=after_payload,
+                )
+
         if auth.observability:
             auth.observability.logger.info(
                 "entity_type_config_updated",

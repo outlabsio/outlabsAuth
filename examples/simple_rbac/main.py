@@ -17,6 +17,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
@@ -54,6 +55,31 @@ REDIS_URL = os.getenv("REDIS_URL", None)
 REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "outlabs-auth:development:simple-rbac") if REDIS_URL else None
 ENV = os.getenv("ENV", "development")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+_frontend_parts = urlparse(FRONTEND_URL)
+FRONTEND_ORIGIN = (
+    f"{_frontend_parts.scheme}://{_frontend_parts.netloc}"
+    if _frontend_parts.scheme and _frontend_parts.netloc
+    else FRONTEND_URL
+)
+
+
+def _optional_int_env(name: str) -> Optional[int]:
+    """Read an optional positive integer setting (unset/blank = library default)."""
+    raw = os.getenv(name, "").strip()
+    return int(raw) if raw else None
+
+
+# Password-login throttling. The library defaults (20 attempts per 300s per
+# client IP) are right for production; E2E suites that log in many personas
+# from one IP can relax them here instead of sleeping between runs.
+LOGIN_RATE_LIMIT_SETTINGS = {
+    key: value
+    for key, value in {
+        "login_ip_rate_limit_max": _optional_int_env("LOGIN_IP_RATE_LIMIT_MAX"),
+        "login_ip_rate_limit_window_seconds": _optional_int_env("LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS"),
+    }.items()
+    if value is not None
+}
 
 # Dev-only capture of the latest password-reset token per email (mirrors the
 # enterprise_rbac example) so local/E2E flows can drive the reset step without
@@ -140,6 +166,7 @@ auth = SimpleRBAC(
     redis_key_prefix=REDIS_KEY_PREFIX,
     auto_migrate=False,  # We'll handle migrations manually
     echo_sql=os.getenv("ECHO_SQL", "false").lower() == "true",
+    **LOGIN_RATE_LIMIT_SETTINGS,
 )
 
 
@@ -224,13 +251,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS for development (3001 = SimpleRBAC Playwright fixture UI port)
+# CORS for development (3001 = SimpleRBAC Playwright fixture UI port). The
+# configured FRONTEND_URL origin is always allowed, like the EnterpriseRBAC
+# example, so a console served from another port or host works out of the box.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ],
+    allow_origins=list(
+        dict.fromkeys(
+            [
+                "http://localhost:3000",
+                "http://localhost:3001",
+                FRONTEND_ORIGIN,
+            ]
+        )
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -12,8 +12,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.routers._scope import (
+    entity_in_scope,
+    entity_scope_guard,
+    entity_not_found,
+    entity_visible_in_scope,
+    resolve_principal_scope,
+    scope_enforced,
+)
 from outlabs_auth.routers.capabilities import mark_auth_surface
+from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
     EntityMoveRequest,
@@ -49,6 +57,8 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         child_display_name_pattern=entity.child_display_name_pattern,
         child_slug_pattern=entity.child_slug_pattern,
         child_naming_guidance=entity.child_naming_guidance,
+        created_at=getattr(entity, "__dict__", {}).get("created_at"),
+        updated_at=getattr(entity, "__dict__", {}).get("updated_at"),
     )
 
 
@@ -76,6 +86,33 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
         GET /{entity_id}/members - Get entity members
     """
     router = APIRouter(prefix=prefix, tags=tags or ["entities"])
+
+    # DD-061: entity routes apply the same tenant scope as the user routes
+    # (DD-056). Out-of-scope entities answer 404, indistinguishable from
+    # nonexistent ones; structural changes that create or remove a tenant
+    # (root create, move-to-root, root archive) require a global actor.
+
+    async def _scope(session: AsyncSession, auth_result: Any) -> dict[str, Any]:
+        if not scope_enforced(auth):
+            return {"is_global": True, "entity_ids": []}
+        return await resolve_principal_scope(auth, session, auth_result)
+
+    async def _require_entity_in_scope(session: AsyncSession, auth_result: Any, entity_id: UUID) -> dict[str, Any]:
+        scope = await _scope(session, auth_result)
+        if not await entity_visible_in_scope(session, scope, entity_id):
+            raise entity_not_found()
+        return scope
+
+    def _require_global(scope: dict[str, Any], detail: str) -> None:
+        if not scope.get("is_global"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    def _actor_id(auth_result: Any) -> Optional[UUID]:
+        raw = auth_result.get("user_id") if isinstance(auth_result, dict) else None
+        try:
+            return UUID(str(raw)) if raw else None
+        except ValueError:
+            return None
 
     @router.get(
         "/",
@@ -136,6 +173,13 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
         if parent_id:
             filters.append(parent_id_col == parent_id)
 
+        scope = await _scope(session, auth_result)
+        if not scope.get("is_global"):
+            visible_ids = [UUID(str(entity_id)) for entity_id in scope.get("entity_ids") or []]
+            if not visible_ids:
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+            filters.append(cast(Any, Entity.id).in_(visible_ids))
+
         # Get total count
         count_stmt = select(func.count()).select_from(Entity).where(*filters)
         count_result = await session.execute(count_stmt)
@@ -164,6 +208,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def create_entity(
         data: EntityCreateRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "parent_entity_id", source="body")),
         auth_result=Depends(auth.require_tree_permission("entity:create", "parent_entity_id", source="body")),
         session: AsyncSession = Depends(auth.uow),
     ):
@@ -173,6 +218,16 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
         # Parse entity class
         entity_class = EntityClass(data.entity_class) if isinstance(data.entity_class, str) else data.entity_class
 
+        parent_uuid = UUID(data.parent_entity_id) if data.parent_entity_id else None
+        if parent_uuid is None:
+            # A new root entity is a new tenant: only global actors may create one.
+            _require_global(
+                await _scope(session, auth_result),
+                "Only global administrators can create root entities",
+            )
+        else:
+            await _require_entity_in_scope(session, auth_result, parent_uuid)
+
         entity = await auth.entity_service.create_entity(
             session=session,
             name=data.name,
@@ -181,7 +236,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             description=data.description,
             entity_class=entity_class,
             entity_type=data.entity_type,
-            parent_id=UUID(data.parent_entity_id) if data.parent_entity_id else None,
+            parent_id=parent_uuid,
             status=data.status or "active",
             valid_from=data.valid_from,
             valid_until=data.valid_until,
@@ -192,6 +247,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             child_display_name_pattern=data.child_display_name_pattern,
             child_slug_pattern=data.child_slug_pattern,
             child_naming_guidance=data.child_naming_guidance,
+            created_by_id=_actor_id(auth_result),
         )
         return _entity_to_response(entity)
 
@@ -211,11 +267,15 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             pattern="^(structural|access_group)$",
             description="Optional entity class filter for suggestions.",
         ),
+        _in_scope: None = Depends(entity_scope_guard(auth, "parent_id", source="query")),
         auth_result=Depends(auth.require_tree_permission("entity:create", "parent_id", source="query")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Return sibling-based entity type suggestions for create flows."""
         from outlabs_auth.models.sql.enums import EntityClass
+
+        if parent_id is not None:
+            await _require_entity_in_scope(session, auth_result, parent_id)
 
         parsed_entity_class = EntityClass(entity_class) if isinstance(entity_class, str) else entity_class
         suggestions = await auth.entity_service.get_suggested_entity_types(
@@ -233,10 +293,12 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_entity(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get entity details by ID."""
+        await _require_entity_in_scope(session, auth_result, entity_id)
         entity = await auth.entity_service.get_entity(session, entity_id)
         if not entity:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
@@ -251,14 +313,17 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def update_entity(
         entity_id: UUID,
         data: EntityUpdateRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:update")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Update entity details."""
+        await _require_entity_in_scope(session, auth_result, entity_id)
         updates = data.model_dump(exclude_unset=True)
         entity = await auth.entity_service.update_entity(
             session=session,
             entity_id=entity_id,
+            changed_by_id=_actor_id(auth_result),
             **updates,
         )
         return _entity_to_response(entity)
@@ -272,10 +337,31 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def move_entity(
         entity_id: UUID,
         data: EntityMoveRequest,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_entity_permission("entity:update", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         new_parent_id = UUID(data.new_parent_id) if data.new_parent_id else None
+
+        scope = await _require_entity_in_scope(session, auth_result, entity_id)
+        if new_parent_id is None:
+            # Promoting a subtree to a top-level entity creates a new tenant.
+            from outlabs_auth.models.sql.entity import Entity
+
+            current = await session.get(Entity, entity_id)
+            if current is not None and current.parent_id is not None:
+                _require_global(scope, "Only global administrators can move an entity to the root level")
+        elif not entity_in_scope(scope, new_parent_id):
+            raise entity_not_found()
+        elif scope_enforced(auth) and not scope.get("is_global"):
+            # DD-061 decision 17: a move under another root reshapes two
+            # tenants (and demoting a root removes one), like a move to the
+            # root level. The service additionally refuses it for everyone
+            # while the subtree carries access (422).
+            current_root_id = await auth.entity_service.get_root_entity_id(session, entity_id)
+            new_root_id = await auth.entity_service.get_root_entity_id(session, new_parent_id)
+            if current_root_id is None or new_root_id is None or current_root_id != new_root_id:
+                _require_global(scope, "Only global administrators can move an entity to another root")
 
         # If moving under a new parent, require permission to create under that parent
         # (tree permissions from ancestors apply automatically via the closure table).
@@ -297,6 +383,7 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
             session=session,
             entity_id=entity_id,
             new_parent_id=new_parent_id,
+            moved_by_id=_actor_id(auth_result),
         )
         return _entity_to_response(entity)
 
@@ -309,10 +396,18 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def delete_entity(
         entity_id: UUID,
         cascade: bool = Query(False, description="Cascade delete children"),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:delete")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Delete an entity from the hierarchy."""
+        scope = await _require_entity_in_scope(session, auth_result, entity_id)
+        from outlabs_auth.models.sql.entity import Entity
+
+        target = await session.get(Entity, entity_id)
+        if target is not None and target.parent_id is None:
+            # Archiving a root removes a whole tenant.
+            _require_global(scope, "Only global administrators can archive a root entity")
         await auth.entity_service.delete_entity(
             session=session,
             entity_id=entity_id,
@@ -329,10 +424,12 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_children(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all direct children of an entity."""
+        await _require_entity_in_scope(session, auth_result, entity_id)
         children = await auth.entity_service.get_children(session, entity_id)
         return [_entity_to_response(child) for child in children]
 
@@ -345,10 +442,12 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     async def get_descendants(
         entity_id: UUID,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("entity:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all descendant entities (entire subtree)."""
+        await _require_entity_in_scope(session, auth_result, entity_id)
         descendants = await auth.entity_service.get_descendants(
             session=session,
             entity_id=entity_id,
@@ -364,10 +463,16 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
     )
     async def get_entity_path(
         entity_id: UUID,
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
-        """Get the path from root to this entity."""
+        """Get the path from root to this entity.
+
+        The ancestors of an in-scope entity are returned even when the caller's
+        scope starts below them: the breadcrumb is part of the visible entity.
+        """
+        await _require_entity_in_scope(session, auth_result, entity_id)
         path = await auth.entity_service.get_entity_path(session, entity_id)
         return [_entity_to_response(entity) for entity in path]
 
@@ -381,10 +486,12 @@ def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | E
         entity_id: UUID,
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
+        _in_scope: None = Depends(entity_scope_guard(auth, "entity_id")),
         auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all members of an entity."""
+        await _require_entity_in_scope(session, auth_result, entity_id)
         # Get memberships with user details and roles already loaded to avoid
         # one user lookup per membership row on large entities.
         memberships, total = await auth.membership_service.get_entity_members_with_users(
