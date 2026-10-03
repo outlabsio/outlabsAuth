@@ -92,7 +92,9 @@ The core trust boundaries are:
   refused for every caller, superusers included (422
   `ENTITY_MOVE_CARRIES_ACCESS`); operators revoke, move, then re-grant in the
   destination. A membership held by an account of another tree is never
-  re-granted, and only an entity's own tenant grants access in it.
+  re-granted, and only an entity's own tenant grants access in it, creates
+  accounts rooted in it or changes the roles defined there — a membership
+  left in another tenant's tree by an earlier move gives none of these.
 - Seeing an account is not owning it: only the tenant that holds an account's
   root (or a global actor) can modify it or add it to an entity. An account
   visible only through a membership — for example a member of a subtree a

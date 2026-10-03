@@ -4007,7 +4007,8 @@ decision 17 removes it.
    unaffected.
 5. **New accounts stay in the creator's tenant.** A non-global actor may only
    root an account (`POST /users`, invite without entity) at an entity in its
-   scope; with no root named, the account inherits the actor's own root.
+   scope that also lies in its own root's tree (decision 17); with no root
+   named, the account inherits the actor's own root.
 6. **Re-granting is granting.** Moving a direct role membership or an entity
    membership back to `active`, or widening its validity window, re-runs SEC-2
    containment for every permission it carries (plus the global-scope rule for
@@ -4132,7 +4133,15 @@ decision 17 removes it.
     `PATCH /memberships` edits that re-grant or add roles) only when the
     entity lies in its own root's tree (**403** otherwise), so a member left
     in another tenant's tree cannot plant accounts or hand out roles there.
-    A non-global actor whose scope reaches two trees through such a
+    The same tenant test applies wherever a non-global actor's flat
+    permission meets a target that only has to be in its scope: a new
+    account's root (`POST /users`, `POST /auth/invite` without an entity:
+    **403**, `details.reason = root_entity_outside_tenant`) and every write
+    to an entity-local role definition (create, update, delete, permission
+    and ABAC condition changes on the roles router: **403**). A personal API
+    key is judged by its owner's root, and an unrooted human actor has no
+    tenant, so it creates no accounts and changes no entity-local roles. A
+    non-global actor whose scope reaches two trees through such a
     membership cannot move an entity between them either (**403**).
 
 ### Judgement calls (conservative, backward-compatible)
@@ -4231,8 +4240,23 @@ decision 17 removes it.
   so the rule changes nothing there; it closes the round-4 chain for
   subtrees moved before this release, whose members keep authority in the
   destination tree until an operator revokes it. Narrowing, suspending and
-  revoking stay open to the entity's tenant and to those members alike —
-  incident response must be able to cut access.
+  revoking memberships stay open to the entity's tenant and to those
+  members alike — incident response must be able to cut access, and those
+  routes need a tree permission at the entity, i.e. real authority there.
+- **Account creation and role definitions follow the same tenant rule**
+  (decision 17). `POST /users` and the roles router check flat permissions,
+  so the target only had to be in the actor's scope: a tenant admin with a
+  roleless legacy membership in a subtree promoted to a root created that
+  tenant's accounts with passwords it knew, and could rename, strip or
+  delete the roles defined there. No authority in the other tenant is
+  involved, so nothing stays open there — narrowing a role included; its
+  own tenant and global actors keep every write.
+- **An unrooted actor has no tenant.** Decision 16 already lets an unrooted
+  non-global actor change no account, and decision 17 refuses its
+  membership grants; it now creates no accounts and changes no entity-local
+  roles either. An unrooted administrator only exists in legacy data (the
+  first membership roots an account); a global actor roots it to restore
+  its tenant's administration.
 - **The fail-closed move follows `enforce_user_scope`.** Like the
   direct-role bounds (decisions 10 and 14), it applies when tenant scope is
   enforced; `enforce_user_scope=False` keeps the unscoped legacy behavior,
@@ -4288,7 +4312,9 @@ decision 17 removes it.
   subtree changes roots only once it carries no access, so a move can hand
   one tenant neither another tenant's accounts and administrators nor the
   memberships, grants, keys, principals and invitations that would let their
-  holders act — or create accounts — in it.
+  holders act — or create accounts — in it; a member left in another
+  tenant's tree by a move on an earlier release creates no accounts, grants
+  no access and changes no role definitions there.
 - **Positive**: one error contract (404 out of scope, 403 for platform-level
   operations) across users, roles, memberships, permissions and entities.
 - **Negative (breaking for scoped admins)**: tenant-scoped actors lose
@@ -4301,7 +4327,8 @@ decision 17 removes it.
   root" pattern DD-056 already moved to system-wide roles); direct org-scoped
   roles can no longer be assigned to users rooted elsewhere or unrooted, by
   anyone; accounts seen only through a membership are read-only for tenant
-  admins, and unrooted tenant admins change no accounts; out-of-scope entities
+  admins, and unrooted tenant admins change no accounts and create none;
+  out-of-scope entities
   answer 404 on entity-keyed routes that used to answer 403; ABAC policies
   that relied on fail-open evaluation now deny. Global actors and SimpleRBAC
   are unaffected, except that no one — superusers included — can move a
@@ -4323,8 +4350,11 @@ decision 17 removes it.
   visibility predicate and direct-grant rules
   (`require_direct_role_grants_in_scope`), account ownership
   (`account_in_users_tenant`, `require_account_managed_by_principal`),
-  membership grants in the actor's own tenant (`entity_in_users_tenant`,
-  `require_membership_write_in_principal_tenant`), scoped root resolution
+  membership grants, entity-local role writes and new account roots in the
+  actor's own tenant (`entity_in_users_tenant`,
+  `require_membership_write_in_principal_tenant`,
+  `require_role_write_in_principal_tenant`), scoped root resolution
+  (`resolve_root_for_scoped_create`)
 - `outlabs_auth/services/entity.py` — the fail-closed root-changing move
   (`move_entity`, `get_subtree_access`, `SUBTREE_ACCESS_CATEGORIES`,
   entity-local role re-anchoring, `changes_root` audit metadata) and
@@ -4356,5 +4386,5 @@ decision 17 removes it.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root; root-changing entity moves fail closed while the subtree carries access)
+**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root; root-changing entity moves fail closed while the subtree carries access; new accounts, membership grants and entity-local role writes stay in the actor's own root tree)
 **Next Review**: After testing all examples

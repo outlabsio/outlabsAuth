@@ -28,7 +28,11 @@ or global request still works):
   a move that changes an entity's root fails closed while the moved subtree
   carries access, for every actor (decision 17): a member of a moved subtree
   can no longer plant an account in the destination tenant, and revoked rows
-  left behind cannot be re-granted across the tenant boundary.
+  left behind cannot be re-granted across the tenant boundary;
+* a member left in another tenant's tree by a move on an earlier release
+  creates no accounts there (``POST /users``) and changes no entity-local
+  role defined there, and an unrooted legacy administrator creates no
+  accounts at all.
 """
 
 from __future__ import annotations
@@ -1853,6 +1857,339 @@ async def test_legacy_cross_root_members_are_not_handed_to_the_new_tenant(client
             f"/v1/users/{admin_a2.id}/password", headers=headers, json={"new_password": "Global123!x"}
         )
         assert by_global_reset.status_code == 204, by_global_reset.text
+
+
+async def _assert_no_account(auth: EnterpriseRBAC, email: str) -> None:
+    async with auth.get_session() as session:
+        assert await auth.user_service.get_user_by_email(session, email) is None, email
+
+
+def _assert_root_outside_tenant(response: httpx.Response) -> None:
+    assert response.status_code == 403, response.text
+    assert response.json()["details"]["reason"] == "root_entity_outside_tenant", response.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["under_another_root", "to_the_root_level"])
+async def test_legacy_cross_root_members_cannot_create_accounts_in_the_new_tenant(
+    client, auth_instance, world, destination
+):
+    """Decision 17 for account creation: a member left in another tenant's tree
+    by a cross-root move on an earlier release cannot root a new account there.
+
+    Tenant A's org admin holds ``user:create`` flat (its direct tenant-A role)
+    and a roleless legacy membership in the moved branch, so the branch is in
+    its scope although it holds no permission there. ``POST /users`` used to
+    accept any root in that scope: with the branch promoted to a root, the
+    admin created an account of the new tenant with a password it knew, which
+    the new tenant then read and managed as its own.
+    """
+    auth = auth_instance
+    async with auth.get_session() as session:
+        branch = await _entity(
+            auth, session, label="branch-create", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        await session.commit()
+    super_headers = _headers(auth, world["superuser"].id)
+    if destination == "under_another_root":
+        new_root_id = world["root_b"].id
+        body = {"new_parent_id": str(new_root_id)}
+    else:
+        new_root_id = branch.id
+        body = {"new_parent_id": None}
+    moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    assert moved.status_code == 200, moved.text
+    async with auth.get_session() as session:
+        await _insert_legacy_membership(session, entity_id=branch.id, user_id=world["scoped_admin"].id)
+        await session.commit()
+    new_admin, _ = await _destination_admin(auth, new_root_id, prefix="new-tenant-admin")
+    async with auth.get_session() as session:
+        branch_role = await _role(auth, session, permissions=["lead:read"], root_entity_id=new_root_id)
+        await session.commit()
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    # The branch is in the admin's scope through the membership (403 for the
+    # missing entity:read there, not the 404 of an out-of-scope entity) ...
+    assert (await client.get(f"/v1/entities/{branch.id}", headers=scoped)).status_code == 403
+
+    # ... but no account is rooted in the other tenant: not at the moved
+    # entity (a root after a promotion) ...
+    planted_email = f"planted-{_suffix()}@example.com"
+    planted = await client.post(
+        "/v1/users/",
+        headers=scoped,
+        json={"email": planted_email, "password": "Planted123!x", "root_entity_id": str(branch.id)},
+    )
+    _assert_root_outside_tenant(planted)
+    await _assert_no_account(auth, planted_email)
+    assert (
+        await client.post("/v1/auth/login", json={"email": planted_email, "password": "Planted123!x"})
+    ).status_code == 401
+    # ... nor at the new tenant's root (outside the admin's scope) ...
+    at_new_root_email = f"planted-root-{_suffix()}@example.com"
+    at_new_root = await client.post(
+        "/v1/users/",
+        headers=scoped,
+        json={"email": at_new_root_email, "password": "Planted123!x", "root_entity_id": str(new_root_id)},
+    )
+    assert at_new_root.status_code == 403, at_new_root.text
+    await _assert_no_account(auth, at_new_root_email)
+    # ... nor through an invitation without an entity, whose invitee is
+    # rooted where its direct roles are (the new tenant's role is not visible).
+    invite_email = f"planted-invite-{_suffix()}@example.com"
+    invited = await client.post(
+        "/v1/auth/invite",
+        headers=scoped,
+        json={"email": invite_email, "role_ids": [str(branch_role.id)]},
+    )
+    assert invited.status_code in (403, 404), invited.text
+    await _assert_no_account(auth, invite_email)
+
+    # The same rule holds for the admin's personal API key: it is judged by
+    # its owner's root.
+    auth.api_key_policy_service._personal_allowed_action_prefixes.append("create")
+    async with auth.get_session() as session:
+        key_secret, _ = await auth.api_key_service.create_api_key(
+            session,
+            owner_id=world["scoped_admin"].id,
+            name=f"creator-key-{_suffix()}",
+            scopes=["user:create"],
+            actor_user_id=world["scoped_admin"].id,
+        )
+        await session.commit()
+    key_email = f"planted-key-{_suffix()}@example.com"
+    by_key = await client.post(
+        "/v1/users/",
+        headers={"X-API-Key": key_secret},
+        json={"email": key_email, "password": "Planted123!x", "root_entity_id": str(branch.id)},
+    )
+    _assert_root_outside_tenant(by_key)
+    await _assert_no_account(auth, key_email)
+
+    # The new tenant has no account it did not create.
+    new_admin_headers = _headers(auth, new_admin.id)
+    listed = await client.get("/v1/users/", headers=new_admin_headers, params={"limit": 100})
+    assert listed.status_code == 200, listed.text
+    listed_emails = {item["email"] for item in listed.json()["items"]}
+    assert not {planted_email, at_new_root_email, invite_email, key_email} & listed_emails
+
+    # Positive: tenant A's admin still creates accounts in its own tenant
+    # (named or defaulted root, JWT or key) ...
+    for headers in (scoped, {"X-API-Key": key_secret}):
+        own = await client.post(
+            "/v1/users/",
+            headers=headers,
+            json={
+                "email": f"own-{_suffix()}@example.com",
+                "password": "TestPass123!",
+                "root_entity_id": str(world["root_a"].id),
+            },
+        )
+        assert own.status_code == 201, own.text
+    defaulted = await client.post(
+        "/v1/users/", headers=scoped, json={"email": f"own-default-{_suffix()}@example.com", "password": "TestPass123!"}
+    )
+    assert defaulted.status_code == 201, defaulted.text
+    assert defaulted.json()["root_entity_id"] == str(world["root_a"].id)
+    # ... and the new tenant's admin and global actors create accounts in the new tenant.
+    for headers in (new_admin_headers, _headers(auth, world["global_admin"].id), super_headers):
+        created = await client.post(
+            "/v1/users/",
+            headers=headers,
+            json={
+                "email": f"new-tenant-{_suffix()}@example.com",
+                "password": "TestPass123!",
+                "root_entity_id": str(new_root_id),
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["root_entity_id"] == str(new_root_id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["under_another_root", "to_the_root_level"])
+async def test_legacy_cross_root_members_cannot_change_the_new_tenants_roles(client, auth_instance, world, destination):
+    """Decision 17 for role definitions: the roles router checks flat
+    permissions, so an entity-local role only had to be in the actor's scope.
+    A member left in another tenant's tree could create, rename, strip and
+    delete that tenant's roles there with a permission from its own tenant."""
+    auth = auth_instance
+    async with auth.get_session() as session:
+        for name in ("role:create", "role:delete"):
+            await auth.permission_service.create_permission(session, name=name, display_name=name)
+        await auth.role_service.add_permissions_by_name(
+            session, role_id=world["scoped_role"].id, permission_names=["role:create", "role:delete"]
+        )
+        branch = await _entity(
+            auth, session, label="branch-roles", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        await session.commit()
+    super_headers = _headers(auth, world["superuser"].id)
+    if destination == "under_another_root":
+        new_root_id = world["root_b"].id
+        body = {"new_parent_id": str(new_root_id)}
+    else:
+        new_root_id = branch.id
+        body = {"new_parent_id": None}
+    moved = await client.post(f"/v1/entities/{branch.id}/move", headers=super_headers, json=body)
+    assert moved.status_code == 200, moved.text
+    async with auth.get_session() as session:
+        await _insert_legacy_membership(session, entity_id=branch.id, user_id=world["scoped_admin"].id)
+        # Two of the new tenant's entity-local roles, defined at the branch.
+        kept = await _role(
+            auth, session, permissions=["lead:read"], root_entity_id=new_root_id, scope_entity_id=branch.id
+        )
+        doomed = await _role(
+            auth, session, permissions=["lead:read"], root_entity_id=new_root_id, scope_entity_id=branch.id
+        )
+        await session.commit()
+    new_admin, _ = await _destination_admin(auth, new_root_id, prefix="new-tenant-admin")
+
+    scoped = _headers(auth, world["scoped_admin"].id)
+    # The roles are visible to tenant A's admin through its membership ...
+    assert (await client.get(f"/v1/roles/{kept.id}", headers=scoped)).status_code == 200
+    # ... but every definition write answers 403.
+    planted_name = f"planted-{_suffix()}"
+    writes = [
+        (
+            "POST",
+            "/v1/roles/",
+            {
+                "name": planted_name,
+                "display_name": "Planted",
+                "permissions": [],
+                "is_global": False,
+                "root_entity_id": str(new_root_id),
+                "scope_entity_id": str(branch.id),
+            },
+        ),
+        ("PATCH", f"/v1/roles/{kept.id}", {"display_name": "Owned"}),
+        ("PATCH", f"/v1/roles/{kept.id}", {"permissions": []}),
+        ("PATCH", f"/v1/roles/{kept.id}", {"status": "inactive"}),
+        ("DELETE", f"/v1/roles/{kept.id}/permissions", ["lead:read"]),
+        ("POST", f"/v1/roles/{kept.id}/condition-groups", {"operator": "AND"}),
+        (
+            "POST",
+            f"/v1/roles/{kept.id}/conditions",
+            {"attribute": "user.department", "operator": "equals", "value": "x", "value_type": "string"},
+        ),
+        ("DELETE", f"/v1/roles/{doomed.id}", None),
+    ]
+    for method, path, payload in writes:
+        response = await client.request(method, path, headers=scoped, json=payload)
+        assert response.status_code == 403, (destination, method, path, response.text)
+    async with auth.get_session() as session:
+        current = await auth.role_service.get_role_by_id(session, kept.id)
+        assert current.display_name == kept.display_name
+        assert str(getattr(current.status, "value", current.status)) == "active"
+        assert await auth.role_service.get_role_permission_names(session, kept.id) == ["lead:read"]
+        assert await auth.role_service.get_role_by_id(session, doomed.id) is not None
+        assert await auth.role_service.get_role_by_name(session, planted_name) is None
+
+    # Positive: the new tenant and global actors still change its roles ...
+    renamed = await client.patch(
+        f"/v1/roles/{kept.id}", headers=_headers(auth, new_admin.id), json={"display_name": "Renamed"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    deleted = await client.delete(f"/v1/roles/{doomed.id}", headers=super_headers)
+    assert deleted.status_code == 204, deleted.text
+    # ... and tenant A's admin still manages entity-local roles in its own tree.
+    own = await client.post(
+        "/v1/roles/",
+        headers=scoped,
+        json={
+            "name": f"own-{_suffix()}",
+            "display_name": "Own",
+            "permissions": ["user:read"],
+            "is_global": False,
+            "root_entity_id": str(world["root_a"].id),
+            "scope_entity_id": str(world["child_a"].id),
+        },
+    )
+    assert own.status_code == 201, own.text
+    own_id = own.json()["id"]
+    assert (
+        await client.patch(f"/v1/roles/{own_id}", headers=scoped, json={"display_name": "Own renamed"})
+    ).status_code == 200
+    assert (await client.delete(f"/v1/roles/{own_id}", headers=scoped)).status_code == 204
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_unrooted_legacy_admins_create_no_accounts(client, auth_instance, world):
+    """An unrooted actor has no tenant (decisions 16 and 17), so it roots no
+    new account anywhere — not even where a legacy membership in another
+    tenant's moved subtree puts a root in its scope."""
+    from sqlalchemy import update
+
+    from outlabs_auth.models.sql.user import User
+
+    auth = auth_instance
+    async with auth.get_session() as session:
+        branch = await _entity(
+            auth, session, label="branch-unrooted", parent_id=world["root_a"].id, entity_type="organization"
+        )
+        # A legacy administrator: tenant A's admin role through a membership
+        # at tenant A's root, but rooted nowhere (add_member roots it, so
+        # clear the root afterwards).
+        legacy_admin = await _user(auth, session, prefix="legacy-admin")
+        await auth.membership_service.add_member(
+            session, entity_id=world["root_a"].id, user_id=legacy_admin.id, role_ids=[world["scoped_role"].id]
+        )
+        await session.execute(update(User).where(User.id == legacy_admin.id).values(root_entity_id=None))
+        await session.commit()
+    promoted = await client.post(
+        f"/v1/entities/{branch.id}/move", headers=_headers(auth, world["superuser"].id), json={"new_parent_id": None}
+    )
+    assert promoted.status_code == 200, promoted.text
+    async with auth.get_session() as session:
+        await _insert_legacy_membership(session, entity_id=branch.id, user_id=legacy_admin.id)
+        await session.commit()
+
+    legacy_headers = _headers(auth, legacy_admin.id)
+    for root_id in (branch.id, world["root_a"].id):
+        email = f"unrooted-created-{_suffix()}@example.com"
+        refused = await client.post(
+            "/v1/users/",
+            headers=legacy_headers,
+            json={"email": email, "password": "TestPass123!", "root_entity_id": str(root_id)},
+        )
+        _assert_root_outside_tenant(refused)
+        await _assert_no_account(auth, email)
+    unnamed_email = f"unrooted-unnamed-{_suffix()}@example.com"
+    unnamed = await client.post(
+        "/v1/users/", headers=legacy_headers, json={"email": unnamed_email, "password": "TestPass123!"}
+    )
+    assert unnamed.status_code == 403, unnamed.text
+    assert unnamed.json()["details"]["reason"] == "root_entity_required", unnamed.text
+    await _assert_no_account(auth, unnamed_email)
+
+    # Positive: once a global actor roots it, it creates accounts in its tenant.
+    async with auth.get_session() as session:
+        await session.execute(update(User).where(User.id == legacy_admin.id).values(root_entity_id=world["root_a"].id))
+        await session.commit()
+    rooted = await client.post(
+        "/v1/users/",
+        headers=legacy_headers,
+        json={
+            "email": f"rooted-created-{_suffix()}@example.com",
+            "password": "TestPass123!",
+            "root_entity_id": str(world["root_a"].id),
+        },
+    )
+    assert rooted.status_code == 201, rooted.text
+    still_refused = await client.post(
+        "/v1/users/",
+        headers=legacy_headers,
+        json={
+            "email": f"still-refused-{_suffix()}@example.com",
+            "password": "TestPass123!",
+            "root_entity_id": str(branch.id),
+        },
+    )
+    _assert_root_outside_tenant(still_refused)
 
 
 @pytest.mark.integration

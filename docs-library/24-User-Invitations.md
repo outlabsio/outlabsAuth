@@ -88,7 +88,8 @@ holder) may grant it (403 with `details.system_wide_role_ids`). Without
 answers 404 (no account is created), containment is checked where each role
 takes effect, and an org-scoped role must belong to the invitee's root. A
 tenant-scoped inviter's invitee is rooted at the inviter's own root so it stays
-visible to that tenant; a global inviter's invitee is rooted in the
+visible to that tenant (a root outside the inviter's own root tree answers 403,
+decision 17); a global inviter's invitee is rooted in the
 organization of its direct roles (roles from two organizations: 422). With `entity_id`, the entity must be
 inside the inviter's tenant (DD-061): another tenant's entity answers 404 and
 no account is created. For a non-global inviter it must also lie in the tree of

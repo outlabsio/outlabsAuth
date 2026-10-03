@@ -67,7 +67,7 @@ Set `enforce_user_scope=False` only as a transitional escape hatch.
 
 | Method | Path | Permission | Notes |
 |--------|------|------------|-------|
-| `POST` | `/` | `user:create` | Admin create (not public register). Only superusers may set `is_superuser`. Tenant-scoped actors must name a `root_entity_id` inside their scope (403 otherwise); omitted, it defaults to the actor's own root |
+| `POST` | `/` | `user:create` | Admin create (not public register). Only superusers may set `is_superuser`. Tenant-scoped actors must name a `root_entity_id` inside their scope and in their own root's tree (403 otherwise; an in-scope root reached only through a membership in another tenant's tree answers 403 with `details.reason = root_entity_outside_tenant`, DD-061 decision 17); omitted, it defaults to the actor's own root. Unrooted non-global actors create no accounts |
 | `GET` | `/` | `user:read` | Paginated list. Query: `page`, `limit`, `search`, `status`, `is_superuser`, `root_entity_id` |
 | `GET` | `/{user_id}` | `user:read` | Single user (scoped) |
 | `PATCH` | `/{user_id}` | `user:update` | Admin profile update |

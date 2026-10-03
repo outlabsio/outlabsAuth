@@ -426,6 +426,12 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
     async with auth_instance.get_session() as session:
         actor = await _create_user(auth_instance, session, email_prefix="role-success")
         root = await _create_root(auth_instance, session, label="role-success-root")
+        # The scope mocked below is the actor's own tenant, so root the actor
+        # there: entity-local role writes need the role's entity in the
+        # actor's own root tree (DD-061 decision 17).
+        actor.root_entity_id = root.id
+        session.add(actor)
+        await session.flush()
         team = await auth_instance.entity_service.create_entity(
             session=session,
             name=f"team-success-{_suffix()}",

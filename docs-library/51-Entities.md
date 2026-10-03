@@ -120,7 +120,9 @@ every account change (password, email, status, roles, sessions, keys) and on
 adding it elsewhere; it can still suspend or revoke the membership. The member
 cannot grant access in the destination tenant either — inviting into, adding
 members to, or re-granting memberships in an entity outside its own root's
-tree answers **403**. Revoke such memberships (see the 0.1.0a35 upgrade notes
+tree answers **403**, and so do creating an account rooted there
+(`POST /users`) and writing an entity-local role defined there. Revoke such
+memberships (see the 0.1.0a35 upgrade notes
 for the audit queries).
 
 ---

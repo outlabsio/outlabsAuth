@@ -21,11 +21,11 @@ noted.
   refuse — for every caller, superusers included — to move a subtree under
   another root, promote it to the root level or move a root under any parent
   while the subtree still carries access: entity memberships that are not
-  revoked (active, suspended, pending or expired), pending invitations into
-  it, non-revoked direct role assignments of roles anchored in it and
-  memberships or integration principals elsewhere holding such a role,
-  non-revoked API keys and non-archived integration principals anchored in
-  it, or accounts rooted in it. The answer is **422** with error code
+  revoked (active, suspended, pending, expired or rejected), pending
+  invitations into it, non-revoked direct role assignments of roles anchored
+  in it and memberships or integration principals elsewhere holding such a
+  role, non-revoked API keys and non-archived integration principals anchored
+  in it, or accounts rooted in it. The answer is **422** with error code
   `ENTITY_MOVE_CARRIES_ACCESS` (`EntityMoveCarriesAccessError`,
   `details.reason = cross_root_move_carries_access`, `details.access` with a
   count per category). Moves within one root are unchanged. Before, the
@@ -47,15 +47,27 @@ noted.
   counterpart of `add_member`'s root rule. Suspending, narrowing and revoking
   are unchanged. Revoked memberships left in a subtree that changed roots
   therefore stay revoked.
-- **Breaking:** only an entity's own tenant grants access in it. For a
-  non-global actor, `POST /memberships`, `POST /auth/invite` with an
-  `entity_id`, and `PATCH /memberships/{entity_id}/{user_id}` edits that
-  re-grant or add roles answer **403** unless the entity lies in the tree of
-  the actor's own root (a personal API key is judged by its owner's root). In
-  consistent data that is every entity in the actor's scope; the rule refuses
-  members left in another tenant's tree by a cross-root move on an earlier
-  release, who could otherwise still plant accounts in that tenant or hand
-  out its roles, and unrooted legacy administrators.
+- **Breaking:** only an entity's own tenant grants access in it, creates
+  accounts in it or changes the roles defined there. For a non-global actor,
+  `POST /memberships`, `POST /auth/invite` with an `entity_id`, and
+  `PATCH /memberships/{entity_id}/{user_id}` edits that re-grant or add roles
+  answer **403** unless the entity lies in the tree of the actor's own root;
+  so do `POST /users` and `POST /auth/invite` without an `entity_id` for a
+  new account's root (`details.reason = root_entity_outside_tenant`), and
+  every write to an entity-local role on the roles router (`POST /roles`
+  with a `scope_entity_id`, `PATCH`/`DELETE /roles/{id}`,
+  `POST`/`DELETE /roles/{id}/permissions` and the role condition and
+  condition-group writes) unless the role's scope entity does. A personal
+  API key is judged by its owner's root. In consistent data that is every
+  entity in the actor's scope; the rule refuses members left in another
+  tenant's tree by a cross-root move on an earlier release, and unrooted
+  legacy administrators, who now create no accounts at all. Before, such a
+  member could still plant accounts in that tenant or hand out its roles: a
+  tenant admin with only a roleless membership in a subtree promoted to a
+  root created that tenant's accounts through `POST /users` (with a password
+  it knew, using its own tenant's `user:create`), which the new tenant then
+  managed as its own, and could rename, strip or delete the roles defined
+  there.
 - **Breaking:** direct role grants follow the DD-054 matrix in an entity
   context. An org-scoped role assigned directly to a user (`root_entity_id`
   set) now grants only at entities inside its own root's tree (archived ones
@@ -164,9 +176,11 @@ noted.
   principal) as global; the HTTP grant routes still need a human actor
   because SEC-2 delegation is evaluated against a user (unchanged).
 - **Breaking:** tenant-scoped actors can only root new accounts inside their
-  scope: `POST /users` with another tenant's `root_entity_id` answers 403; with
-  no root, the new account (and an invitee without an entity) inherits the
-  actor's own root instead of being created outside every tenant.
+  own tenant: `POST /users` with another tenant's `root_entity_id` answers
+  403 (also when a membership puts that root in the actor's scope, see
+  above); with no root, the new account (and an invitee without an entity)
+  inherits the actor's own root instead of being created outside every
+  tenant.
 - Reactivating a suspended/revoked direct role membership or entity membership,
   or widening its validity window, re-runs SEC-2 delegation containment (403
   with `details.missing_permissions`). Suspending or narrowing is never checked.
@@ -316,9 +330,15 @@ noted.
   JOIN entity_closure c ON c.descendant_id = r.scope_entity_id JOIN entities
   e ON e.id = c.ancestor_id AND e.parent_id IS NULL WHERE r.root_entity_id IS
   DISTINCT FROM e.id`; and the integration principals anchored in those
-  subtrees. Until they are revoked, such members can no longer grant access
-  in the destination tenant (403) or have their memberships re-granted
-  (422), and decision 16 keeps their accounts out of its hands.
+  subtrees. Until they are revoked, such members can no longer grant access,
+  create accounts or change entity-local roles in the destination tenant
+  (403) or have their memberships re-granted (422), and decision 16 keeps
+  their accounts out of its hands. Accounts that such a member created
+  there through `POST /users` before this release are rooted in the
+  destination tenant and look like its own in the database (admin-created
+  accounts record no creator column or audit row); the `user_created` log
+  event carries `created_by`, so review the destination accounts created by
+  the subtree's former members (when observability logging is on).
 - Accounts are managed by the tenant that holds their root. Entity moves on
   earlier releases did not re-root members: their root tenant keeps managing
   them, the destination tenant sees them read-only through their

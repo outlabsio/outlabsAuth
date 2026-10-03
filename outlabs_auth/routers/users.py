@@ -320,7 +320,10 @@ def get_users_router(
                     )
 
             # DD-056 creation rule: a tenant-scoped admin cannot root an account
-            # in another tenant (or leave it outside every tenant).
+            # in another tenant (or leave it outside every tenant). The root must
+            # lie in the admin's own root tree, not merely in its scope
+            # (DD-061 decision 17): a membership in another tenant's tree does
+            # not make that tenant's accounts the admin's to create.
             root_entity_id = await resolve_root_for_scoped_create(
                 auth,
                 session,

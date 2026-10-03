@@ -30,7 +30,12 @@ from outlabs_auth.schemas.abac import (
     parse_uuid,
 )
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
-from outlabs_auth.routers._scope import entity_scope_guard, resolve_principal_scope, role_visible_in_scope
+from outlabs_auth.routers._scope import (
+    entity_scope_guard,
+    require_role_write_in_principal_tenant,
+    resolve_principal_scope,
+    role_visible_in_scope,
+)
 from outlabs_auth.routers.capabilities import mark_auth_surface
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.definition_history import (
@@ -180,6 +185,22 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
             detail="Role not found",
         )
 
+    async def _require_role_write(
+        session: AsyncSession,
+        auth_result: dict[str, Any],
+        role: Role,
+    ) -> dict[str, Any]:
+        """Visibility plus tenant ownership for a role definition write (DD-061 decision 17)."""
+        scope = await _require_role_visibility(session, auth_result, role)
+        await require_role_write_in_principal_tenant(
+            auth,
+            session,
+            auth_result,
+            role.scope_entity_id,
+            scope=scope,
+        )
+        return scope
+
     async def _require_role_create_scope(
         session: AsyncSession,
         auth_result: dict[str, Any],
@@ -319,7 +340,14 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:create")),
     ):
         """Create a new role."""
-        await _require_role_create_scope(session, auth_result, data)
+        create_scope = await _require_role_create_scope(session, auth_result, data)
+        await require_role_write_in_principal_tenant(
+            auth,
+            session,
+            auth_result,
+            UUID(data.scope_entity_id) if data.scope_entity_id else None,
+            scope=create_scope,
+        )
 
         # SEC-2/SEC-3: a role may only be created carrying permissions the actor holds.
         create_entity_id = (
@@ -430,7 +458,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         """Update role details."""
         current_role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, current_role)
+        await _require_role_write(session, auth_result, current_role)
 
         update_dict = data.model_dump(exclude_unset=True)
 
@@ -518,7 +546,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         """Delete a role."""
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
 
         deleted = await auth.role_service.delete_role(
             session,
@@ -543,7 +571,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         """Add permissions to a role."""
         current_role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, current_role)
+        await _require_role_write(session, auth_result, current_role)
 
         # SEC-2/SEC-3: the actor must already hold each permission they're adding.
         await _require_role_grant_containment(session, auth_result, current_role, permissions)
@@ -570,7 +598,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
     ):
         """Remove permissions from a role."""
         current_role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, current_role)
+        await _require_role_write(session, auth_result, current_role)
 
         role = await auth.role_service.remove_permissions_by_name(
             session,
@@ -624,7 +652,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             group = await auth.role_service.create_role_condition_group(
@@ -660,7 +688,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             group = await auth.role_service.update_role_condition_group(
@@ -700,7 +728,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             deleted = await auth.role_service.delete_role_condition_group(
@@ -761,7 +789,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             cond = await auth.role_service.create_role_condition(
@@ -803,7 +831,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             cond = await auth.role_service.update_role_condition(
@@ -851,7 +879,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         role = await _get_role_or_404(session, role_id)
-        await _require_role_visibility(session, auth_result, role)
+        await _require_role_write(session, auth_result, role)
         await _require_role_grant_containment(session, auth_result, role)
         try:
             deleted = await auth.role_service.delete_role_condition(

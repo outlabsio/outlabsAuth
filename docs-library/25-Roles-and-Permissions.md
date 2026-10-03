@@ -120,6 +120,12 @@ Enterprise tips:
   cannot touch → **403**; out-of-tree → **404**. A personal API key carries
   its owner's tenant scope (narrowed to its anchor when it has one), never
   global scope on its own (DD-061)
+- Writes to an entity-local role (create with `scope_entity_id`, update,
+  delete, permission and ABAC condition changes) also need its scope entity
+  in the tree of a non-global actor's own root (**403** otherwise, DD-061
+  decision 17): a role seen only through a membership left in another
+  tenant's tree by an earlier cross-root move is read-only, and unrooted
+  legacy administrators change no entity-local roles
 - In an entity-context check a role assigned directly to a user follows the
   same reach as a membership role: an org-scoped role only inside its own
   organization's tree, an entity-local role only inside its scope,

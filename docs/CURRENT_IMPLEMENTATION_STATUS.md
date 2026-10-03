@@ -28,7 +28,8 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   invitations, role assignments, keys, principals, rooted accounts) — for
   superusers too — so cross-tenant reorganizations are revoke → move →
   re-grant; memberships of another tree's accounts are never re-granted, and
-  only an entity's own tenant grants access in it.
+  only an entity's own tenant grants access in it, creates accounts rooted
+  in it (`POST /users`, invites) or changes its entity-local roles.
 - ABAC condition writes are validated and evaluation fails closed.
 - Console contract additions: `/auth/config` password policy, access-code
   length and registration mode; session `is_current` via the `sid` claim and

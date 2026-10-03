@@ -362,8 +362,9 @@ async def entity_in_users_tenant(session: AsyncSession, actor_user: Any, entity_
     """Whether ``entity_id`` lies in the tree of ``actor_user``'s own root (DD-061 decision 17).
 
     The entity-side counterpart of :func:`account_in_users_tenant`: an
-    actor's memberships never make another tree its tenant, so a membership
-    write there is not the actor's to make. An unrooted actor has no tenant.
+    actor's memberships never make another tree its tenant, so neither a
+    membership write there nor a new account rooted there is the actor's to
+    make. An unrooted actor has no tenant.
     """
     actor_root_entity_id = getattr(actor_user, "root_entity_id", None)
     if actor_root_entity_id is None or entity_id is None:
@@ -412,9 +413,33 @@ async def require_membership_write_in_principal_tenant(
     owner behind a personal API key — is judged by its own root (a global
     owner's anchored key keeps its owner's reach); a principal without a
     user record is judged by its scope, which the caller already checked.
+    New accounts follow the same rule (:func:`resolve_root_for_scoped_create`).
     """
     if not scope_enforced(auth) or scope.get("is_global"):
         return
+    if await _principal_tenant_holds_entity(auth, session, auth_result, entity_id):
+        return
+    raise membership_write_outside_tenant()
+
+
+async def _principal_tenant_holds_entity(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: Optional[dict[str, Any]],
+    entity_id: Any,
+) -> bool:
+    """Whether ``entity_id`` lies in the principal's own tenant (DD-061 decision 17).
+
+    The shared test behind :func:`require_membership_write_in_principal_tenant`,
+    :func:`require_role_write_in_principal_tenant` and
+    :func:`resolve_root_for_scoped_create`, for a non-global principal whose
+    scope already holds the entity. A human — including the owner
+    behind a personal API key — is judged by its own root
+    (:func:`entity_in_users_tenant`); a global owner's anchored key keeps its
+    owner's reach. A principal without a user record is judged by its scope,
+    which the caller already checked. A user ID that does not load fails
+    closed.
+    """
     auth_result = auth_result or {}
     actor_user = auth_result.get("user")
     actor_user_id = auth_result.get("user_id")
@@ -424,18 +449,54 @@ async def require_membership_write_in_principal_tenant(
         except (TypeError, ValueError):
             actor_user = None
     if actor_user is None:
-        if actor_user_id is None:
-            return
-        raise membership_write_outside_tenant()
+        return actor_user_id is None
     if await entity_in_users_tenant(session, actor_user, entity_id):
-        return
+        return True
     if auth_result.get("source") == "api_key":
         if bool(getattr(actor_user, "is_superuser", False)):
-            return
+            return True
         owner_scope = await resolve_user_scope(auth, session, actor_user)
         if owner_scope.get("is_global"):
-            return
-    raise membership_write_outside_tenant()
+            return True
+    return False
+
+
+def role_write_outside_tenant() -> HTTPException:
+    """403 for a visible entity-local role of another tenant (DD-061 decision 17)."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only the role's own tenant or a global administrator can change this role",
+    )
+
+
+async def require_role_write_in_principal_tenant(
+    auth: Any,
+    session: AsyncSession,
+    auth_result: Optional[dict[str, Any]],
+    role_scope_entity_id: Any,
+    *,
+    scope: dict[str, Any],
+) -> None:
+    """403 unless an entity-local role definition belongs to the principal's tenant.
+
+    Call after the role visibility (or create-scope) check on every roles
+    router write: create, update, delete, permission and ABAC condition
+    changes. Those routes check a flat permission, so the entity a role is
+    defined at only has to be in the actor's scope — which also holds the
+    subtrees of the actor's memberships. A member left in another tenant's
+    tree by a cross-root move on an earlier release could otherwise create,
+    rename, strip or delete that tenant's roles there with a permission from
+    its own tenant (DD-061 decision 17). Organization roles are visible only
+    at the actor's own root, and system-wide roles have their own rule, so
+    only entity-local roles (``role_scope_entity_id`` set) are checked. The
+    principal is judged like a membership grant
+    (:func:`require_membership_write_in_principal_tenant`).
+    """
+    if role_scope_entity_id is None or not scope_enforced(auth) or scope.get("is_global"):
+        return
+    if await _principal_tenant_holds_entity(auth, session, auth_result, role_scope_entity_id):
+        return
+    raise role_write_outside_tenant()
 
 
 def user_not_found() -> HTTPException:
@@ -718,11 +779,21 @@ async def resolve_root_for_scoped_create(
 ) -> Optional[UUID]:
     """Apply the DD-056 creation rule to a new account's root entity.
 
+    Used by ``POST /users`` and ``POST /auth/invite`` without an entity.
     Global actors keep full control (any root, or none). A tenant-scoped actor
-    may only root a new account at an entity inside its own scope; when it
-    names no root the account inherits the actor's own root so the new user
-    stays visible to (and manageable by) the tenant that created it. An actor
-    with no root of its own must name an in-scope root explicitly.
+    may only root a new account inside its own tenant: the named root must be
+    in its scope (403 otherwise) and, for a human actor — including the owner
+    behind a personal API key — in the tree of the actor's own root (403,
+    ``details.reason = root_entity_outside_tenant``, DD-061 decision 17). A
+    scope also holds the subtrees of the actor's memberships, so without the
+    second test a member of a subtree that a global actor moved to another
+    root (or promoted to a root) on an earlier release could create accounts
+    of that tenant with a password it knows. An unrooted human actor has no
+    tenant and roots no account. When the actor names no root, the account
+    inherits the actor's own root so the new user stays visible to (and
+    manageable by) the tenant that created it; an actor without a root of its
+    own must name one (403, ``root_entity_required``). A principal without a
+    user record is judged by its scope.
     """
     if not scope_enforced(auth):
         return requested_root_entity_id
@@ -751,5 +822,17 @@ async def resolve_root_for_scoped_create(
         raise PermissionDeniedError(
             message="Root entity is outside your accessible entity scope",
             details={"root_entity_id": str(requested_root_entity_id)},
+        )
+    tenant_auth_result = dict(auth_result or {})
+    if actor_user is not None:
+        tenant_auth_result["user"] = actor_user
+        tenant_auth_result["user_id"] = str(actor_user.id)
+    if not await _principal_tenant_holds_entity(auth, session, tenant_auth_result, requested_root_entity_id):
+        raise PermissionDeniedError(
+            message="Only the root entity's own tenant or a global administrator can create accounts in it",
+            details={
+                "root_entity_id": str(requested_root_entity_id),
+                "reason": "root_entity_outside_tenant",
+            },
         )
     return requested_root_entity_id
