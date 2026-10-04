@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a36] - 2026-10-03
 
 ### Fixed
 
@@ -31,6 +31,42 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   stack), so every library error in the example answered 500. The late-call
   warning from `instrument_fastapi()` now says that the exception handlers do
   not run either, and the cookbook smoke checks the refusal envelope above.
+
+### Documentation
+
+- The handbook is the source for the docs site again. `docs-library/04`
+  states that `get_oauth_router` and `get_oauth_associate_router` are exported
+  from `outlabs_auth.routers` (since 0.1.0a25; the module paths still work),
+  documents multi-frontend OAuth (`/authorize?app=<profile>` binds a
+  registered frontend profile and a per-flow nonce) and notes that OutlabsAuth
+  UI account linking needs the OAuth associate router mounted;
+  `docs-library/05` documents the `azp` session claim recorded with frontend
+  profiles.
+- `docs-library/26-ABAC.md` shows the condition write refusal envelope,
+  `docs/ERROR_HANDLING.md` notes the 400 status of `INVALID_INPUT` on the ABAC
+  condition write routes, and the observability troubleshooting table lists
+  library errors answering 500 when `instrument_fastapi()` runs inside
+  `lifespan`.
+
+### Database migrations
+
+- None. Schema head remains `20260802_0025`.
+
+### Operational upgrade notes
+
+- No configuration, role or schema changes. Consumers should refresh their
+  locks to `outlabs-auth==0.1.0a36` (for example
+  `uv lock --upgrade-package outlabs-auth`) and redeploy.
+- ABAC condition and condition-group write refusals on the roles and
+  permissions routers now carry `error = INVALID_INPUT`,
+  `details.reason = invalid_abac_condition` and the offending `details.field`
+  (the status stays 400). Clients that matched `HTTP_ERROR` or read a plain
+  `detail` string on these routes should read `error`, `message` and
+  `details` instead.
+- Hosts that mount these routers need the library exception handler: call
+  `instrument_fastapi()` at import time (before the app starts serving) or
+  `register_outlabs_exception_handler(app)`. Without it, or when
+  `instrument_fastapi()` runs inside `lifespan`, these refusals answer 500.
 
 ## [0.1.0a35] - 2026-10-02
 
