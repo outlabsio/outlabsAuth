@@ -239,9 +239,7 @@ class PermissionService(BaseService[Permission]):
             result = await session.execute(ancestors_stmt)
             return {cast(UUID, row[0]): int(row[1]) for row in result.all()}
 
-        return await request_cache.get_or_load(
-            ("ancestor_depths", entity_id), _loader
-        )
+        return await request_cache.get_or_load(("ancestor_depths", entity_id), _loader)
 
     async def _load_direct_role_context_ancestor_ids(
         self,
@@ -477,9 +475,11 @@ class PermissionService(BaseService[Permission]):
             env_context=env_context,
             time_attrs=time_attrs,
         )
-        use_permission_cache = self._can_use_permission_cache() and (
-            not abac_enabled or cache_context_hash is not None
-        )
+        # The policy engine generates server-owned time only after this point.
+        # Hashing caller context cannot bind that time or its next transition.
+        # Evaluate both conditioned allows and denies afresh; ordinary RBAC and
+        # the policy-loading caches retain their existing behavior.
+        use_permission_cache = self._can_use_permission_cache() and not abac_enabled
         perm_cache_versions: Optional[Dict[str, int]] = None
         if use_permission_cache:
             cached, perm_cache_versions = await self._get_cached_permission_result(
@@ -731,9 +731,7 @@ class PermissionService(BaseService[Permission]):
         async def _load() -> list[UserRoleMembership]:
             stmt = (
                 select(UserRoleMembership)
-                .options(
-                    *self._user_role_membership_permission_options(entity_type=entity_type)
-                )
+                .options(*self._user_role_membership_permission_options(entity_type=entity_type))
                 .where(
                     cast(Any, UserRoleMembership.user_id) == user_id,
                     cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
@@ -830,9 +828,7 @@ class PermissionService(BaseService[Permission]):
         )
 
         async def _load() -> Dict[Optional[str], str]:
-            stmt = select(SqlConditionGroup).where(
-                cast(Any, SqlConditionGroup.id).in_(list(group_ids))
-            )
+            stmt = select(SqlConditionGroup).where(cast(Any, SqlConditionGroup.id).in_(list(group_ids)))
             result = await session.execute(stmt)
             return {str(group.id): group.operator for group in result.scalars().all()}
 
@@ -889,9 +885,7 @@ class PermissionService(BaseService[Permission]):
             memberships_result = await session.execute(memberships_stmt)
             return list(memberships_result.scalars().all())
 
-        memberships: list[EntityMembership] = await request_cache.get_or_load(
-            memo_key, _load_memberships
-        )
+        memberships: list[EntityMembership] = await request_cache.get_or_load(memo_key, _load_memberships)
 
         for membership in memberships:
             if not membership.can_grant_permissions():
@@ -1061,17 +1055,13 @@ class PermissionService(BaseService[Permission]):
         # that can't match the required name can never contribute, so loading
         # their ABAC conditions is pure waste — and for a role with many unrelated
         # permissions this dominates the outer query cost when ABAC is on.
-        matching_perms = [
-            p for p in perms if p and self._permission_set_allows(required_permission, {p.name})
-        ]
+        matching_perms = [p for p in perms if p and self._permission_set_allows(required_permission, {p.name})]
         if not matching_perms:
             return False
 
         # Lazy-load conditions for matching permissions only, batched in one SELECT.
         unloaded_permission_ids = [
-            permission.id
-            for permission in matching_perms
-            if not self._relationship_is_loaded(permission, "conditions")
+            permission.id for permission in matching_perms if not self._relationship_is_loaded(permission, "conditions")
         ]
         if unloaded_permission_ids:
             perm_stmt = (
@@ -1220,9 +1210,7 @@ class PermissionService(BaseService[Permission]):
         # membership mutation already bumps — see CacheService.get_user_permission_names.
         # entity_type-shaped aggregations vary per context and are not cached.
         cache_service = getattr(self, "cache_service", None)
-        use_cache = (
-            entity_type is None and cache_service is not None and self._can_use_permission_cache()
-        )
+        use_cache = entity_type is None and cache_service is not None and self._can_use_permission_cache()
         cached_versions: Optional[Dict[str, int]] = None
         if use_cache:
             cached_names, cached_versions = await cache_service.get_user_permission_names(
@@ -1371,11 +1359,7 @@ class PermissionService(BaseService[Permission]):
                 )
             )
             matcher = PermissionMatcher(granted_permissions)
-            return {
-                permission_name
-                for permission_name in candidate_names
-                if matcher.allows(permission_name)
-            }
+            return {permission_name for permission_name in candidate_names if matcher.allows(permission_name)}
 
         direct_permissions = await self._get_user_role_permissions(
             session=session,
@@ -1399,8 +1383,7 @@ class PermissionService(BaseService[Permission]):
         return {
             permission_name
             for permission_name in candidate_names
-            if direct_matcher.allows(permission_name)
-            or ancestor_matcher.allows_from_ancestor(permission_name)
+            if direct_matcher.allows(permission_name) or ancestor_matcher.allows_from_ancestor(permission_name)
         }
 
     async def _list_active_permission_names(
@@ -1577,10 +1560,7 @@ class PermissionService(BaseService[Permission]):
         }
 
     def _can_use_permission_cache(self) -> bool:
-        return bool(
-            getattr(self.config, "enable_caching", False)
-            and getattr(self, "cache_service", None) is not None
-        )
+        return bool(getattr(self.config, "enable_caching", False) and getattr(self, "cache_service", None) is not None)
 
     @staticmethod
     def _permission_cache_context_hash(
@@ -3015,11 +2995,7 @@ class PermissionService(BaseService[Permission]):
         # Callers that just computed the post-mutation snapshot pass it as
         # ``after``; rebuilding it here re-ran the multi-query snapshot a third
         # time on every permission-definition edit.
-        snapshot = (
-            after
-            if after is not None
-            else await self._build_permission_definition_snapshot(session, permission)
-        )
+        snapshot = after if after is not None else await self._build_permission_definition_snapshot(session, permission)
         await self.permission_history_service.record_event(
             session,
             permission_id=permission.id,

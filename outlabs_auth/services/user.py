@@ -204,9 +204,7 @@ class UserService(BaseService[User]):
         """Deliver a magic-link secret via the configured transactional messaging service."""
         if self.transactional_messaging_service is None:
             return False
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=self.config.magic_link_expire_minutes
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.config.magic_link_expire_minutes)
         intent = AuthChallengeDeliveryIntent(
             challenge_type="magic_link",
             recipient=self._build_delivery_recipient(user),
@@ -230,18 +228,14 @@ class UserService(BaseService[User]):
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
         delivery_channel: Literal["email", "sms", "whatsapp"] = "email",
-        challenge_type: Literal[
-            "access_code", "whatsapp_otp", "sms_otp"
-        ] = "access_code",
+        challenge_type: Literal["access_code", "whatsapp_otp", "sms_otp"] = "access_code",
         metadata: Optional[dict[str, Any]] = None,
         **extra_metadata: Any,
     ) -> bool:
         """Deliver an access-code / OTP secret via the configured messaging service."""
         if self.transactional_messaging_service is None:
             return False
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=self.config.access_code_expire_minutes
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.config.access_code_expire_minutes)
         intent = AuthChallengeDeliveryIntent(
             challenge_type=challenge_type,
             recipient=self._build_delivery_recipient(user),
@@ -270,9 +264,7 @@ class UserService(BaseService[User]):
         """Deliver a phone-verify secret via the configured transactional messaging service."""
         if self.transactional_messaging_service is None:
             return False
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=self.config.access_code_expire_minutes
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.config.access_code_expire_minutes)
         intent = AuthChallengeDeliveryIntent(
             challenge_type="phone_verify",
             recipient=self._build_delivery_recipient(user),
@@ -671,6 +663,11 @@ class UserService(BaseService[User]):
         if email is not None:
             normalized_email = validate_email(email)
             if normalized_email != user.email:
+                if user.status == UserStatus.DELETED:
+                    raise InvalidInputError(
+                        message="Authentication identifiers on retained-deleted accounts cannot be changed",
+                        details={"user_id": str(user.id)},
+                    )
                 existing = await self.get_one(
                     session,
                     User.email == normalized_email,
@@ -1675,9 +1672,7 @@ class UserService(BaseService[User]):
             "profile_id": profile_id,
         }
 
-    async def _load_root_context_cached(
-        self, root_entity_id: UUID
-    ) -> tuple[Optional[str], Optional[str]]:
+    async def _load_root_context_cached(self, root_entity_id: UUID) -> tuple[Optional[str], Optional[str]]:
         """Root-entity slug/type as plain strings.
 
         Cached as VALUES, never ORM instances: the request cache can outlive

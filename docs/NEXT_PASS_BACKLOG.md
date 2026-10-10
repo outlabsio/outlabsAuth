@@ -7,11 +7,14 @@ This document is intentionally short. It is not a full project plan. It is a wor
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-- **S1 baseline security patch (not started).** Eight a36 defects with retained
+- **S1 baseline security patch (local first slice).** F-admin-01 conditioned
+  decision freshness and TI-04 deleted-email reservation have local fixes and
+  regression evidence in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md).
+  Six baseline defects remain; the full eight-defect patch is unreleased. Retained
   reproductions: cache invalidation B1–B3, restore keeps superuser (TI-01), pre-deletion
   access JWT revives after restore (TI-02), OAuth association commits after a security
-  change (TI-03), deleted account email editable (TI-04), cached time-conditioned
-  decisions (F-admin-01). Scope and exit evidence:
+  change (TI-03). Migration helpers, numeric budgets and artifact qualification
+  also remain. Full scope and exit evidence:
   [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S0 decisions and later stages (not started).** Record DD-062 dispositions before
   S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's

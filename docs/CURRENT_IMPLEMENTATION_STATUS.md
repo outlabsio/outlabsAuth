@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-10-02
+**Updated**: 2026-10-10
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -14,12 +14,15 @@ The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 [independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) await maintainer
 disposition (proposed DD-062). The review found eight defects in the released a36
 baseline (cache invalidation, account restore, OAuth enrollment, conditioned caching);
-they are planned as one S1 security patch and are not yet fixed. The local pure administrative
+they are planned as one S1 security patch. The local candidate now fixes
+conditioned decision-cache freshness (F-admin-01) and deleted-identifier reservation
+(TI-04); [implementation and verification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
+The other six defects and complete S1 qualification/release remain open. The local pure administrative
 evaluator has 51 focused cases; it remains unwired to persistence, routes,
 principal loading and host queries. Namespace-qualified authentication, persistent
 groups/grants, transactional history integration and migration acceptance are
-proposed work, not completed slices. No new runtime/schema changes or release are
-made by the documentation revision.
+proposed work, not completed slices. The first S1 slice changes two service guards;
+it adds no schema, version, tag or release.
 
 ## Completed Slices
 

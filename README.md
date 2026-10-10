@@ -48,6 +48,10 @@ and its [independent review packet](./docs/TENANT_AUTH_REVIEW_PACKET.md). These 
 design documents; scoped identities and persistent administrative grants are not
 activated by this draft.
 
+**Local security work:** [S1 implementation receipt](./docs/TENANT_AUTH_SECURITY_PATCH.md)
+records the first two baseline fixes and their regressions. The complete patch
+and consumer adoption remain unreleased.
+
 Deep host DX / feature matrix when you need them:
 [API design](./docs/API_DESIGN.md),
 [Comparison matrix](./docs/COMPARISON_MATRIX.md).
