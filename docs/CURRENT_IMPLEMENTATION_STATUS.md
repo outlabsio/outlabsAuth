@@ -9,9 +9,12 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 
 ## Proposed tenant-identity and administrative-grant design (2026-10-10)
 
-The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md) and
-[review packet](./TENANT_AUTH_REVIEW_PACKET.md) are prepared for independent
-technical and human review (proposed DD-062). The local pure administrative
+The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
+(revision 0.2, staged delivery S0–S7) and its completed
+[independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) await maintainer
+disposition (proposed DD-062). The review found eight defects in the released a36
+baseline (cache invalidation, account restore, OAuth enrollment, conditioned caching);
+they are planned as one S1 security patch and are not yet fixed. The local pure administrative
 evaluator has 51 focused cases; it remains unwired to persistence, routes,
 principal loading and host queries. Namespace-qualified authentication, persistent
 groups/grants, transactional history integration and migration acceptance are

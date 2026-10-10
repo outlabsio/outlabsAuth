@@ -1,7 +1,7 @@
 # Tenant identities, customer hierarchy and delegated administration
 
 **Status:** Proposed design for independent technical and human review.
-**Revision:** 0.1, 2026-10-10.
+**Revision:** 0.2, 2026-10-10 (delivery order, latency constraints and prerequisite defects added).
 **Owner:** OutLabsAuth maintainers; consuming products own their domain policy and migration acceptance.
 **Decision record:** proposed DD-062; no acceptance is implied by this document or existing experimental code.
 **Working branch:** `codex/tenant-auth-design-20261010`.
@@ -39,16 +39,67 @@ approval of a data migration from approval of the library design.
 16. [Client, CLI and operator experience](#16-client-cli-and-operator-experience)
 17. [Threat model and abuse cases](#17-threat-model-and-abuse-cases)
 18. [Acceptance, performance and operational evidence](#18-acceptance-performance-and-operational-evidence)
-19. [Implementation work packages and gates](#19-implementation-work-packages-and-gates)
+19. [Delivery order, work packages and gates](#19-delivery-order-work-packages-and-gates)
 20. [Release, rollout and recovery](#20-release-rollout-and-recovery)
 21. [Consequences, unresolved decisions and review process](#21-consequences-unresolved-decisions-and-review-process)
 22. [Source references and status ledger](#22-source-references-and-status-ledger)
 
+**Delivery order in one paragraph (revision 0.2, section 19):** decide and
+measure first; fix eight existing baseline defects in cache invalidation, account
+restore, OAuth enrollment and conditioned caching (section 12.3); ship
+administrative grants over today's identities, disabled by default, before any
+identity-namespace work; pull the same-transaction lifecycle observer forward so
+hosts can build history and replay in parallel; add namespaces in legacy mode as a
+proven no-op; then offer qualified identity to new installations only. Converting
+an already populated legacy installation is a later, optional stage. Under this
+order the one irreversible step, admitting duplicate identifiers, never happens
+on an existing legacy installation unless that deployment separately opts in.
+Section 21.4 records how revision 0.2 disposes of the nine findings from the
+independent review of revision 0.1.
+
 Product reviewers should start with sections 1, 2, 5, 6, 16 and 21. Identity
 reviewers should focus on 7, 8, 13 and 15. Authorization reviewers should focus on
 9–12 and 17. Migration/operations reviewers should focus on 12–15 and 18–20.
-Every reviewer should inspect the invariants and decision register. The companion
+Every reviewer should inspect the invariants, the decision register and the
+section 19 delivery order. The companion
 [review packet](./TENANT_AUTH_REVIEW_PACKET.md) provides structured review prompts.
+
+### Start here (for whoever implements this)
+
+**State on 2026-10-10:** design revision 0.2 plus a completed independent review
+(nine findings, all reconciled in section 21.4). Nothing is implemented, no decision
+in section 21.2 is accepted, and no stage is scheduled. The unwired evaluator
+prototype (`outlabs_auth/services/administrative_scope.py`, 51 tests) is the only
+code, and it must stay unwired until stage S2.
+
+**Read in this order:** the delivery paragraph above; section 19 (stages S0–S7 and
+their exits); section 12.3 (the S1 baseline defects); section 21.4 (review
+dispositions); section 21.2 (decisions to record); then the
+[independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) and its lane
+reports and synthetic reproductions in `docs/reviews/tenant-auth-2026-10-10/`.
+Sections 7–18 are the detailed contract to consult per stage, not a reading list.
+
+**First work when this is picked up:**
+
+1. **S0:** record maintainer dispositions for the S0 decisions in
+   [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) as DD-062, and the numeric budgets
+   for section 18.4. Consumers record their private inventories.
+2. **S1 (one security patch):** turn both reproduction scripts into permanent
+   regression tests that fail on the a36 baseline, then fix B1–B3, TI-01–TI-04 and
+   F-admin-01 until they pass. Add the session security-epoch column with the
+   section 15.6 rules. Keep warm-path query budgets unchanged.
+3. Then S2 and S3 in parallel, and S4 when a consumer needs it.
+
+**A consumer does not need every stage.** One whose population has no identifier
+shared across unrelated customers can adopt S1–S3 and defer S4–S5. It keeps global
+uniqueness and surfaces any first collision as a conflict, never a merge; that
+collision is the trigger to schedule S4–S5.
+
+**Working rules:** this repository is public and stays consumer-agnostic (no
+product names, private topology or private paths). Qualify locally with real
+PostgreSQL and Redis (`TEST_REDIS_REQUIRED=1`, then the full suite); hosted
+workflows are for publishing only. A stage is published only through the normal
+tagged release, and each consumer adopts it under its own staging acceptance.
 
 ## 1. Outcome and proposed direction
 
@@ -170,7 +221,9 @@ links below refer to this repository; no production deployment is inferred.
 | Social identity uniqueness is global `(provider, provider_user_id)` | [social model](../outlabs_auth/models/sql/social_account.py), [OAuth router](../outlabs_auth/routers/oauth.py) | Provider account reuse across local namespaces requires a deliberate change |
 | Tokens identify `sub`; sessions also bind `azp` | [JWT utilities](../outlabs_auth/utils/jwt.py), [refresh model](../outlabs_auth/models/sql/token.py) | A namespace must be explicitly bound on every relevant issuance/verification path |
 | Challenges bind user/profile, OTP verification still looks up email/phone | [challenge model](../outlabs_auth/models/sql/auth_challenge.py), AuthService | Short-code flows cannot rely on global identifier lookup after duplicates exist |
-| User deletion retains/reserves the account; restore does not restore access | UserService, [implementation status](./CURRENT_IMPLEMENTATION_STATUS.md) | Preserve retained reservation and identity-only restore in each namespace |
+| User deletion retains the account and revokes memberships, direct roles, refresh rows and keys. **Corrected in revision 0.2:** restore re-activates a retained `is_superuser` flag and unexpired pre-deletion access JWTs, and profile editing can change a deleted account's email and release its reservation (review findings TI-01, TI-02, TI-04) | UserService, [implementation status](./CURRENT_IMPLEMENTATION_STATUS.md), [independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) | Restore is not yet identity-only; section 12.3 corrects the baseline before each namespace inherits it |
+| OAuth association state binds user/profile/browser but the callback does not recheck account status or credential security changes before committing a new provider link (TI-03) | [OAuth associate router](../outlabs_auth/routers/oauth_associate.py), [OAuth state store](../outlabs_auth/routers/oauth_state_store.py) | Method enrollment needs a cancellation rule, not only exact-account binding |
+| With ABAC enabled, the permission-check cache key omits the current time that the policy engine generates for evaluation (F-admin-01) | [permission service](../outlabs_auth/services/permission.py), [policy engine](../outlabs_auth/services/policy_engine.py) | Conditioned decisions cannot be cached on the existing key |
 | Frontend profiles are audience/routing context | [frontend types](../outlabs_auth/frontend/types.py), DD-059 | `app`, `azp` and customer namespace are different axes |
 | Historical legacy `tenant_id` columns were deliberately removed | [revision 0002](../outlabs_auth/migrations/versions/20260317_0002_reconcile_legacy_bootstrap_schema.py) | Do not resurrect their old values or assume their semantics match this proposal |
 | Declarative CLI resolves email references and HTTP apply may be partial | [declarative code](../outlabs_auth/cli_support/declarative.py) | Namespace-aware references and a versioned plan contract are required |
@@ -693,6 +746,13 @@ changes, subject to the selected local account's current eligibility.
 
 Store provider tokens only under existing configured encryption/storage policy.
 A token retained for A is not copied to C during reconciliation or account split.
+Method enrollment is a credential change on the account. Its state binds the
+initiating authentication proof and the account's session security epoch; the
+commit rechecks current account and namespace eligibility and rejects the link if
+a password security reset, incident revocation, suspension or deletion happened
+after the flow began (TI-03). D08/D10 fix the cancellation matrix for ordinary
+logout and routine password change, and serialize enrollment against those
+security mutations.
 Unlink must leave an approved usable login/recovery method in that namespace.
 Provider logout is not equivalent to revoking every local customer session.
 
@@ -703,7 +763,9 @@ frontend audience/profile provenance as applicable. Include password login,
 invite acceptance, OAuth login/associate completion, magic-link/access-code, refresh
 rotation and any service-supported auto-login. Verification checks signed values
 against current retained user/namespace/session state; an email claim is display,
-not lookup authority. Grants are re-evaluated live and are not embedded as a
+not lookup authority. Both bearer paths compare `iat` with a durable
+per-account session security epoch that deletion, security reset and incident
+revocation advance and that restore never lowers (TI-02). Grants are re-evaluated live and are not embedded as a
 permanent authority union in JWTs.
 
 Refresh families retain namespace and application binding through rotation and
@@ -737,7 +799,11 @@ external mail provider. Changing an identifier in A does not edit C.
 Retained deletion preserves namespace and identifier reservation, revokes affected
 memberships/grants/sessions/keys and commits audit. Restore is identity-only and
 never resurrects prior memberships or staff administration. A historical source
-reappearance is not itself permission to restore account activity.
+reappearance is not itself permission to restore account activity. Retained
+deletion also withdraws effective platform privilege while keeping the historical
+protected classification (TI-01, D35), advances the session security epoch so no
+pre-deletion token authenticates after restore (TI-02), and freezes the tombstone's
+authentication identifiers until an explicit privileged purge/reuse (TI-04, D18).
 
 Membership adoption/root assignment in legacy mode preserves documented behavior.
 In scoped mode it cannot assign a different namespace. A root relocation, customer
@@ -1144,6 +1210,14 @@ target, operation class, credential ceiling and relevant actor/grant/policy/grou
 topology/identifier epochs. Email, display names and mutable slugs are inadequate.
 Never reuse the permission check for a profile edit to authorize credential reset.
 
+Condition outcomes are inputs to that key, not just policy epochs. A decision on a
+conditioned path may be cached only when the complete server-owned evaluated
+context (resource identity and version, environment and the generated current time)
+is bound into the key and the entry expires at the condition's next proven
+transition. Otherwise the path evaluates freshly, for both allows and denials
+(F-admin-01). Durable epochs and grant validity deadlines alone do not cover a time
+or attribute predicate changing without any write.
+
 Authoritative durable revisions are checked under the selected revocation model.
 Redis pub/sub improves propagation; delivery and TTL alone are not a correctness
 proof. Expiry bounds the cache lifetime to the nearest relevant validity deadline.
@@ -1163,6 +1237,48 @@ alone. Qualified administrative mode should require authoritative lifecycle/poli
 validation even if JWT signature verification is stateless. If another profile
 allows a bounded stale window, its duration and affected operations require explicit
 acceptance; it cannot be marketed as immediate revocation.
+
+### 12.3 Existing baseline defects to correct first
+
+Two reviews of the released a36 baseline found defects that this design builds on.
+They affect current deployments independently of the proposal, so they are corrected
+in stage S1 (section 19) before any new identity or authority relies on them. B1–B3
+come from the revision 0.2 hot-path review. TI-01–TI-04 and F-admin-01 come from the
+[independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) of revision 0.1,
+which retains runnable synthetic reproductions; each was rerun and confirmed against
+the cited source during reconciliation.
+
+**Cache invalidation (B1–B3):**
+
+| ID | Defect in the a36 source | Consequence | Correction |
+| --- | --- | --- | --- |
+| B1 | Membership mutations increment the user permission version inside the service method ([membership service](../outlabs_auth/services/membership.py), `_invalidate_membership_permissions_cache`), while the unit of work commits afterwards ([unit of work](../outlabs_auth/core/uow.py)). No after-commit hook exists | A concurrent request between the increment and the commit computes permissions from pre-change rows and caches them under the new version; a revoked allow can survive until the next increment or the permission TTL (about 15 minutes). This contradicts U14 today | Run version increments and publications as after-commit actions of the unit of work (or a durable outbox); keep the request-local reset immediate |
+| B2 | API-key snapshots compute or reuse effective permissions first and read the version counters only when writing the snapshot ([dependencies](../outlabs_auth/dependencies/__init__.py), [API-key service](../outlabs_auth/services/api_key.py) `set_api_key_auth_snapshot`) | An increment between computation and write stores stale permissions under current versions for the snapshot TTL | Read versions before computing and store the snapshot under the versions observed first |
+| B3 | Permission queries filter membership/role validity windows, but cached entries always receive the configured TTL ([cache service](../outlabs_auth/services/cache.py)) | Access can outlive `valid_until` by up to the TTL | Bound each entry's TTL by the earliest relevant validity deadline, as section 12.2 already requires |
+
+Regression tests must reproduce each race deterministically (for example, a
+reader paused between version read and cache write) rather than relying on timing.
+The existing warm-path query budgets must remain unchanged after the fixes.
+
+**Lifecycle, enrollment and conditioned-cache defects (independent review):**
+
+| ID | Defect in the a36 source | Consequence | Correction in S1 |
+| --- | --- | --- | --- |
+| TI-01 | Retained deletion leaves `is_superuser` set, and identity-only restore returns the account to ACTIVE with that flag; the superuser-change method refuses to edit a DELETED row, so it cannot be cleared first | Restore silently restores platform authority | Separate *effective* privilege from *historical protected classification* (D35). Deletion withdraws effective privilege; restore never re-grants it, and a separate audited platform regrant or dedicated privileged-recovery operation is required. The historical classification keeps limited administrators from managing the former operator |
+| TI-02 | Deletion revokes refresh rows only; both bearer paths accept an unexpired access JWT by subject, current status and password-change time | The same pre-deletion access JWT authenticates again after restore, for its remaining lifetime | Add a durable per-account session security epoch (for example a `sessions_invalid_before` timestamp) advanced by deletion, security reset and incident revocation and checked by both bearer paths against `iat`. Restore never lowers it. It rides on the already loaded user row (C11) |
+| TI-03 | The association callback checks only that the retained user exists, then inserts and commits the provider link; password security reset, suspension and deletion do not cancel outstanding association state | A pending association started under a compromised session survives the owner's reset; an inactive account can gain a login method | At the enrollment commit, require current account eligibility and an initiating proof issued after the latest security epoch; reject otherwise. The full qualified cancellation matrix and commit serialization belong to D08/D10 in S5. An installation that cannot satisfy this disables association |
+| TI-04 | Profile editing replaces the email of a DELETED user, unlike the status method, which rejects deleted users | Ordinary maintenance releases the retained identifier reservation that D18 reserves for a reviewed purge/reuse | Treat authentication identifiers on tombstoned accounts as immutable until an explicit privileged purge/reuse operation, enforced in the service so every route and writer inherits it |
+| F-admin-01 | The permission-check cache hashes caller-supplied `time_attrs`, normally absent, before the policy engine generates the current time it evaluates | A cached allow survives a time condition becoming false (and a cached deny survives it becoming true) for the cache TTL | Do not cache positive or negative decisions on conditioned paths unless the complete evaluated, server-owned condition context and its next transition deadline are bound into the key (section 12.2). The conservative first correction bypasses decision caching for conditioned paths; ordinary RBAC and policy-loading caches remain |
+
+These corrections are reachable today wherever the library's user-management router
+(which includes restore and profile editing) or the OAuth association router is
+mounted, or where ABAC conditions use time attributes. Each consumer checks its own
+exposure privately. S1 qualifies them with the negative tests in the review's lane
+reports: privileged and ordinary delete → restore, the same pre-deletion JWT on both
+bearer paths, reset/suspend/delete during a pending association, deleted-identifier
+edits through service and route, and warm-cache crossings of allow-to-deny and
+deny-to-allow boundaries with unchanged epochs.
+
 
 ## 13. Audit, deletion and frozen historical evidence
 
@@ -1258,6 +1374,12 @@ reviewed shared. First provisioning may import an explicitly approved password h
 or create an invitation. Subsequent replay preserves native passwords, MFA, OAuth
 links, recovery/invitation state, lockouts, local suspension, verification, keys and
 session families. It does not reset credentials because the source remains old.
+Login identifiers (authentication email and phone-login identifier) are
+target-owned after initial provisioning by default; source contact fields are kept
+separately. A source-side change to a login identifier surfaces as a correction
+request, or runs as a separately authorized identifier change with collision
+checks, epoch invalidation and proof at the new destination. A source verification
+flag never transfers proof to a replacement destination (F-MR-04).
 
 Source membership/role contributions need independent ownership. Removing one
 contribution removes only its support; local and other-source contributions survive.
@@ -1290,6 +1412,15 @@ owners, people and relationships are exported at conflicting versions, quarantin
 the affected unit until the consistency proof or reviewed conflict disposition is
 available. The host chooses the source-specific snapshot/change-log mechanism.
 
+A consistent cut can still contain contradictory facts about one relationship
+episode, such as a roster that lists it as current and an authoritative record that
+removes it, with no ordering between them. The host plan names its authoritative
+current-state source, its episode/incarnation rule and its precedence or ordering
+evidence. An unresolved contradiction quarantines that relationship: raw
+observations are preserved, no access is expanded, and no removal or re-addition
+time, actor or reason is invented. An ordered removal followed by a new episode is
+not a contradiction (F-MR-03).
+
 Absence authorizes source-contribution removal only for a proven complete cohort.
 Failed pages, limited rehearsals, missing collections, malformed arrays and partial
 exports cannot prove deletion. Completeness receipts are machine-checkable per
@@ -1314,8 +1445,13 @@ credentials, tokens, events and delivery. A reused event/idempotency key with ch
 payload is a conflict. Retry only bounded, known contention errors. Receipts identify
 applied, unchanged, conflicted and failed units with cohort accounting.
 
-Invitation/notification sending follows committed outbox records and deduplicated
-delivery. Dry-run/rehearsal sends nothing and rotates no credentials. The existing
+Invitation/notification sending follows committed outbox records. Enqueueing is
+duplicate-free; physical delivery is not, unless the provider's idempotency is
+verified for a stable operation key within a documented window. Otherwise delivery
+is at-least-once: a crash after provider acceptance and before the local receipt
+records an UNKNOWN outcome, retries are bounded and resend the same immutable
+payload, and operators see the duplicate risk. Credentials are never rotated to
+disguise a resend (F-MR-02). Dry-run/rehearsal sends nothing and rotates no credentials. The existing
 declarative CLI's guarded sequential HTTP apply can partially complete; it is not
 this atomic periodic reconciler. A future CLI may drive supported host transactions,
 but the saved-plan fingerprint alone does not create atomicity.
@@ -1466,6 +1602,57 @@ SimpleRBAC lacks hierarchy. D05 must decide whether qualified credentials work
 independently there or are initially prohibited with a startup error. Silently
 ignoring namespace in SimpleRBAC is unacceptable. Likewise qualified administrative
 mode cannot run with tenant scope enforcement disabled.
+
+### 15.6 Online DDL and legacy no-op requirements
+
+Every request authenticated by JWT reads the `users` row. A migration that queues
+behind a long transaction on `users` therefore stalls authentication for the whole
+deployment. Today's runner executes the whole chain in one transaction with a 60s
+statement timeout, no `lock_timeout` and no advisory lock ([migration env](../outlabs_auth/migrations/env.py),
+[CLI runner](../outlabs_auth/cli.py)). No existing revision builds an index
+concurrently, and the index helpers in revision `20260611_0018` check only index
+names, so an interrupted concurrent build would leave an invalid index that a retry
+treats as present. Stage S4 adopts these concrete rules:
+
+1. Add `users.identity_namespace_id` as `NOT NULL DEFAULT <legacy namespace UUID>`.
+   On PostgreSQL 11 and later this is a metadata change with no table rewrite, which
+   also satisfies the section 15.2 database-default bridge for unchanged writers and
+   removes the need for a separate `users` backfill. The legacy namespace UUID is a
+   constant known to the migration.
+2. Add foreign keys as `NOT VALID`, then `VALIDATE CONSTRAINT` in a separate step;
+   an inline reference scans the table under a stronger lock.
+3. Build new unique indexes (`(identity_namespace_id, email)` and any
+   `(id, identity_namespace_id)` index used for composite consistency) with
+   `CREATE UNIQUE INDEX CONCURRENTLY` in an autocommit block, with the statement
+   timeout lifted only for that step. Existence checks verify `indisvalid`.
+4. Run every lock-taking statement under a short `lock_timeout` with bounded retry.
+   Dropping the global unique email index happens only in a qualified installation
+   (stage S5) or an approved conversion (stage S6), never in the legacy expand.
+5. Reuse the existing lower-cased, trimmed `email` value as the canonical
+   identifier after an inventory query proves no non-canonical rows; a new
+   normalized-email column would force a full-table update.
+6. Backfill provider issuer/registration columns on social links in batches outside
+   the migration transaction. Make namespace columns on refresh families,
+   challenges and OAuth state nullable, with NULL meaning legacy; these tables churn
+   and need no backfill.
+7. Prefix new Auth tables distinctly (for example `administrative_*`,
+   `identity_namespaces`). Hosts that place the Auth schema first on a shared
+   `search_path` would otherwise have unqualified host table names shadowed.
+
+Legacy mode is a no-op only if these also hold, and stage S4 must test each:
+
+- Pre-namespace access and refresh tokens keep working through the D09 legacy
+  adapter in an installation with a single (legacy) namespace, so the upgrade
+  forces no mass logout.
+- Identifier rate-limit keys keep their current format for the legacy namespace,
+  so the upgrade does not reset forgot-password, magic-link or access-code counters.
+  The existing rate-limit helper already uses "namespace" for its Redis key prefix;
+  rename one concept before both appear in the same code.
+- Permission-cache and API-key snapshot payload keys carry a format version, so
+  workers on different releases never share entries of different shapes.
+- Existing API-key strings and hashes are unchanged.
+- The current authentication result dictionary remains available unchanged (D32);
+  dependent libraries and host guards read fields from it today.
 
 ## 16. Client, CLI and operator experience
 
@@ -1660,44 +1847,181 @@ corporate subtree moves, simultaneous replay/native writes, and mass role/grant
 revocation. No query should materialize every customer solely to check one target.
 Budget failure triggers design correction, not longer TTLs weakening revocation.
 
-## 19. Implementation work packages and gates
+### 18.4 Latency constraints adopted as design inputs
 
-These are proposed work packages, not accepted deadlines or completed tasks. A
-reviewed dependency plan and owner assignment follow semantic approval. Human
-review time, consumer migration conflicts and performance qualification prevent a
-credible fixed completion date at this stage.
+The existing query-count contracts in `tests/integration/` (warm permission checks
+with zero SQL, a warm API-key snapshot with zero SQL, `/users/me` in one query, and
+the cold permission budgets) become no-regression gates for every stage that
+touches a legacy installation. The new paths must also satisfy these constraints.
+They are design rules, not measured performance claims.
 
-| Package | Work and dependency | Required exit evidence |
+| ID | Constraint | Avoids |
 | --- | --- | --- |
-| WP00 | Review specification/decision register and compatibility boundary | Named dispositions, no unresolved activation-blocking decisions; revised canonical proposal |
-| WP01 | Schema preflight, genuine old-DDL fixtures, namespace/policy migration; after WP00 | Real upgrade and failed/repeated migration tests; conflict reports; additive compatibility |
-| WP02 | Namespace resolver, identifier reservation and every identity flow; after WP01 | A01–A05 complete, bootstrap and legacy/Simple contracts; all encoders/helpers qualified |
-| WP03 | Administrative domains/templates/groups/grants and immutable security audit; after WP00/WP01 | Persistence invariants, revisions, lifecycle/windows, management API and expansion preview |
-| WP04 | Per-operation target authorization, keys, delegation policy and transaction protocol; after WP03 | A06–A08/A10; exhaustive route/service inventory and race evidence |
-| WP05 | SQL scope, HostQueryService projections, CLI/declarative/types/UI/examples; after WP02/WP04 | A09/A14, bounded queries, no ambiguous references or client context reuse |
-| WP06 | Lifecycle observer/outbox and generic conditional provisioning/contributions where needed | A11/A12; transaction failure and replay contracts; private host owns source-specific ETL |
-| WP07 | Activation/mixed-version fences, full migration/security/performance regression; after WP02–WP06 | A13/A15 and workload budgets; exact capability/policy checks |
-| WP08 | Maintainer handbook, packaging, release notes, installed artifact checks | Reviewed immutable release receipt and recovery rehearsals |
-| WP09 | Per-consumer staging/population acceptance and production authorization | Each host's own migration/delivery/history/isolation receipts; separate cutover approval |
+| C1 | An ordinary member's warm request keeps today's statement count: namespace and lifecycle state join into the existing user load. Access-token verification does not read session state today; if section 8.7 requires it, it is joined into that load or limited to the qualified profile | One to two extra statements on every request |
+| C2 | The warm API-key path stays free of SQL. Freshness uses Redis version counters incremented after commit (B1). Authoritative database validation under D10 applies to sensitive writes (credentials, grants, account lifecycle, keys), not to every read | Undoing the existing API-key snapshot optimization |
+| C3 | One authority path per target. Ordinary membership cannot cross customer roots (R11), so a target in another customer's root evaluates only the administrative path, and a target in the actor's own root only the ordinary path | Staff paying both cold paths |
+| C4 | The evaluator takes the target's ancestors (already loaded once per request), its customer root and that root's current group admissions. Cost is proportional to the actor's grants plus tree depth. The prototype's whole-map inputs and its per-decision validation of every group root are replaced by write-time database constraints | Loading every customer and descendant per request |
+| C5 | Lists use per-selector `UNION ALL` or `EXISTS` branches over a customer-root column stored on each entity (safe while populated root-changing moves stay refused), keyset pagination, and optional or bounded totals. Count and page share one read-only repeatable-read transaction or one statement. Query plans are checked at the section 18.3 fixture scale | Per-row subqueries, full scans for counts under all-customer grants, unbounded `IN` lists |
+| C6 | No deployment-wide or domain-wide policy mutex on the request path, and no `SERIALIZABLE` protocol. A protected write takes `FOR SHARE` on its qualifying grant row; revocation takes `FOR UPDATE` on that row only. Actor freshness uses version comparison rather than locking `users`, which logins write | One queue for all staff writes; retry storms; login contention |
+| C7 | Version counters per principal and per grant, a revision per group for admission changes, and a namespace counter only for namespace lifecycle | One hot counter per namespace that invalidates every cached decision in a customer |
+| C8 | Pinned grants record a group-revision watermark and admissions record open/close revisions, instead of copying admission IDs into every grant | Storage and write fan-out of roots × grants |
+| C9 | Staff API-key snapshots keep the grant, action and target relationship (for example keyed by grant and key anchor) instead of one flat permission set | Every staff-key request taking the cold path |
+| C10 | Archived targets resolve through the retained ancestry projection (D26) rather than the current parent-by-parent fallback, which issues one query per level up to the depth limit | Up to dozens of sequential queries on history reads |
+| C11 | The session security epoch (TI-02) is a column on the user row that bearer verification already loads, compared with `iat` in memory | An extra session lookup on every request |
+| C12 | Conditioned paths that cannot bind their full context skip decision caching (F-admin-01); ordinary RBAC decisions keep the existing caches. Measure the cold conditioned cost and keep conditions on hot routes few | Silent stale conditioned decisions, or blanket cache removal |
 
-Packages can develop in parallel behind disabled capability gates when their
-contracts are stable. Never activate namespace provisioning after only login is
-fixed; never activate persistent grants before list/query/mutation enforcement.
-Existing experimental tests can be retained as evaluator coverage and extended,
-but must not become the sole exit evidence for WP03/WP04.
+Reviewers set the numeric statement and p95 budgets for the administrative path in
+stage S0. A reasonable starting expectation for a cold staff decision written as
+hand-tuned queries is a small constant number of statements (roughly four to six),
+against one for today's warm member path; this is an estimate to be replaced by
+measurement, not a promise.
 
-**Gate G0 — semantics:** resolve namespace/root topology, trust designation,
-normalization/phone policy, role/group revision semantics and operation classes.
-**Gate G1 — compatibility:** prove additive upgrade, qualified all-flow behavior,
-legacy mode and incompatible-writer fencing before duplicate admission.
-**Gate G2 — authority:** prove target/action binding, revocation, route/query and
-credential contracts before enabling administrative grants.
-**Gate G3 — replay/history:** prove transactional evidence and repeatable contribution
-reconciliation before hosts rely on removal search or periodic population updates.
-**Gate G4 — release:** clean immutable artifacts, complete local suites/examples,
-public documentation and recovery plan.
-**Gate G5 — consumer:** staging repeats tests and domain acceptance, then separately
-authorized production rollout/cutover. Library approval does not skip this gate.
+## 19. Delivery order, work packages and gates
+
+Revision 0.2 sequences the design so that each stage ships on its own, existing
+installations see no behavior change until they opt in, and the one irreversible
+step (admitting duplicate identifiers, section 20.3) happens only where it is
+cheapest. The work packages of revision 0.1 remain the units of evidence; the
+stages decide their order. Stages are proposed, not accepted deadlines. Human
+review time, consumer migration conflicts and performance qualification still
+prevent a credible fixed completion date.
+
+### 19.1 Ordering principles
+
+1. **Fix what the design builds on.** The three cache defects in section 12.3
+   affect revocation today; strict revocation (D10) cannot be layered on them.
+2. **Administrative grants before identity namespaces.** Grants are additive
+   tables plus a new authorization path. They change no login, token or user row,
+   and they replace the over-broad system-wide roles that operators use for staff
+   today. Namespaces change every identity flow. Nothing in the grant model needs
+   a namespace while staff and customers are still distinguished by trusted
+   operator root IDs (section 7.5).
+3. **Pull the lifecycle observer forward.** The same-transaction observer (D12) is
+   small and additive. Shipping it early lets hosts build frozen history and
+   repeatable reconciliation in parallel, instead of after authorization
+   qualification (revision 0.1 placed gate G3 after G2).
+4. **Separate new qualified installations from converting populated ones.** An
+   installation created in qualified mode can provision customer identities
+   directly. It never needs the D25 legacy conversion, legacy token adapters or
+   duplicate-admission rollback boundary. Converting a live legacy installation
+   is a later, optional stage with its own review.
+5. **Prove the no-op.** Any stage delivered to a legacy installation must leave its
+   behavior unchanged, demonstrated by the section 18.4 query budgets and an
+   upgrade from genuine preceding-release DDL while that release keeps writing.
+6. **Latency constraints are inputs, not a final benchmark.** Each stage satisfies
+   the relevant section 18.4 constraints before its exit.
+
+### 19.2 Stages
+
+| Stage | Delivers | Schema effect | Effect on existing legacy installations | Depends on | Revision 0.1 packages |
+| --- | --- | --- | --- | --- | --- |
+| S0 Decide and measure | Dispositions for decisions blocking S1–S3; consumer inventories; numeric budgets | None | None | — | WP00 (first part) |
+| S1 Correct baseline defects | Section 12.3 fixes (B1–B3, TI-01–TI-04, F-admin-01); migration-runner `lock_timeout`, validity-checked index helpers | One additive nullable column for the session security epoch (online) | Security and correctness only: restored accounts lose old tokens and superuser state; budgets unchanged | S0 | New |
+| S2 Administrative grants over existing identities | Sections 7.3–7.6, 9, 10.1, 11, 12.1–12.2; disabled by default | Additive tables only | None unless grants are created | S1 | WP03, WP04, WP05 (authorization part) |
+| S3 Lifecycle observer | Section 13.3 same-transaction observer; generic conditional writes only if D20 requires them | None or additive | None unless a host registers an observer | S1 | WP06 |
+| S4 Namespace expand in legacy mode | Sections 7.1–7.2 storage with a legacy default; capability record; namespace-aware code resolving only the legacy namespace | Additive and online (section 15.6) | None: global uniqueness, sessions, keys and rate-limit keys unchanged | S1 | WP01, WP02 (legacy half) |
+| S5 Qualified identity for new installations | All of section 8; CLI plan format v2; namespace-aware host projections and client concepts | Relaxed uniqueness only in installations created qualified | Not offered to populated legacy installations | S4; S2 for operator binding | WP02, WP05 (identity part) |
+| S6 Legacy-to-qualified conversion | Section 15.4 conversion, section 15.1 writer/reader fences, section 20.3 boundaries | Per conversion | Opt-in per installation after its own review | S5 | WP07 |
+| S7 Extensions | Delegation (10.2), machine-principal grants (D15), structural parent Option B (6.2), cross-customer chooser (D16) | Per extension | None by default | S2 or S5 | — |
+
+WP08 (release) and WP09 (per-consumer acceptance) apply to every stage that is
+published. S2, S3 and S4 can proceed in parallel after S1 when their contracts
+are stable; each stays behind a disabled capability until its exit evidence exists.
+
+### 19.3 Stage scope and exit evidence
+
+**S0 — decide and measure.** Dispose the authorization decisions first: D02, D03,
+D06, D07, D10, D15, D23, D26, D27–D34 and the review-driven D35–D36. Namespace decisions (D01, D04, D05, D08,
+D09, D16–D19, D21, D24) can be disposed while S2 is built; D25 only before S6. Each
+consumer privately measures: identifiers that would collide across unrelated
+customers in its source population; direct reads of Auth tables; references keyed
+by email; dependence on the authentication result dictionary; use of service
+tokens; and host table names that a new Auth table could shadow on a shared
+`search_path`. Exit: recorded dispositions, consumer inventories held by each
+host, and a numeric budget table for section 18.4.
+
+**S1 — correct baseline defects.** Fix B1–B3, TI-01–TI-04 and F-admin-01 (section
+12.3). Add bounded `lock_timeout` and `indisvalid`-checked index helpers to the
+migration runner. Release as a security patch whose only schema change is the
+nullable session-epoch column. Its behavior changes are intended: a restored account
+no longer regains superuser state or pre-deletion tokens, a pending association no
+longer completes after a security change, a deleted account's email is frozen, and
+conditioned decisions are no longer cached on an incomplete key. Exit: the review's
+negative tests for each finding, deterministic race tests for B1–B3, unchanged
+warm-path budgets (C11) and installed-artifact checks.
+
+**S2 — administrative grants over existing identities.** Trusted operator roots by
+ID (7.5); one administrative domain (D23); separately stored, revision-bound
+templates (D03); groups with admission revisions (7.4, C8); grants; platform-only,
+non-delegable management with expansion preview and same-transaction security
+audit (10.1, 13.1). A bounded evaluator (C4) behind a target-bound check method
+that accepts a verified authenticated context and a trusted target, added beside
+the existing result dictionary (D32). Action-bound list predicates and host
+projections (11.2–11.3, C5). Account-root operations target the legacy
+`User.root_entity_id` and fail closed when it is NULL; S5 moves qualified identities
+to the namespace owner root. Out of scope: namespaces, delegation and machine
+principals. A person who needs both an operator identity and a separate customer
+identity with the same email still waits for S5. Exit: A06, A07 without
+delegation, A08 for personal keys, A09, A10, the security-audit part of A11, and
+C2–C9.
+
+**S3 — lifecycle observer.** An observer receiving the caller's `AsyncSession` for
+membership create/update/revoke, user suspension, retained deletion and hard
+deletion, entity archive/delete, bulk operations and supported non-HTTP writers.
+Observer failure aborts the mutation. The delivery guarantee in section 14.4 is
+stated before any automatic replay delivery: verified provider idempotency, or
+at-least-once with an UNKNOWN outcome (F-MR-02). Hosts adopting S3 also adopt the
+section 14 rules for target-owned login identifiers (F-MR-04) and quarantine of
+contradictory same-episode facts (F-MR-03); those are host acceptance obligations,
+not library code. Exit: the evidence part of A11 and the library half of A12
+(abort on failure, bulk coverage, no evidence loss on delete, failure injection
+before send, after provider acceptance and after receipt).
+
+**S4 — namespace expand in legacy mode.** Section 7.1–7.2 storage and the
+capability record, applied with the section 15.6 rules. Code paths become
+namespace-aware but resolve only the legacy namespace. Exit: A13 for the expand
+step, including concurrent writes from the preceding release during upgrade; no
+forced logout; no rate-limit counter reset; unchanged budgets.
+
+**S5 — qualified identity for new installations.** Qualified mode is chosen when
+an installation is created or still holds no users, and is recorded in the
+capability record. Startup refuses qualified mode on a populated legacy
+installation; that is S6. Delivers all of section 8, the section 16.3 CLI plan
+format and the section 16.1 client concepts. Global email uniqueness is relaxed
+only in qualified installations, so the irreversible boundary never applies to
+existing legacy installations. Old binaries cannot read the capability record, so
+the qualified installation's database still needs an operational fence such as
+release-scoped database credentials. Exit: A01–A05, A14, A15.
+
+**S6 — legacy-to-qualified conversion.** Unchanged from sections 15.1, 15.4 and
+20.3. Started only when a specific populated installation requests it.
+
+**S7 — extensions.** Each extension receives its own reviewed revision of this
+document before implementation.
+
+Never activate namespace provisioning after only login is fixed, and never
+activate persistent grants before list, query and mutation enforcement. Existing
+experimental tests can be retained and extended as evaluator coverage, but they
+are not sufficient exit evidence for S2.
+
+### 19.4 Gates
+
+**Gate G0 — semantics (S0):** topology, trust designation, role/group revision
+semantics, operation classes and latency budgets resolved; namespace semantics may
+follow before S4.
+**Gate G1 — compatibility (S4, S5):** additive legacy upgrade proven as a no-op;
+qualified all-flow behavior proven on new installations; fencing for S6 only when
+S6 is undertaken.
+**Gate G2 — authority (S2):** target/action binding, revocation, route/query and
+credential contracts proven before grants are enabled.
+**Gate G3 — replay/history (S3):** transactional evidence proven before hosts rely
+on removal search or periodic population updates. No longer waits for G2.
+**Gate G4 — release (each published stage):** clean immutable artifacts, complete
+local suites and examples, public documentation and a recovery plan that satisfies
+the section 20.3 anti-rewind rule (F-MR-01) for every fence the stage introduces.
+**Gate G5 — consumer (each consumer and stage):** staging repeats tests and domain
+acceptance, then separately authorized production rollout or cutover. Library
+approval does not skip this gate.
 
 ## 20. Release, rollout and recovery
 
@@ -1729,6 +2053,12 @@ exercise all old flows, then qualify scoped customer fixtures and revocation.
 Repeat the full local/staging suites and domain-specific checks. Inventory every
 writer before activating duplicates and grants.
 
+Stages S1–S4 reach existing legacy installations as ordinary upgrades that must
+prove the section 18.4 no-op. A consumer adopting S5 starts a new qualified
+installation: rehearsal populations run on disposable databases, and acceptance
+population happens only on the qualified installation, never by converting a
+rehearsal database in place.
+
 A canary uses a reviewed customer cohort with accountable operators, bounded grants
 and real delivery/history checks. Monitor isolation errors, unknown namespace,
 wrong-credential context, denial reasons, constraint conflicts, cache fallback,
@@ -1759,6 +2089,18 @@ acceptable lost-write window, secret/session handling and post-restore reconcili
 Restoring Auth alone while host mappings/history stay newer can corrupt references;
 coordinate participating schemas and durable outbox/checkpoints. Do not claim an
 RPO/RTO without a rehearsal and owner acceptance.
+
+Restoring a database also restores its monotonic fences: runner epochs, committed
+watermarks, cutover state, revocations and session security epochs. A coordinated
+restore that is consistent at backup time can therefore re-admit a saved old plan,
+a later-revoked session or key, or source authority that a cutover had ended
+(F-MR-01). Before admitting authentication, mutation, replay or pending delivery
+after a restore, establish a new recovery generation held outside the restored
+failure domain, which old credentials, plans and leases cannot name. Rotating the
+token signing key ends every pre-restore access and refresh token; later key and
+grant revocations, cutover state and high-water marks are reconstructed from
+evidence outside the restored database, or admission stays closed until they are
+explicitly accepted. An accepted cutover is never silently reopened (D36).
 
 Namespace transfers, independently linked social identities, new challenge formats,
 revoked broad roles and source-authority cutover create additional recovery boundaries.
@@ -1819,6 +2161,16 @@ disposition, rationale and date; prototype code does not decide it.
 | D24 | OAuth-only reset does not implicitly enroll a password; explicit recovery policy | Password addition through recovery broadens login methods and requires separate proof | G1 |
 | D25 | Explicit one-time legacy conversion; preserve UUID only for verified single ownership with all references reconciled | New identities require reference migration; ambiguous/shared legacy accounts need reviewed split, never email-only inference | G0/G1 |
 | D26 | Explicit history/restore actions use retained customer/ancestry provenance and current authority | Live closure alone cannot address archival; retired roots remain protected platform recovery | G0/G2/G3 |
+| D27 | Deliver administrative grants over existing identities (S2) before identity namespaces; operators are distinguished by trusted root IDs | Namespaces first delays staff administration behind every identity flow; grants first targets account operations at the legacy owning root until S5 | G0/G2 |
+| D28 | Offer qualified identity when an installation is created; convert populated legacy installations only in the separate stage S6 | One path forces every consumer through conversion fences; two paths need a startup refusal and a capability record | G0/G1 |
+| D29 | Ship the same-transaction lifecycle observer in S3, before grant qualification | Waiting for G2 serializes host history and reconciliation behind authorization work | G3 |
+| D30 | Refines D10: after-commit Redis versions for read freshness; authoritative database validation for sensitive writes | Database validation on every request adds SQL to the warm API-key path; Redis-only weakens write-time guarantees | G2 |
+| D31 | Fine-grained version counters and grant-row locks (C6, C7); no deployment-wide policy lock and no `SERIALIZABLE` protocol | Coarse locks are simpler but queue every staff write behind each revocation | G2 |
+| D32 | Add the verified authenticated context and target-bound check beside the existing authentication result dictionary; keep the dictionary through at least the S5 release | Replacing it breaks host guards and dependent libraries that read its fields today | G1/G2 |
+| D33 | Bound evaluator inputs to target ancestors, customer root and that root's admissions; enforce group integrity at write time (C4) | The prototype's whole-map interface is simpler to test but loads every customer per decision | G2 |
+| D34 | Make service-token authentication an explicit configuration choice; the qualified administrative profile requires the installation to state it | The backend is registered unconditionally today, so tokens with embedded permissions and global scope are accepted wherever generic authentication runs | G2 |
+| D35 | Separate effective platform privilege from historical protected classification: deletion withdraws the first and keeps the second; restore never re-grants privilege without a separate audited regrant or privileged recovery (TI-01) | Clearing the only flag makes a former operator look manageable by limited administrators; keeping it active makes restore a privilege grant | G0/S1 |
+| D36 | After any database restore, admit work only under a new recovery generation held outside the restored failure domain, with signing-key rotation and reconstruction of later revocations, high-water marks and cutover state (F-MR-01) | Keeping admission closed until manual reconstruction is simpler but extends outages; trusting restored fences re-admits revoked authority | G4/G5 |
 
 Further implementation choices—exact field/API names, identifier-ledger representation,
 locking protocol, cursor restart behavior, policy-control-domain model, permission
@@ -1846,6 +2198,31 @@ Acceptance of DD-062 will require updates to affected earlier design decisions,
 including global identity assumptions and root semantics. Preserve those decisions
 with superseding links; do not rewrite history to claim tenant-scoped identity was
 always the library's behavior. Until disposition, DD-062 remains proposed.
+
+### 21.4 Independent review dispositions (revision 0.1 findings)
+
+The [independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) examined
+revision 0.1 at `58230e2` in three separate lanes and found nine issues. Revision 0.2
+proposes to accept every correction; none is rejected or excluded. These are proposed
+dispositions until maintainers and the product owner record acceptance. A reordered
+plan is not closure evidence: each finding closes only when its listed proof passes.
+
+| Finding | Proposed disposition | Stage | Decisions | Closure proof |
+| --- | --- | --- | --- | --- |
+| TI-01 restored superuser authority | Accept; baseline fix plus effective/historical split | S1 (contract S0) | D35, D07, D26 | Privileged delete → restore yields no bypass; historical protection still blocks limited administrators |
+| TI-02 access JWT revival after restore | Accept; durable session security epoch on both bearer paths | S1 | D09, D10 | Same pre-deletion JWT denied after restore on service and strategy paths, protected and ordinary accounts, including a delete/restore race |
+| TI-03 enrollment after security change | Accept; baseline eligibility/epoch check at commit, full matrix in qualified mode | S1, S5 | D08, D10, D24 | Reset, revoke-all, suspend, delete → restore and namespace suspension during a pending association all reject the link |
+| TI-04 deleted email edit releases reservation | Accept; tombstone identifiers immutable until purge | S1 | D04, D18 | Service and HTTP profile edits on a DELETED account refuse identifier changes; explicit purge/reuse is audited |
+| F-admin-01 cached time-conditioned decision | Accept; bypass decision cache for unbindable conditioned paths | S1, S2 | D10 | Warm-cache allow → deny and deny → allow crossings with constant epochs, memory and Redis, detail and list paths, two resources with opposite conditions |
+| F-MR-01 restore rewinds fences | Accept; recovery generation outside the restore boundary | G4 per stage, S3, S6 | D36, D10, D17, D20 | Restore before cutover/revocation; old runner, saved plan, revoked refresh token, stale cache and pending outbox all rejected until reconstruction |
+| F-MR-02 uncertain external delivery | Accept; at-least-once with UNKNOWN unless provider idempotency is verified | S3 | D12, D13 | Failure injection before send, after acceptance, after receipt and after the idempotency window; one logical invitation, no credential churn |
+| F-MR-03 contradictory same-episode facts | Accept as host acceptance rule; quarantine | S3 (host), G5 | D20, D22 | Same-cut active/removed contradiction quarantined with exact counts; ordered re-addition still migrates |
+| F-MR-04 source-owned login identifier change | Accept; login identifiers target-owned after provisioning | S3 (host), S5 | D19, D20 | Source email change surfaces a correction request; separately authorized change invalidates exactly the destination-bound artifacts |
+
+Two cross-finding consequences follow. The TI-02 session epoch is itself database
+state, so F-MR-01's anti-rewind rule must cover it; signing-key rotation after a
+restore handles both. And the TI-01 historical classification must include dormant
+grants and scheduled privileged roles, which section 9.3 already protects.
 
 ## 22. Source references and status ledger
 
@@ -1917,11 +2294,27 @@ role policy or migration acceptance.
 | Pure administrative evaluator and 51 local cases | Experimental implementation | In-memory foundation only; not persistent runtime or migration proof |
 | New same-email authentication, grants, queries, schema and client flows | Not implemented by this proposal | Work packages and gates must supply evidence |
 | Frozen host removal history/replay reconciler | Not implemented in Auth | Generic transaction contracts proposed; source-specific owner remains host |
+| Revision 0.2 delivery order S0–S7 and constraints C1–C10 | Proposed design | Sequencing and design rules for review; D27–D34 pending disposition |
+| Cache defects B1–B3 | Observed in released a36 source | Correction proposed as stage S1; no fix is included in this documentation revision |
+| Independent review findings TI-01–TI-04, F-admin-01, F-MR-01–F-MR-04 | Reproduced or reasoned against revision 0.1; reconciled into revision 0.2 | Corrections proposed (section 21.4); none implemented, none closed |
 | DD-062 acceptance | Pending independent technical and human review | No schema/runtime approval inferred |
 | Release/publication/consumer deployment/cutover | Not authorized or performed here | Separate accepted evidence and operational authorization required |
 
 ### 22.3 Revision history
 
+- **2026-10-10, revision 0.2:** reordered delivery into stages S0–S7 (section 19)
+  so grants ship before namespaces, the lifecycle observer ships early, and
+  qualified identity is offered to new installations separately from converting
+  populated ones. Added prerequisite cache defects B1–B3 (section 12.3), online DDL
+  and legacy no-op rules (section 15.6), latency constraints C1–C10 (section 18.4)
+  and decisions D27–D34. Findings came from a source review of the a36 hot paths
+  and from private consumer impact reviews; consumer specifics remain with their
+  owners. Then reconciled the nine findings of the independent review of revision
+  0.1: corrected the baseline restore claim (section 3.1), added TI-01–TI-04 and
+  F-admin-01 to the S1 baseline fixes, added enrollment, conditioned-cache, replay,
+  delivery and recovery rules, constraints C11–C12, decisions D35–D36 and the
+  disposition table (section 21.4). Both review reproduction scripts were rerun and
+  passed. Documentation only; no runtime or schema change.
 - **2026-10-10, revision 0.1:** expanded the earlier experimental contract into this
   canonical repository proposal with inspected-source evidence, alternative models,
   48 use cases, invariants, lifecycle/authorization/replay details, threat and
