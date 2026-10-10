@@ -285,6 +285,8 @@ class ApiKeyStrategy:
             )
 
             if api_key:
+                observation_getter = getattr(api_key_service, "get_api_key_auth_observation", None)
+                observation = observation_getter(session, credentials) if observation_getter else None
                 resolved_owner = None
                 if hasattr(api_key_service, "resolve_api_key_owner"):
                     resolved_owner = await api_key_service.resolve_api_key_owner(session, api_key)
@@ -329,12 +331,16 @@ class ApiKeyStrategy:
                     else resolved_owner.get("integration_principal")
                 )
                 user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
-                owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+                owner_id = (
+                    resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+                )
                 if principal is not None:
                     if api_key_policy_service is not None:
-                        metadata["principal_allowed_scopes"] = await api_key_policy_service.resolve_integration_principal_effective_scopes(
-                            session,
-                            principal,
+                        metadata["principal_allowed_scopes"] = (
+                            await api_key_policy_service.resolve_integration_principal_effective_scopes(
+                                session,
+                                principal,
+                            )
                         )
                     else:
                         metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
@@ -346,6 +352,7 @@ class ApiKeyStrategy:
                         "source": "api_key",
                         "api_key": api_key,
                         "metadata": metadata,
+                        **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
                     }
 
                 return {
@@ -356,6 +363,7 @@ class ApiKeyStrategy:
                     "source": "api_key",
                     "api_key": api_key,
                     "metadata": metadata,
+                    **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
                 }
 
             return None

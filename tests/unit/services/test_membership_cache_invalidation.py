@@ -42,9 +42,7 @@ async def test_membership_changes_publish_user_permission_invalidation(
     test_session,
     auth_config,
 ):
-    service = MembershipService(
-        auth_config.model_copy(update={"enable_entity_hierarchy": True})
-    )
+    service = MembershipService(auth_config.model_copy(update={"enable_entity_hierarchy": True}))
     fake_cache = _FakeCacheService()
     service.cache_service = fake_cache
 
@@ -82,4 +80,6 @@ async def test_membership_changes_publish_user_permission_invalidation(
     )
 
     assert removed is True
+    assert fake_cache.user_ids == []
+    await test_session.commit()
     assert fake_cache.user_ids == [str(user.id), str(user.id), str(user.id)]

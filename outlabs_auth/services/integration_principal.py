@@ -6,6 +6,7 @@ Manages non-human principals that own durable system integration API keys.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from outlabs_auth.services import request_cache
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, mark_authority_change
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError, UserNotFoundError
 from outlabs_auth.models.sql.entity import Entity
@@ -267,9 +270,13 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         await session.flush()
         await session.refresh(principal)
         principal = cast(IntegrationPrincipal, await self.get_principal(session, principal.id))
-        await self._invalidate_principal_auth_snapshot(principal.id)
+        await self._invalidate_principal_auth_snapshot(session, principal.id)
 
-        if status_changed and principal.status_enum != IntegrationPrincipalStatus.ACTIVE and self.api_key_service is not None:
+        if (
+            status_changed
+            and principal.status_enum != IntegrationPrincipalStatus.ACTIVE
+            and self.api_key_service is not None
+        ):
             await self.api_key_service.revoke_integration_principal_api_keys(
                 session,
                 principal.id,
@@ -295,7 +302,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
 
         principal.status = IntegrationPrincipalStatus.ARCHIVED
         await session.flush()
-        await self._invalidate_principal_auth_snapshot(principal.id)
+        await self._invalidate_principal_auth_snapshot(session, principal.id)
 
         if self.api_key_service is not None:
             await self.api_key_service.revoke_integration_principal_api_keys(
@@ -336,10 +343,14 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
 
         return len(principals)
 
-    async def _invalidate_principal_auth_snapshot(self, principal_id: UUID) -> None:
+    async def _invalidate_principal_auth_snapshot(self, session: AsyncSession, principal_id: UUID) -> None:
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
-            await cache_service.bump_integration_principal_api_key_auth_snapshot_version(str(principal_id))
+            await defer_after_commit(
+                session,
+                partial(cache_service.bump_integration_principal_api_key_auth_snapshot_version, str(principal_id)),
+            )
 
     async def _validate_scope_context(
         self,

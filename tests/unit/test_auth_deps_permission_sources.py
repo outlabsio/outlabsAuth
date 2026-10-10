@@ -85,6 +85,19 @@ class _PermissionServiceStub:
         return list(self.user_permissions)
 
 
+async def _seed_auth_snapshot(service, raw_key, *, auth_result, **kwargs):
+    # These isolated cache fixtures model a completed authentication whose
+    # authority reads were preceded by a version observation.
+    key = auth_result["api_key"]
+    auth_result["_outlabs_snapshot_versions"] = await service._current_auth_snapshot_versions(
+        user_id=auth_result.get("user_id"),
+        integration_principal_id=auth_result.get("integration_principal_id"),
+        entity_id=str(key.entity_id) if key.entity_id else None,
+        credential_hash=APIKey.hash_key(raw_key),
+    )
+    return await service.set_api_key_auth_snapshot(raw_key, auth_result=auth_result, **kwargs)
+
+
 class _SnapshotRedis:
     def __init__(self) -> None:
         self.is_available = True
@@ -147,7 +160,7 @@ class _SnapshotRedis:
         self.counters[usage_key] = self.counters.get(usage_key, 0) + 1
         self.values[last_used_key] = last_used_value
         counts = {usage_key: self.counters[usage_key]}
-        for rate_key, _ttl in (rate_windows or []):
+        for rate_key, _ttl in rate_windows or []:
             self.counters[rate_key] = self.counters.get(rate_key, 0) + 1
             counts[rate_key] = self.counters[rate_key]
         return counts
@@ -163,9 +176,7 @@ def _make_request(
     body: dict | None = None,
 ) -> Request:
     raw_body = json.dumps(body or {}).encode("utf-8")
-    query_string = (
-        "&".join(f"{key}={value}" for key, value in (query_params or {}).items()).encode("utf-8")
-    )
+    query_string = "&".join(f"{key}={value}" for key, value in (query_params or {}).items()).encode("utf-8")
 
     async def receive():
         return {"type": "http.request", "body": raw_body, "more_body": False}
@@ -178,12 +189,7 @@ def _make_request(
         "raw_path": path.encode("utf-8"),
         "path_params": path_params or {},
         "query_string": query_string,
-        "headers": [
-            *[
-                (k.lower().encode("utf-8"), v.encode("utf-8"))
-                for k, v in (headers or {}).items()
-            ]
-        ],
+        "headers": [*[(k.lower().encode("utf-8"), v.encode("utf-8")) for k, v in (headers or {}).items()]],
         "client": ("testclient", 123),
         "server": ("testserver", 80),
         "scheme": "http",
@@ -228,7 +234,8 @@ async def test_require_permission_allows_cached_api_key_snapshot_without_backend
     redis = _SnapshotRedis()
     snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
     api_key_service = APIKeyService(snapshot_config, redis_client=redis)
-    await api_key_service.set_api_key_auth_snapshot(
+    await _seed_auth_snapshot(
+        api_key_service,
         api_key_string,
         auth_result={
             "user": None,
@@ -299,7 +306,8 @@ async def test_require_auth_then_five_permissions_records_api_key_usage_once(
         },
     }
     if warm_snapshot:
-        await api_key_service.set_api_key_auth_snapshot(
+        await _seed_auth_snapshot(
+            api_key_service,
             api_key_string,
             auth_result=auth_result,
             effective_permissions=permissions,
@@ -503,7 +511,8 @@ async def test_require_tree_permission_allows_cached_entity_snapshot_without_bac
     cache_service = CacheService(redis, snapshot_config)
     api_key_service = APIKeyService(snapshot_config, redis_client=redis)
     api_key_service.cache_service = cache_service
-    await api_key_service.set_api_key_auth_snapshot(
+    await _seed_auth_snapshot(
+        api_key_service,
         api_key_string,
         auth_result={
             "user": None,
@@ -582,6 +591,10 @@ async def test_require_permission_populates_api_key_snapshot_after_slow_success(
         "user": None,
         "user_id": str(user_id),
         "source": "api_key",
+        "_outlabs_snapshot_versions": await api_key_service._current_auth_snapshot_versions(
+            user_id=str(user_id),
+            credential_hash=APIKey.hash_key(api_key_string),
+        ),
         "api_key": _api_key_model(key_id),
         "metadata": {
             "scopes": ["job:write"],
@@ -615,6 +628,7 @@ async def test_require_permission_populates_api_key_snapshot_after_slow_success(
     assert redis.values[snapshot_key]["versions"] == {
         "global": 0,
         f"user:{user_id}": 0,
+        f"credential:{APIKey.hash_key(api_key_string)}": 0,
     }
 
 
@@ -632,7 +646,8 @@ async def test_require_permission_rejects_stale_api_key_snapshot(
     cache_service = CacheService(redis, snapshot_config)
     api_key_service = APIKeyService(snapshot_config, redis_client=redis)
     api_key_service.cache_service = cache_service
-    await api_key_service.set_api_key_auth_snapshot(
+    await _seed_auth_snapshot(
+        api_key_service,
         api_key_string,
         auth_result={
             "user": None,

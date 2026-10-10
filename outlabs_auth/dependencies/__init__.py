@@ -18,6 +18,7 @@ from makefun import with_signature
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
+from outlabs_auth.core.transaction_callbacks import has_pending_cache_changes
 from outlabs_auth.core.exceptions import (
     AuthenticationInfrastructureError,
     InvalidInputError,
@@ -162,6 +163,7 @@ class AuthDeps:
     async def _try_api_key_auth_snapshot(
         self,
         *,
+        session: Optional[AsyncSession] = None,
         request: Request,
         permissions: Sequence[str],
         require_all: bool,
@@ -173,6 +175,8 @@ class AuthDeps:
 
         api_key = self._api_key_header(request)
         if not api_key:
+            return None
+        if has_pending_cache_changes(session):
             return None
 
         snapshot = await api_key_service.get_api_key_auth_snapshot(api_key)
@@ -242,6 +246,8 @@ class AuthDeps:
         api_key_string = self._api_key_header(request)
         api_key = auth_result.get("api_key")
         if not api_key_string or api_key is None:
+            return
+        if has_pending_cache_changes(session):
             return
 
         permission_service = self.services.get("permission_service")
@@ -832,6 +838,7 @@ class AuthDeps:
             auth_result = getattr(request.state, "_outlabs_auth_result", None)
             if auth_result is None and session is not None and not abac_enabled:
                 snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    session=session,
                     request=request,
                     permissions=permissions,
                     require_all=require_all,
@@ -904,6 +911,7 @@ class AuthDeps:
             ):
                 entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
                 snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    session=session,
                     request=request,
                     permissions=[permission],
                     require_all=True,
@@ -1050,6 +1058,7 @@ class AuthDeps:
                     invalid_detail=f"Invalid {entity_id_field}",
                 )
                 snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    session=session,
                     request=request,
                     permissions=[self._tree_permission_variant(permission) if entity_id is not None else permission],
                     require_all=True,

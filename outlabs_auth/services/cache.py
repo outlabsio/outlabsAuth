@@ -69,6 +69,7 @@ class CacheService:
         user_id: Optional[str] = None,
         integration_principal_id: Optional[str] = None,
         entity_id: Optional[str] = None,
+        credential_hash: Optional[str] = None,
     ) -> dict[str, int]:
         if not self.redis_client or not self.redis_client.is_available:
             return {}
@@ -87,19 +88,20 @@ class CacheService:
         if entity_id:
             scopes.append((f"entity:{entity_id}", "entity", entity_id))
 
+        if credential_hash:
+            scopes.append((f"credential:{credential_hash}", "credential", credential_hash))
+
         # One MGET round trip for all version keys (was one sequential GET per
         # scope — 2-4 extra round trips on every snapshot-validated request).
         mget_raw = getattr(self.redis_client, "mget_raw", None)
         if mget_raw is not None:
             keys = [
-                self.make_api_key_auth_snapshot_version_key(scope, subject_id)
-                for _label, scope, subject_id in scopes
+                self.make_api_key_auth_snapshot_version_key(scope, subject_id) for _label, scope, subject_id in scopes
             ]
             values = await mget_raw(keys)
             if values is not None and len(values) == len(scopes):
                 return {
-                    label: self._coerce_version(value)
-                    for (label, _scope, _subject_id), value in zip(scopes, values)
+                    label: self._coerce_version(value) for (label, _scope, _subject_id), value in zip(scopes, values)
                 }
 
         versions: dict[str, int] = {}
@@ -481,9 +483,7 @@ class CacheService:
             return ok
         return bool(
             await helper(
-                version_keys=[
-                    self.make_api_key_auth_snapshot_version_key("user", user_id) for user_id in ids
-                ],
+                version_keys=[self.make_api_key_auth_snapshot_version_key("user", user_id) for user_id in ids],
                 channel=self.config.redis_invalidation_channel,
                 messages=[f"permissions:user:{user_id}" for user_id in ids],
             )
@@ -516,9 +516,7 @@ class CacheService:
         if self._listener_task is not None:
             return
 
-        self._pubsub = await self.redis_client.subscribe(
-            self.config.redis_invalidation_channel
-        )
+        self._pubsub = await self.redis_client.subscribe(self.config.redis_invalidation_channel)
         if self._pubsub is None:
             return
 
@@ -559,9 +557,7 @@ class CacheService:
         while True:
             try:
                 if self._pubsub is None:
-                    self._pubsub = await self.redis_client.subscribe(
-                        self.config.redis_invalidation_channel
-                    )
+                    self._pubsub = await self.redis_client.subscribe(self.config.redis_invalidation_channel)
                     if self._pubsub is None:
                         await asyncio.sleep(backoff)
                         backoff = min(backoff * 2, 30.0)

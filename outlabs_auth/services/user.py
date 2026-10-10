@@ -7,6 +7,7 @@ Handles user management operations with PostgreSQL/SQLAlchemy.
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from uuid import UUID
 
@@ -15,6 +16,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from outlabs_auth.services import request_cache
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, mark_authority_change
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
@@ -926,7 +929,7 @@ class UserService(BaseService[User]):
             user.suspended_until = None
 
         await self.update(session, user)
-        await self._invalidate_user_auth_snapshot(user.id)
+        await self._invalidate_user_auth_snapshot(session, user.id)
 
         # Emit notification
         if self.notifications:
@@ -1001,7 +1004,7 @@ class UserService(BaseService[User]):
         user.locked_until = None
 
         await self.update(session, user)
-        await self._invalidate_user_auth_snapshot(user.id)
+        await self._invalidate_user_auth_snapshot(session, user.id)
 
         if self.notifications:
             await self.notifications.emit(
@@ -1080,7 +1083,7 @@ class UserService(BaseService[User]):
 
         user.is_superuser = is_superuser
         await self.update(session, user)
-        await self._invalidate_user_auth_snapshot(user.id)
+        await self._invalidate_user_auth_snapshot(session, user.id)
 
         if self.user_audit_service:
             await self.user_audit_service.record_event(
@@ -1171,7 +1174,7 @@ class UserService(BaseService[User]):
         user.locked_until = None
 
         await self.update(session, user)
-        await self._invalidate_user_auth_snapshot(user.id)
+        await self._invalidate_user_auth_snapshot(session, user.id)
 
         user_email = user.email
         user_id_str = str(user.id)
@@ -1786,10 +1789,13 @@ class UserService(BaseService[User]):
             return None
         return str(request.base_url).rstrip("/")
 
-    async def _invalidate_user_auth_snapshot(self, user_id: UUID) -> None:
+    async def _invalidate_user_auth_snapshot(self, session: AsyncSession, user_id: UUID) -> None:
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
-            await cache_service.bump_user_api_key_auth_snapshot_version(str(user_id))
+            await defer_after_commit(
+                session, partial(cache_service.bump_user_api_key_auth_snapshot_version, str(user_id))
+            )
 
     @staticmethod
     def _merge_mail_metadata(

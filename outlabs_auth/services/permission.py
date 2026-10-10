@@ -9,6 +9,7 @@ Handles permission checking and management with PostgreSQL/SQLAlchemy:
 import hashlib
 import json
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, cast
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from outlabs_auth.services.abac_validation import (
     validate_condition_definition,
     validate_condition_update,
 )
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, has_pending_cache_changes, mark_authority_change
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     InvalidInputError,
@@ -479,7 +481,9 @@ class PermissionService(BaseService[Permission]):
         # Hashing caller context cannot bind that time or its next transition.
         # Evaluate both conditioned allows and denies afresh; ordinary RBAC and
         # the policy-loading caches retain their existing behavior.
-        use_permission_cache = self._can_use_permission_cache() and not abac_enabled
+        use_permission_cache = (
+            self._can_use_permission_cache() and not abac_enabled and not has_pending_cache_changes(session)
+        )
         perm_cache_versions: Optional[Dict[str, int]] = None
         if use_permission_cache:
             cached, perm_cache_versions = await self._get_cached_permission_result(
@@ -770,7 +774,7 @@ class PermissionService(BaseService[Permission]):
             cache_service = getattr(self, "cache_service", None)
             flag_get = getattr(cache_service, "get_abac_conditions_flag", None)
             versions: Optional[Dict[str, int]] = None
-            if flag_get is not None:
+            if flag_get is not None and not has_pending_cache_changes(session):
                 cached, versions = await flag_get()
                 if cached is not None:
                     return bool(cached)
@@ -784,7 +788,7 @@ class PermissionService(BaseService[Permission]):
             exists = has_permission_conditions or has_role_conditions
 
             flag_set = getattr(cache_service, "set_abac_conditions_flag", None)
-            if flag_set is not None:
+            if flag_set is not None and not has_pending_cache_changes(session):
                 await flag_set(exists, versions=versions)
             return exists
 
@@ -1210,7 +1214,12 @@ class PermissionService(BaseService[Permission]):
         # membership mutation already bumps — see CacheService.get_user_permission_names.
         # entity_type-shaped aggregations vary per context and are not cached.
         cache_service = getattr(self, "cache_service", None)
-        use_cache = entity_type is None and cache_service is not None and self._can_use_permission_cache()
+        use_cache = (
+            entity_type is None
+            and cache_service is not None
+            and self._can_use_permission_cache()
+            and not has_pending_cache_changes(session)
+        )
         cached_versions: Optional[Dict[str, int]] = None
         if use_cache:
             cached_names, cached_versions = await cache_service.get_user_permission_names(
@@ -2214,7 +2223,7 @@ class PermissionService(BaseService[Permission]):
                 "condition_group": self._build_condition_group_snapshot(group),
             },
         )
-        await self._invalidate_for_condition_change()
+        await self._invalidate_for_condition_change(session)
         return group
 
     async def update_permission_condition_group(
@@ -2274,7 +2283,7 @@ class PermissionService(BaseService[Permission]):
                     "after_group": current_group_snapshot,
                 },
             )
-            await self._invalidate_for_condition_change()
+            await self._invalidate_for_condition_change(session)
         return group
 
     async def delete_permission_condition_group(
@@ -2328,7 +2337,7 @@ class PermissionService(BaseService[Permission]):
                 "deleted_conditions": deleted_conditions,
             },
         )
-        await self._invalidate_for_condition_change()
+        await self._invalidate_for_condition_change(session)
         return True
 
     async def create_permission_condition(
@@ -2399,7 +2408,7 @@ class PermissionService(BaseService[Permission]):
                 "condition": self._build_permission_condition_snapshot(condition),
             },
         )
-        await self._invalidate_for_condition_change()
+        await self._invalidate_for_condition_change(session)
         return condition
 
     async def update_permission_condition(
@@ -2501,7 +2510,7 @@ class PermissionService(BaseService[Permission]):
                     "after_condition": current_condition_snapshot,
                 },
             )
-            await self._invalidate_for_condition_change()
+            await self._invalidate_for_condition_change(session)
         return condition
 
     async def delete_permission_condition(
@@ -2545,7 +2554,7 @@ class PermissionService(BaseService[Permission]):
                 "deleted_condition": deleted_condition_snapshot,
             },
         )
-        await self._invalidate_for_condition_change()
+        await self._invalidate_for_condition_change(session)
         return True
 
     async def list_permissions(
@@ -2831,15 +2840,15 @@ class PermissionService(BaseService[Permission]):
         # Newly created permissions aren't referenced by any role yet — no invalidation.
         return created
 
-    async def _invalidate_all_permissions_cache(self) -> None:
+    async def _invalidate_all_permissions_cache(self, session: AsyncSession) -> None:
         # Drop request-local memos too: a mutation followed by a check in the
         # same request must observe its own change.
-        request_cache.reset()
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
-            await cache_service.publish_all_permissions_invalidation()
+            await defer_after_commit(session, cache_service.publish_all_permissions_invalidation)
 
-    async def _invalidate_for_condition_change(self) -> None:
+    async def _invalidate_for_condition_change(self, session: AsyncSession) -> None:
         """ABAC condition edits invalidate globally.
 
         A condition change alters verdicts for everyone who evaluates the
@@ -2848,7 +2857,7 @@ class PermissionService(BaseService[Permission]):
         condition/group CRUD methods previously didn't invalidate at all,
         leaving stale ABAC verdicts cached for up to the TTL.)
         """
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_all_permissions_cache(session)
 
     # PERF: a permission-definition edit changes effective permissions only for
     # users holding a role that references the permission — mirror RoleService.
@@ -2936,7 +2945,7 @@ class PermissionService(BaseService[Permission]):
             return
         # Drop request-local memos regardless of Redis wiring (same-request
         # mutation visibility).
-        request_cache.reset()
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
@@ -2950,7 +2959,7 @@ class PermissionService(BaseService[Permission]):
                 )
             ).first() is not None
             if has_conditions:
-                await cache_service.publish_all_permissions_invalidation()
+                await defer_after_commit(session, cache_service.publish_all_permissions_invalidation)
                 return
 
             role_ids = await self._roles_referencing_permission(session, permission.id)
@@ -2960,21 +2969,23 @@ class PermissionService(BaseService[Permission]):
             user_ids = await self._users_with_roles(session, role_ids)
         except Exception:
             # Resolution failed — fail safe to a full invalidation.
-            await cache_service.publish_all_permissions_invalidation()
+            await defer_after_commit(session, cache_service.publish_all_permissions_invalidation)
             return
 
         if len(user_ids) > self._PERMISSION_INVALIDATION_FANOUT_LIMIT:
-            await cache_service.publish_all_permissions_invalidation()
+            await defer_after_commit(session, cache_service.publish_all_permissions_invalidation)
             return
         if not user_ids:
             return
 
         batch = getattr(cache_service, "publish_user_permissions_invalidation_batch", None)
         if batch is not None:
-            await batch([str(user_id) for user_id in user_ids])
+            await defer_after_commit(session, partial(batch, [str(user_id) for user_id in user_ids]))
             return
         for user_id in user_ids:
-            await cache_service.publish_user_permissions_invalidation(str(user_id))
+            await defer_after_commit(
+                session, partial(cache_service.publish_user_permissions_invalidation, str(user_id))
+            )
 
     async def _record_permission_definition_history_event(
         self,

@@ -15,13 +15,14 @@ The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 disposition (proposed DD-062). The review found eight defects in the released a36
 baseline (cache invalidation, account restore, OAuth enrollment, conditioned caching);
 they are planned as one S1 security patch. The local candidate now fixes
-conditioned decision-cache freshness (F-admin-01) and deleted-identifier reservation
-(TI-04); [implementation and verification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
-The other six defects and complete S1 qualification/release remain open. The local pure administrative
+conditioned decision-cache freshness (F-admin-01), deleted-identifier reservation
+(TI-04), transactional cache publication (B1) and pre-authority snapshot provenance
+(B2); [implementation and verification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
+The other four defects and complete S1 qualification/release remain open. The local pure administrative
 evaluator has 51 focused cases; it remains unwired to persistence, routes,
 principal loading and host queries. Namespace-qualified authentication, persistent
 groups/grants, transactional history integration and migration acceptance are
-proposed work, not completed slices. The first S1 slice changes two service guards;
+proposed work, not completed slices. The local S1 candidate changes service guards and transaction/cache handling;
 it adds no schema, version, tag or release.
 
 ## Completed Slices

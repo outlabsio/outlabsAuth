@@ -1,13 +1,13 @@
 # Tenant Auth baseline security patch
 
 **Date:** 2026-10-10
-**Status:** First S1 implementation slice, local and unreleased.
+**Status:** S1 guards and transactional cache fences, local and unreleased.
 **Branch/base:** `codex/auth-security-20261010`, from merged `main baba18c`.
 **Package baseline:** `0.1.0a36`; no version, tag, schema or consumer pin change.
 
 The [tenant and administrative-grant plan](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 requires eight baseline corrections before later stages use the existing identity
-and permission machinery. This receipt records two corrections, their regression
+and permission machinery. This receipt records four corrections, their regression
 evidence and the remaining work. A passing current suite does not close defects
 that have not yet been implemented. The administrative evaluator prototype stays
 unwired.
@@ -44,6 +44,55 @@ reservation remain; creating a new account with that email is refused.
 A same-normalized-email update and ordinary retained profile maintenance still
 work. This patch does not add a purge/reuse or privileged-recovery operation.
 
+### B1: shared authority becomes fresh after the owning commit
+
+Authority mutations now register on the actual SQLAlchemy transaction. The
+ordinary `AsyncSession` commit event awaits cache I/O through SQLAlchemy's async
+greenlet bridge; this covers host-owned sessions, explicit commits and transaction
+context managers without an unawaited background task or custom session subclass.
+Membership, role/permission definitions and conditions, direct roles, entity moves,
+user/principal state and concrete API-key mutations use this boundary. Holder
+fan-out is resolved inside the transaction; only publication waits for commit.
+
+A released savepoint transfers its actions and dirty marker to the parent. A
+rolled-back or failed savepoint discards only its actions. Root rollback, failed
+flush/commit and close discard pending publication. Request memos reset immediately
+and at commit/rollback/close, including when no shared cache is installed. Dirty
+sessions bypass shared permission decisions, aggregates, condition flags, tree
+relations and compiled auth snapshots, so they can observe their own SQL changes
+without leaking uncommitted grants or revocations.
+
+If an action raises after commit, other queued actions are attempted and the first
+exception propagates. The database is already committed; this is not a rollback.
+This mechanism adds no durable outbox and does not change the backend's existing
+fail-soft behavior. Cache outages/recovery, restore fencing and consumer staging
+remain part of complete S1 acceptance.
+
+### B2: snapshots carry pre-authority provenance
+
+API-key verification observes global and credential-hash versions before its first
+key lookup, then owner/principal/anchor versions before policy or owner reads. It
+preserves the earlier global/credential observations. The strategy and direct
+host authorization carry that token with their result, including when dependencies
+reuse `_outlabs_effective_permissions` computed earlier. The writer refuses missing,
+malformed or incomplete provenance and never fetches later versions to label an
+old permission set.
+
+Key update, revoke, rotation and deletion bump a credential-specific counter after
+commit before deleting the shared snapshot. A paused old reader can still finish
+its already-started request, but its later snapshot write remains bound to the old
+counter and misses on the next read. Old snapshots without that counter also miss
+and rebuild. Counters contain key hashes, never raw credentials. The new scope
+uses the same warm version `MGET`; cold verification observes two batches and adds
+no SQL. Disabled caching does not add these observation reads.
+
+Entity-tree fallback similarly binds its SQL result to the epoch observed before
+the query. Uncommitted tree changes bypass shared relations. The existing opt-in
+per-process snapshot TTL still permits bounded staleness; default zero remains
+the version-checked profile. Memory epochs remain process-local; shared Redis
+epochs are required for coherence across workers. These changes do not claim that the opt-in
+profile provides immediate cross-process revocation.
+
 ## Regression and local qualification
 
 - Before the fixes, the initial regression set had **6 failures and 2 passes**:
@@ -67,6 +116,42 @@ work. This patch does not add a purge/reuse or privileged-recovery operation.
 - Ruff over the repository and Black over the two touched service files and
   three regression files pass. No hosted CI is used as acceptance.
 
+### Transaction/cache continuation
+
+- The original B1/B2 regression set fails **all 14 cases** on the preceding
+  local candidate (which contained only F-admin-01/TI-04). The failures reproduce
+  pre-commit membership publication, stale user/credential authority relabeling,
+  and acceptance of snapshots without provenance. Initial fixture setup mistakes
+  were corrected before this baseline result; dependency/setup failures are not
+  counted as reproductions.
+- Expanded coverage adds real grant/revoke with separate reader/writer sessions,
+  commit and rollback on memory/Redis; key update/revoke/delete publication;
+  a key revoked during actual strategy authentication; stale tree-query publication
+  and a writer's private tree changes. Strategy cases use real Redis for usage
+  accounting with either memory or Redis permission epochs.
+- Transaction cases cover outer commit, released/rolled-back/failed savepoints,
+  failed root commit, close, async context commit, awaited visibility on another
+  connection, post-commit publication exceptions and memo reset without a backend.
+  The ASGI response-order regression observes publication before the response body;
+  its uninstrumented control still detects late teardown publication.
+- Existing warm aggregate/decision reads retain **zero SQL**. An intermediate full
+  run exposed admin principal inventory at **15 queries against its 14-query cap**
+  after stale setup memos were cleared. Loading principals and their current anchor
+  in one outer join restores the existing cap, with separate/missing key anchors
+  still loaded and checked. All **7** related enterprise key/query-policy cases
+  and the additional real-DB anchor-fallback case pass; budgets are not raised.
+- Expanded final focused qualification: **77 passed**, with real PostgreSQL
+  and required Redis, including dependency guards and all new cache/transaction
+  cases. Ruff over the repository, Black over touched files and targeted MyPy
+  on the new transaction module pass. Final full local suite: **1420 passed,
+  207 fixture/library warnings, 514.64 seconds**, with real PostgreSQL and
+  `TEST_REDIS_REQUIRED=1`; no failures or skips. Additional warnings are instances
+  of the existing fixture/library categories, not new runtime coroutine warnings.
+- Legacy invalidation assertions now await the owning commit; explicit purges
+  without a transaction remain immediate. Synthetic permission sessions declare
+  an empty `info` dictionary. Custom authentication results without observation
+  support keep their previous shape and are not compiled into shared snapshots.
+
 Tests use disposable loopback databases/cache and synthetic accounts. They do not
 qualify deployed consumers, production data or the complete administrative model.
 
@@ -74,8 +159,6 @@ qualify deployed consumers, production data or the complete administrative model
 
 | Finding | Next correction / required proof |
 | --- | --- |
-| B1 | Move version increments/publications after the owning transaction commits; reset local memos immediately. Qualify concurrent readers, rollback and failed commit, including supported standalone service callers. |
-| B2 | Observe snapshot versions before any reused/computed authority, carry that token through the compiled context, and never relabel stale authority with a later version. Deterministically pause the reader between observation and write. |
 | B3 | Bound decision, aggregate and API-key snapshot validity by relevant membership/role deadlines; cover expiry and scheduled activation with no version change. |
 | TI-01 | Withdraw effective privilege on deletion/restore while retaining historical protection from limited administrators. Include dormant/scheduled privileged roles in that classification. |
 | TI-02 | Add a monotonic account session-security epoch, advance it on lifecycle/security revocation, compare it on both bearer paths, and preserve it on restore. Qualify token precision and delete/restore races. |
@@ -84,23 +167,16 @@ qualify deployed consumers, production data or the complete administrative model
 | Performance / release | Record numeric budgets; preserve warm query contracts; measure conditioned paths. Build and test immutable artifacts, then follow the separate release and consumer staging contracts. |
 
 The eventual S1 security patch remains a single release containing the complete
-accepted baseline correction. These two local fixes are not a partially published
+accepted baseline correction. These four local corrections are not a partially published
 security release. S2 persistent administrative grants, S3 lifecycle observation
 and S4/S5 identity namespaces are still separate stages. No grant activation,
 release, deployment or consumer upgrade follows from this receipt.
 
 ## Implementation notes for the next pass
 
-- B1 affects the unit-of-work contract as well as the membership helper. The
-  current library session factory returns ordinary `AsyncSession` instances,
-  consumers also call services with their own sessions, and OAuth callbacks
-  commit explicitly. An after-commit design must cover supported commit paths,
-  rollback/savepoints and response timing. An unawaited task scheduled after
-  commit is not proof that freshness is established before the response.
-- B2 includes the dependency's `_outlabs_effective_permissions` reuse: reading
-  versions inside the snapshot writer, after that set was computed, preserves
-  the original race. Carry observation provenance with reused sets rather than
-  fixing only a fresh computation in the writer.
+- B1/B2 have local transactional/cache implementations; the four remaining
+  baseline defects are B3 and TI-01/TI-02/TI-03. Complete runner, outage/recovery,
+  artifact and performance gates still apply before any S1 release.
 - TI-01 cannot close by clearing `is_superuser` alone. `routers/users.py`
   currently protects that flag and, via `user_is_global_account`, direct
   system-wide role holders across active/scheduled/suspended/expired/revoked

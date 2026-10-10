@@ -128,7 +128,7 @@ async def test_unconditioned_rbac_retains_decision_cache(enable_abac):
     try:
         for _ in range(2):
             request_cache.reset()
-            assert await service.check_permission(AsyncMock(), user.id, "document:read", user=user)
+            assert await service.check_permission(AsyncMock(info={}), user.id, "document:read", user=user)
         service.get_user_permissions.assert_awaited_once()
     finally:
         request_cache.reset()

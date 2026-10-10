@@ -356,12 +356,21 @@ class APIKeyPolicyService:
             owners_by_id = {owner.id: owner for owner in owners_result.scalars().all()}
         if principal_ids:
             principals_result = await session.execute(
-                select(IntegrationPrincipal).where(cast(Any, IntegrationPrincipal.id).in_(principal_ids))
+                select(IntegrationPrincipal, Entity)
+                .outerjoin(Entity, cast(Any, Entity.id) == IntegrationPrincipal.anchor_entity_id)
+                .where(cast(Any, IntegrationPrincipal.id).in_(principal_ids))
             )
-            principals_by_id = {principal.id: principal for principal in principals_result.scalars().all()}
-        if entity_ids:
-            entities_result = await session.execute(select(Entity).where(cast(Any, Entity.id).in_(entity_ids)))
-            entities_by_id = {entity.id: entity for entity in entities_result.scalars().all()}
+            # Load current anchors with their principals rather than relying on
+            # a memo carried over from setup/a prior transaction. This saves a
+            # round trip on principal inventory while retaining cold budgets.
+            for principal, anchor in principals_result.all():
+                principals_by_id[principal.id] = principal
+                if anchor is not None:
+                    entities_by_id[anchor.id] = anchor
+        missing_entity_ids = [entity_id for entity_id in entity_ids if entity_id not in entities_by_id]
+        if missing_entity_ids:
+            entities_result = await session.execute(select(Entity).where(cast(Any, Entity.id).in_(missing_entity_ids)))
+            entities_by_id.update({entity.id: entity for entity in entities_result.scalars().all()})
 
         from outlabs_auth.services.api_key import APIKeyService
 

@@ -66,10 +66,10 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
-**Latest implementation state on 2026-10-10:** a local, unreleased first S1 slice
-fixes F-admin-01 conditioned decision freshness and TI-04 deleted-identifier
-reservation. See [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md) for tests,
-limits and the six remaining defects. S1 is not complete; S2 grants, S3 observer
+**Latest implementation state on 2026-10-10:** a local, unreleased S1 candidate
+fixes F-admin-01 conditioned decision freshness, TI-04 deleted-identifier
+reservation and B1/B2 transactional cache publication/snapshot provenance. See [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md) for tests,
+limits and the four remaining defects. S1 is not complete; S2 grants, S3 observer
 and namespace stages remain unimplemented. The prototype is still unwired.
 
 **Earlier planning checkpoint on 2026-10-10:** design revision 0.2 plus a completed independent review
@@ -2301,7 +2301,7 @@ role policy or migration acceptance.
 | New same-email authentication, grants, queries, schema and client flows | Not implemented by this proposal | Work packages and gates must supply evidence |
 | Frozen host removal history/replay reconciler | Not implemented in Auth | Generic transaction contracts proposed; source-specific owner remains host |
 | Revision 0.2 delivery order S0–S7 and constraints C1–C10 | Proposed design | Sequencing and design rules for review; D27–D34 pending disposition |
-| Cache defects B1–B3 | Observed in released a36 source | Correction proposed as stage S1; still open in the local first slice |
+| Cache defects B1–B3 | Observed in released a36 source | B1/B2 locally implemented ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); B3 and complete release qualification remain open |
 | Independent review findings TI-01–TI-04, F-admin-01, F-MR-01–F-MR-04 | Reproduced or reasoned against revision 0.1; reconciled into revision 0.2 | F-admin-01 and TI-04 have local fixes ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); the other findings and release acceptance remain open |
 | DD-062 acceptance | Pending independent technical and human review | No schema/runtime approval inferred |
 | Release/publication/consumer deployment/cutover | Not authorized or performed here | Separate accepted evidence and operational authorization required |

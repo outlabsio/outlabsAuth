@@ -9,6 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import re
 import time
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, cast
 from uuid import UUID
 
@@ -26,6 +27,8 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, mark_authority_change
+from outlabs_auth.services import request_cache
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityMoveCarriesAccessError,
@@ -257,7 +260,7 @@ class EntityService(BaseService[Entity]):
                 parent_id=str(parent_id) if parent_id else None,
             )
 
-        await self._invalidate_permission_cache(entity.id)
+        await self._invalidate_permission_cache(session, entity.id)
         await self._record_entity_audit_event(
             session,
             entity,
@@ -379,7 +382,7 @@ class EntityService(BaseService[Entity]):
                 duration_ms=duration_ms,
             )
 
-        await self._invalidate_permission_cache(entity.id)
+        await self._invalidate_permission_cache(session, entity.id)
         return entity
 
     async def move_entity(
@@ -587,9 +590,7 @@ class EntityService(BaseService[Entity]):
             ancestors_stmt = select(
                 cast(Any, EntityClosure.ancestor_id),
                 cast(Any, EntityClosure.depth),
-            ).where(
-                cast(Any, EntityClosure.descendant_id) == new_parent.id
-            )
+            ).where(cast(Any, EntityClosure.descendant_id) == new_parent.id)
             ancestors_result = await session.execute(ancestors_stmt)
             ancestor_rows = ancestors_result.all()  # (ancestor_id, depth_to_parent)
 
@@ -654,7 +655,7 @@ class EntityService(BaseService[Entity]):
                 parent_id=str(new_parent_id) if new_parent_id else None,
             )
 
-        await self._invalidate_permission_cache(entity.id, scope_global=True)
+        await self._invalidate_permission_cache(session, entity.id, scope_global=True)
         move_metadata: Dict[str, Any] = {"subtree_size": len(subtree_ids)}
         if changes_root:
             move_metadata.update(
@@ -981,7 +982,7 @@ class EntityService(BaseService[Entity]):
                 cascade=cascade,
             )
 
-        await self._invalidate_permission_cache(entity_id, scope_global=True)
+        await self._invalidate_permission_cache(session, entity_id, scope_global=True)
         return True
 
     async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
@@ -1305,9 +1306,7 @@ class EntityService(BaseService[Entity]):
         # If has parent, copy parent's ancestors and add parent
         if entity.parent_id:
             # Get all ancestors of parent
-            stmt = select(EntityClosure).where(
-                cast(Any, EntityClosure.descendant_id) == entity.parent_id
-            )
+            stmt = select(EntityClosure).where(cast(Any, EntityClosure.descendant_id) == entity.parent_id)
             result = await session.execute(stmt)
             parent_closures = result.scalars().all()
 
@@ -1697,6 +1696,7 @@ class EntityService(BaseService[Entity]):
 
     async def _invalidate_permission_cache(
         self,
+        session: Optional[AsyncSession],
         entity_id: UUID,
         *,
         scope_global: bool = False,
@@ -1709,12 +1709,15 @@ class EntityService(BaseService[Entity]):
         descendants' cached tree-permission checks depend on the old ancestors
         and can't be found via ``permissions:entity:{id}`` alone.
         """
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
-        await cache_service.publish_entity_permissions_invalidation(str(entity_id))
+        await defer_after_commit(
+            session, partial(cache_service.publish_entity_permissions_invalidation, str(entity_id))
+        )
         if scope_global:
-            await cache_service.publish_all_permissions_invalidation()
+            await defer_after_commit(session, cache_service.publish_all_permissions_invalidation)
 
     async def get_ancestors(self, session: AsyncSession, entity_id: UUID, include_self: bool = False) -> List[Entity]:
         """

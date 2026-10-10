@@ -155,6 +155,19 @@ class _FakeApp:
         self.routers.append(router)
 
 
+async def _seed_auth_snapshot(service, raw_key, *, auth_result, **kwargs):
+    # These isolated cache fixtures model a completed authentication whose
+    # authority reads were preceded by a version observation.
+    key = auth_result["api_key"]
+    auth_result["_outlabs_snapshot_versions"] = await service._current_auth_snapshot_versions(
+        user_id=auth_result.get("user_id"),
+        integration_principal_id=auth_result.get("integration_principal_id"),
+        entity_id=str(key.entity_id) if key.entity_id else None,
+        credential_hash=APIKey.hash_key(raw_key),
+    )
+    return await service.set_api_key_auth_snapshot(raw_key, auth_result=auth_result, **kwargs)
+
+
 class _SnapshotRedis:
     def __init__(self) -> None:
         self.is_available = True
@@ -530,6 +543,7 @@ async def test_outlabs_auth_session_uow_and_property_guards():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
+    session = SimpleNamespace(info={})
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
@@ -560,7 +574,7 @@ async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
     )
 
     result = await auth.authorize_api_key(
-        "db-session",
+        session,
         "sk_live_secret",
         required_scope="contacts:read",
         entity_id=entity_id,
@@ -583,20 +597,21 @@ async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
         "ineffective_reasons": [],
     }
     auth.api_key_service.verify_api_key.assert_awaited_once_with(
-        "db-session",
+        session,
         "sk_live_secret",
         required_scope="contacts:read",
         entity_id=entity_id,
         ip_address="127.0.0.1",
     )
-    auth.api_key_service.get_api_key_scopes.assert_awaited_once_with("db-session", api_key.id)
-    auth.user_service.get_user_by_id.assert_awaited_once_with("db-session", owner_id)
+    auth.api_key_service.get_api_key_scopes.assert_awaited_once_with(session, api_key.id)
+    auth.user_service.get_user_by_id.assert_awaited_once_with(session, owner_id)
     auth.api_key_policy_service.evaluate_effectiveness.assert_not_awaited()
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_auth():
+    session = SimpleNamespace(info={})
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
@@ -609,7 +624,8 @@ async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_au
     cache_service = CacheService(redis, snapshot_config)
     api_key_service = APIKeyService(snapshot_config, redis_client=redis)
     api_key_service.cache_service = cache_service
-    await api_key_service.set_api_key_auth_snapshot(
+    await _seed_auth_snapshot(
+        api_key_service,
         api_key_string,
         auth_result={
             "user": None,
@@ -633,7 +649,7 @@ async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_au
     auth.permission_service = SimpleNamespace(config=SimpleNamespace(enable_abac=False))
 
     result = await auth.authorize_api_key(
-        "db-session",
+        session,
         api_key_string,
         required_scope="contacts:read",
         ip_address="127.0.0.1",
@@ -654,6 +670,7 @@ async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_au
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_auth():
+    session = SimpleNamespace(info={})
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
@@ -668,7 +685,8 @@ async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_au
     cache_service = CacheService(redis, snapshot_config)
     api_key_service = APIKeyService(snapshot_config, redis_client=redis)
     api_key_service.cache_service = cache_service
-    await api_key_service.set_api_key_auth_snapshot(
+    await _seed_auth_snapshot(
+        api_key_service,
         api_key_string,
         auth_result={
             "user": None,
@@ -714,7 +732,7 @@ async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_au
     auth.permission_service = SimpleNamespace(config=SimpleNamespace(enable_abac=False))
 
     result = await auth.authorize_api_key(
-        "db-session",
+        session,
         api_key_string,
         required_scope="pipeline:read_tree",
         entity_id=target_id,
@@ -731,6 +749,7 @@ async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_au
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_slow_success():
+    session = SimpleNamespace(info={})
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
@@ -745,6 +764,11 @@ async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_sl
     api_key_service.cache_service = cache_service
     api_key = _snapshot_api_key_model(key_id)
     user = SimpleNamespace(id=user_id, can_authenticate=lambda: True)
+    observed = await api_key_service._current_auth_snapshot_versions(
+        user_id=str(user_id),
+        credential_hash=APIKey.hash_key(api_key_string),
+    )
+    api_key_service.get_api_key_auth_observation = lambda _session, _raw: dict(observed)
     api_key_service.verify_api_key = AsyncMock(return_value=(api_key, 3))
     api_key_service.resolve_api_key_owner = AsyncMock(
         return_value=SimpleNamespace(
@@ -766,7 +790,7 @@ async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_sl
     auth.permission_service = permission_service
 
     result = await auth.authorize_api_key(
-        "db-session",
+        session,
         api_key_string,
         required_scope="contacts:read",
     )
@@ -779,6 +803,7 @@ async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_sl
     assert redis.values[snapshot_key]["versions"] == {
         "global": 0,
         f"user:{user_id}": 0,
+        f"credential:{APIKey.hash_key(api_key_string)}": 0,
     }
 
 

@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 
+from outlabs_auth.core.transaction_callbacks import has_pending_cache_changes
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS, UnitOfWorkState
@@ -885,10 +886,13 @@ class OutlabsAuth:
         self,
         api_key_string: str,
         *,
+        session: Optional[AsyncSession] = None,
         required_scope: Optional[str],
         entity_id: Optional[UUID],
         ip_address: Optional[str],
     ) -> Optional[dict]:
+        if has_pending_cache_changes(session):
+            return None
         if not self._api_key_snapshot_supported_for_direct_authorization(
             required_scope=required_scope,
             entity_id=entity_id,
@@ -938,6 +942,8 @@ class OutlabsAuth:
         entity_id: Optional[UUID],
         auth_result: dict,
     ) -> None:
+        if has_pending_cache_changes(session):
+            return
         if not self._api_key_snapshot_supported_for_direct_authorization(
             required_scope=required_scope,
             entity_id=entity_id,
@@ -1011,6 +1017,7 @@ class OutlabsAuth:
 
         snapshot_auth_result = await self._try_authorize_api_key_snapshot(
             api_key_string,
+            session=session,
             required_scope=required_scope,
             entity_id=entity_id,
             ip_address=ip_address,
@@ -1028,6 +1035,8 @@ class OutlabsAuth:
         if api_key is None:
             return None
 
+        observation_getter = getattr(self.api_key_service, "get_api_key_auth_observation", None)
+        observation = observation_getter(session, api_key_string) if observation_getter else None
         resolved_owner = None
         if hasattr(self.api_key_service, "resolve_api_key_owner"):
             resolved_owner = await self.api_key_service.resolve_api_key_owner(session, api_key)
@@ -1109,6 +1118,7 @@ class OutlabsAuth:
                 "source": "api_key",
                 "api_key": api_key,
                 "metadata": metadata,
+                **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
             }
             await self._cache_authorized_api_key_snapshot(
                 session,
@@ -1127,6 +1137,7 @@ class OutlabsAuth:
             "source": "api_key",
             "api_key": api_key,
             "metadata": metadata,
+            **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
         }
         await self._cache_authorized_api_key_snapshot(
             session,
