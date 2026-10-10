@@ -1,9 +1,21 @@
 # Next Pass Backlog
 
-**Updated**: 2026-10-02
+**Updated**: 2026-10-10
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
+
+## Open: tenant identities and administrative grants (2026-10-10)
+
+- **S1 baseline security patch (not started).** Eight a36 defects with retained
+  reproductions: cache invalidation B1–B3, restore keeps superuser (TI-01), pre-deletion
+  access JWT revives after restore (TI-02), OAuth association commits after a security
+  change (TI-03), deleted account email editable (TI-04), cached time-conditioned
+  decisions (F-admin-01). Scope and exit evidence:
+  [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
+- **S0 decisions and later stages (not started).** Record DD-062 dispositions before
+  S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's
+  "Start here" section.
 
 ## Shipped Since Last Backlog Update (2026-10)
 

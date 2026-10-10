@@ -4386,5 +4386,44 @@ decision 17 removes it.
 
 ---
 
-**Last Updated**: 2026-10-02 (DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root; root-changing entity moves fail closed while the subtree carries access; new accounts, membership grants and entity-local role writes stay in the actor's own root tree)
-**Next Review**: After testing all examples
+## DD-062: Tenant identities and customer-scoped administrative grants
+
+**Date:** 2026-10-10
+**Status:** Proposed — independent technical and human review pending.
+
+### Context
+
+Multi-customer deployments need independent local accounts even when an email is
+reused, corporate practice memberships within one customer and differentiated
+Internal operator access across selected customers. Global identifier lookups,
+structural root ancestry and system-wide roles cannot be treated as interchangeable
+credential, business and administrative boundaries.
+
+### Proposed direction and rationale
+
+The [canonical design proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
+recommends stable identity namespaces, independent customer roots and protected
+administrative groups/grants. It considers literal shared-parent alternatives,
+complete identity flows, target-bound authorization, delegation, transactional
+revocation/audit, host reconciliation, schema compatibility, rollout and recovery.
+The [review packet](./TENANT_AUTH_REVIEW_PACKET.md) provides independent review
+prompts, adversarial scenarios and disposition templates.
+
+This record does not approve the proposed data model. Recommendations and open
+choices are enumerated in the canonical decision register. Maintainer and product
+owner dispositions must be recorded before persistent implementation resumes.
+Earlier decisions, including global identity/root assumptions, remain historical
+truth and will receive explicit superseding links if DD-062 is accepted.
+
+### Consequences and current evidence
+
+The experimental administrative evaluator and 51 local cases establish a pure
+policy foundation only. No persistent grants, namespace-qualified identity flows,
+new schema or host migration are implemented by this documentation revision.
+The design separates library qualification, immutable release and each consumer's
+migration/deployment approval. Review acceptance is not production authorization.
+
+---
+
+**Last Updated**: 2026-10-10 (DD-062 proposed for review; DD-061: tenant isolation extended to membership, permission and entity routes; global scope granted only by global actors; direct roles bounded to their own tree in entity context; direct grants tenant-bound; dormant system-wide grants protected; permission catalog global-only; accounts managed only by the tenant holding their root; root-changing entity moves fail closed while the subtree carries access; new accounts, membership grants and entity-local role writes stay in the actor's own root tree)
+**Next Review**: Independent technical and human review of proposed DD-062; retain example qualification for implementation/release
