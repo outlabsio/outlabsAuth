@@ -296,6 +296,24 @@ def test_condition_pass_at_one_child_cannot_authorize_its_sibling_in_same_grant(
     assert not decide(BRANCH_B, (selected,), condition_results=(child_a,)).allowed
 
 
+def test_customer_root_mutation_requires_root_bound_condition_outcome():
+    selected = grant(CUSTOMER_A, "user:update", requires_conditions=True)
+    target = AdministrativeTarget(PRACTICE_A, CUSTOMER_A, requires_customer_root=True)
+    practice_outcome = condition_result(selected, permission="user:update")
+    assert not decide(
+        PRACTICE_A, (selected,), "user:update", target=target, condition_results=(practice_outcome,)
+    ).allowed
+    root_outcome = replace(practice_outcome, entity_id=CUSTOMER_A)
+    assert decide(PRACTICE_A, (selected,), "user:update", target=target, condition_results=(root_outcome,)).allowed
+
+
+def test_customer_root_grant_does_not_authorize_an_unknown_original_practice():
+    selected = grant(CUSTOMER_A, "user:update")
+    unknown_practice = uuid4()
+    target = AdministrativeTarget(unknown_practice, CUSTOMER_A, requires_customer_root=True)
+    assert not decide(unknown_practice, (selected,), "user:update", target=target).allowed
+
+
 def test_unknown_entity_selector_and_empty_permission_deny():
     selected = grant(uuid4(), "*:*", kind=AdministrativeTargetKind.SUBTREE)
     assert not decide(PRACTICE_A, (selected,)).allowed
