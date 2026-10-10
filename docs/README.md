@@ -36,6 +36,7 @@ This `docs/` tree is design specs and maintainer material.
 - **TASKQ_AUTHENTICATED_CONTEXT_PLAN.md** - Implemented candidate for once-per-request API-key accounting and auth-owned two-phase authorization; joint TaskQ audit/release pending
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
 - **HOST_INTEGRATION_QUERIES.md** - Supported auth-owned query boundaries for embedded host applications
+- **TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md** - Local contract for customer identities and target-bound staff grants; runtime integration remains open
 - **AUTH_UI.md** - External admin UI repository location and repo boundary
 
 ### Operational
