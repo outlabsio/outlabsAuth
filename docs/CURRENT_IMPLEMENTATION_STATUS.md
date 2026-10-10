@@ -7,6 +7,17 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 
 For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](./NEXT_PASS_BACKLOG.md).
 
+## Proposed tenant-identity and administrative-grant design (2026-10-10)
+
+The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md) and
+[review packet](./TENANT_AUTH_REVIEW_PACKET.md) are prepared for independent
+technical and human review (proposed DD-062). The local pure administrative
+evaluator has 51 focused cases; it remains unwired to persistence, routes,
+principal loading and host queries. Namespace-qualified authentication, persistent
+groups/grants, transactional history integration and migration acceptance are
+proposed work, not completed slices. No new runtime/schema changes or release are
+made by the documentation revision.
+
 ## Completed Slices
 
 ### Admin-Console Authorization Hardening (0.1.0a35)

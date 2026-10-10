@@ -43,6 +43,11 @@ with `python3 scripts/port_handbook.py` from that project.
 | [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Nuxt static SPA) |
 
 **Maintainers** (design decisions, audits, release process): [`docs/`](./docs/).
+**Proposed, awaiting review:** [Tenant identities and delegated administration](./docs/TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
+and its [independent review packet](./docs/TENANT_AUTH_REVIEW_PACKET.md). These are
+design documents; scoped identities and persistent administrative grants are not
+activated by this draft.
+
 Deep host DX / feature matrix when you need them:
 [API design](./docs/API_DESIGN.md),
 [Comparison matrix](./docs/COMPARISON_MATRIX.md).
