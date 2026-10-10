@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Standalone EnterpriseRBAC example app consuming outlabs-auth as a normal dependency"
 requires-python = ">=3.12"
 dependencies = [
-    "outlabs-auth>=0.1.0a10",
+    "outlabs-auth[oauth]>=0.1.0a10",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.0.0",

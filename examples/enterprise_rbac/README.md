@@ -162,6 +162,37 @@ Relevant env vars from `.env.example`:
 - Resend: `RESEND_API_KEY`
 - SMTP / webhook: see `.env.example`
 
+### Private local Google OAuth smoke test
+
+The public seed deliberately contains only fictional identities. To complete a
+real Google round trip without committing your Google address or client secret:
+
+1. Put `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+   `LOCAL_OAUTH_TEST_EMAIL` in the gitignored `.env`.
+2. Register these Google callback URLs:
+
+   ```text
+   http://localhost:8004/v1/oauth/google/callback
+   http://localhost:8004/v1/oauth-associate/google/callback
+   ```
+
+3. Add the same Google account to the OAuth app's test audience, then run:
+
+   ```bash
+   uv run python provision_local_oauth_user.py
+   ```
+
+The command is idempotent and creates an OAuth-only local superuser. Its real
+email exists only in `.env` and local Postgres. Run it again after
+`reset_test_env.py`, which intentionally restores only public fixtures.
+
+Keep `API_PUBLIC_URL=http://localhost:8004` and point the UI at that exact host.
+Mixing `127.0.0.1` and `localhost` loses the browser-bound OAuth state cookie and
+returns `oauth_error=invalid_state`.
+
+For the general host pattern and CI strategy, see
+[`docs-library/04-OAuth-and-Social-Login.md`](../../docs-library/04-OAuth-and-Social-Login.md#test-a-real-provider-without-committing-a-real-identity).
+
 ### Challenge messaging (WhatsApp + SMS)
 
 Host-owned delivery for access-code / OTP intents lives in `challenge_messaging.py`:

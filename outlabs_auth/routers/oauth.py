@@ -425,13 +425,20 @@ def get_oauth_router(
                         detail="OAuth authorization code exchange failed",
                     ) from exc
 
-            await validate_oidc_nonce(
+            verified_id_token_claims = await validate_oidc_nonce(
                 oauth_client,
                 token,
                 state_record.nonce if access_token_state is None else None,
             )
 
-            user_info = await get_oauth_user_info(oauth_client, token)
+            if verified_id_token_claims is None:
+                user_info = await get_oauth_user_info(oauth_client, token)
+            else:
+                user_info = await get_oauth_user_info(
+                    oauth_client,
+                    token,
+                    verified_id_token_claims=verified_id_token_claims,
+                )
 
             user = await oauth_callback(
                 auth=auth,

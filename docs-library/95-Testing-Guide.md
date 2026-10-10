@@ -57,6 +57,24 @@ When embedding OutlabsAuth, prefer:
 Do **not** re-test the whole library suite inside every host CI — depend on
 published versions and keep host tests on product routes.
 
+### OAuth test strategy
+
+Use two complementary layers:
+
+1. **Deterministic automated tests** mock the provider token/profile exchange
+   while using the real OutlabsAuth state store, callback router, database, and
+   account-linking logic. These belong in CI and use fictional identities.
+2. **A local live-provider smoke test** uses an ignored `.env`, one real test
+   account, and a disposable local database. It proves provider configuration
+   and the browser redirect, but it does not belong in CI.
+
+Do not commit OAuth client secrets or add a developer's real address to shared
+seed data. The EnterpriseRBAC example provides
+`provision_local_oauth_user.py`: set `LOCAL_OAUTH_TEST_EMAIL` privately and run
+the provisioner after `reset_test_env.py`. See
+[OAuth & social login](./04-OAuth-and-Social-Login.md#test-a-real-provider-without-committing-a-real-identity)
+for the complete setup and the `localhost`/`127.0.0.1` cookie-host rule.
+
 Library release gates also run an Enterprise API integration suite; see
 [`docs/PRIVATE_RELEASE.md`](../docs/PRIVATE_RELEASE.md).
 

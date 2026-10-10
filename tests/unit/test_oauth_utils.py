@@ -42,6 +42,35 @@ async def test_get_oauth_user_info_falls_back_to_get_id_email():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_get_oauth_user_info_prefers_cryptographically_verified_oidc_claims():
+    class GoogleShapedClient(FallbackOAuthClient):
+        async def get_id_email(self, access_token: str):
+            raise AssertionError("verified ID-token claims should avoid the lossy fallback")
+
+    user_info = await get_oauth_user_info(
+        GoogleShapedClient(),
+        {
+            "access_token": "provider-access-token",
+            "id_token": "signed-provider-token",
+        },
+        verified_id_token_claims={
+            "sub": "google-user-123",
+            "email": "oauth-tester@example.com",
+            "email_verified": True,
+            "name": "OAuth Tester",
+            "picture": "https://example.com/avatar.png",
+        },
+    )
+
+    assert user_info.provider_user_id == "google-user-123"
+    assert user_info.email == "oauth-tester@example.com"
+    assert user_info.email_verified is True
+    assert user_info.name == "OAuth Tester"
+    assert user_info.picture == "https://example.com/avatar.png"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_get_oauth_user_info_rejects_missing_email_and_unsupported_provider():
     class MissingEmailOAuthClient(FallbackOAuthClient):
         async def get_id_email(self, access_token: str):
@@ -94,11 +123,12 @@ async def test_validate_oidc_nonce_requires_verified_matching_claim():
     )
     assert oauth_client_uses_oidc(client) is True
 
-    await validate_oidc_nonce(
+    claims = await validate_oidc_nonce(
         client,
         {"id_token": "signed-provider-token"},
         "expected",
     )
+    assert claims == {"sub": "provider-user", "nonce": "expected"}
 
     with pytest.raises(HTTPException, match="nonce"):
         await validate_oidc_nonce(

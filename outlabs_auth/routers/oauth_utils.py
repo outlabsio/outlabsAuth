@@ -20,10 +20,10 @@ async def validate_oidc_nonce(
     oauth_client: Any,
     token: dict[str, Any],
     expected_nonce: Optional[str],
-) -> None:
-    """Cryptographically validate an OIDC ID token and its flow nonce."""
+) -> Optional[dict[str, Any]]:
+    """Cryptographically validate an OIDC ID token and return its claims."""
     if expected_nonce is None:
-        return
+        return None
 
     id_token = token.get("id_token")
     if not isinstance(id_token, str) or not id_token:
@@ -103,9 +103,37 @@ async def validate_oidc_nonce(
             detail="Invalid OAuth provider ID-token nonce",
         )
 
+    return cast(dict[str, Any], claims)
 
-async def get_oauth_user_info(oauth_client: Any, token: dict[str, Any]) -> OAuthUserInfo:
+
+async def get_oauth_user_info(
+    oauth_client: Any,
+    token: dict[str, Any],
+    *,
+    verified_id_token_claims: Optional[dict[str, Any]] = None,
+) -> OAuthUserInfo:
     """Load normalized OAuth user info, with Apple ID-token fallback."""
+    # OIDC claims returned by validate_oidc_nonce have already passed signature,
+    # issuer, audience, expiry, and nonce validation. Prefer them when they carry
+    # identity data so adapters such as httpx-oauth's Google client do not lose
+    # the provider's email_verified claim while falling back to get_id_email().
+    if verified_id_token_claims is not None:
+        provider_user_id = verified_id_token_claims.get("sub")
+        email = verified_id_token_claims.get("email")
+        if isinstance(provider_user_id, str) and provider_user_id and isinstance(email, str) and email:
+            email_verified_claim = verified_id_token_claims.get("email_verified", False)
+            email_verified = email_verified_claim is True or email_verified_claim == "true"
+            return OAuthUserInfo(
+                provider_user_id=provider_user_id,
+                email=email,
+                email_verified=email_verified,
+                name=_optional_string_claim(verified_id_token_claims, "name"),
+                given_name=_optional_string_claim(verified_id_token_claims, "given_name"),
+                family_name=_optional_string_claim(verified_id_token_claims, "family_name"),
+                picture=_optional_string_claim(verified_id_token_claims, "picture"),
+                locale=_optional_string_claim(verified_id_token_claims, "locale"),
+            )
+
     get_user_info = getattr(oauth_client, "get_user_info", None)
     if callable(get_user_info):
         try:
@@ -144,6 +172,11 @@ async def get_oauth_user_info(oauth_client: Any, token: dict[str, Any]) -> OAuth
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="OAuth provider user info is not supported",
     )
+
+
+def _optional_string_claim(claims: dict[str, Any], key: str) -> Optional[str]:
+    value = claims.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def encrypt_provider_token(auth: Any, token: str | None) -> str | None:

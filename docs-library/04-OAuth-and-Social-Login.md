@@ -74,6 +74,62 @@ frontends coexist — and the callback lands on the bound profile's registered
 `success_redirect_url` / `error_redirect_url` remain the single-profile
 degenerate case. See [Multi-Frontend Support](../docs/MULTI_FRONTEND_SUPPORT.md).
 
+## Test a real provider without committing a real identity
+
+Keep the public fixture set fictional. A live OAuth smoke test still needs the
+provider's real email to match a local `User`, but that identity only needs to
+exist in your ignored local environment and database — never in a seed file,
+GitHub secret committed to the repository, screenshot, or test assertion.
+
+Use this split:
+
+- **Repository and CI:** fake users plus mocked provider responses exercise
+  state, PKCE, callback, account-linking, and error behavior.
+- **Local smoke test:** one real provider account, private client credentials,
+  and a disposable local database prove the external round trip.
+- **Production:** a separate OAuth client and secret-management path; do not
+  reuse the local client.
+
+For the EnterpriseRBAC example:
+
+1. Copy `.env.example` to the gitignored `.env` and set
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+   `LOCAL_OAUTH_TEST_EMAIL` there.
+2. In Google Auth Platform, keep the app in Testing while developing and add
+   that Google account as a test user.
+3. Register both callbacks:
+
+   ```text
+   http://localhost:8004/v1/oauth/google/callback
+   http://localhost:8004/v1/oauth-associate/google/callback
+   ```
+
+4. Provision the private local account without changing the public seed:
+
+   ```bash
+   cd examples/enterprise_rbac
+   uv sync
+   uv run python provision_local_oauth_user.py
+   ```
+
+The provisioner is idempotent and makes the local account OAuth-only. It stores
+the actual address only in `.env` and the local Postgres database. Running
+`reset_test_env.py` replaces the database with public fictional fixtures, so
+run the provisioner again after a reset.
+
+::warning
+Use one hostname for the whole local OAuth round trip. If the frontend calls
+`http://127.0.0.1:8004` but `API_PUBLIC_URL` sends the provider back to
+`http://localhost:8004`, the browser-bound state cookie is not returned and
+the callback fails with `oauth_error=invalid_state`. The Enterprise example
+and OutlabsAuth UI templates use `localhost` consistently.
+::
+
+The email claim necessarily reaches the local backend during a real OAuth
+callback; privacy here means keeping that local identity out of the public
+repository and shared test artifacts, not hiding it from the identity provider
+or the application being tested.
+
 ## Important flags
 
 | Flag | Meaning |
@@ -124,6 +180,8 @@ Enabling storage without an encryption key fails at construction.
 - Only set `associate_by_email=True` when you trust provider email verification
 - Use HTTPS + `cookie_secure=True` in production
 - Keep `state_secret` high-entropy and stable across instances
+- Keep provider client secrets and real smoke-test identities in ignored local
+  config or a secret manager, never in public fixtures
 - OutlabsAuth UI offers OAuth sign-in (`/auth/oauth/callback`) and account linking
   (under `/app/account`) when its `authUi.oauthProviders` lists the provider and the users
   and OAuth associate routers are mounted; the console and API must be same-site because
