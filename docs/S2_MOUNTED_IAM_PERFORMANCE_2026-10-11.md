@@ -2,8 +2,9 @@
 
 Date: 2026-10-11. Runtime `fda9394` (unreleased a38), schema `20261011_0029`.
 This continues [owned-key acceptance](S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md).
-The public consumer release remains a37. Full qualification is in progress;
-the final local counts and artifact hashes will be recorded before closeout.
+The public consumer release remains a37. Final isolated source qualification
+at `05516cc` passes 1,608 cases; the independently required Redis run passes
+102. Both have zero failures/errors/skips.
 
 ## Explicit mount and credential escape-path closure
 
@@ -104,4 +105,11 @@ checks for the explicit mount, managed-key policy and public-a37 boundary.
 An intermediate overlapping test batch reused Redis databases and observed
 another batch's global-counter change. It is discarded. Final source and
 independent Redis qualification use a dedicated Redis server; no assertion is
-weakened. Final counts will be appended after that clean run.
+weakened. Final isolated qualification at `05516cc`: all 1,608 collected source cases
+pass (222/222/221 PostgreSQL shards plus 943 unit cases), zero failures/errors/
+skips. The subsequent independent required Redis run passes 102 cases, zero
+skips, on that dedicated server. Ruff across the repository, Black across all
+29 changed Python files since public a37, MyPy on five facade/credential modules
+and release metadata checks pass. Existing cache query budgets are preserved.
+Owned loopback PostgreSQL, both Redis servers, synthetic Mongo replica set and
+API listener are removed at closeout. No push, publication or deployment.
