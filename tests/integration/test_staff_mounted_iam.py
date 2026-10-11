@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.api_key import APIKey
-from outlabs_auth.routers import get_api_keys_router, get_staff_router
+from outlabs_auth.routers import assert_auth_surfaces, get_api_keys_router, get_staff_router
 from outlabs_auth.services.permission import PermissionService
 from tests.integration.test_administrative_grant_foundation import grant, world as foundation_world
 from tests.integration.test_staff_credential_target_lists import context, request, world
@@ -31,6 +31,7 @@ async def mounted(w):
     w.auth.instrument_fastapi(app)
     app.include_router(get_staff_router(w.facade))
     app.include_router(get_api_keys_router(w.auth, prefix="/ordinary-keys"))
+    assert_auth_surfaces(app, ["staff", "api_keys"])
     return app
 
 

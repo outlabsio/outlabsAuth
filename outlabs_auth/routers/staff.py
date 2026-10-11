@@ -15,6 +15,7 @@ from outlabs_auth.services.administrative_authorization import (
 )
 from outlabs_auth.models.sql.api_key import APIKey
 from outlabs_auth.models.sql.enums import APIKeyStatus
+from outlabs_auth.routers.capabilities import mark_auth_surface
 
 
 class StaffKeyCreate(BaseModel):
@@ -97,4 +98,4 @@ def get_staff_router(facade: AdministrativeAuthorization, *, prefix: str = "/sta
         if not await facade.revoke_personal_key(session, context, key_id=key_id):
             raise HTTPException(404, "Key not found")
 
-    return router
+    return mark_auth_surface(router, "staff")
