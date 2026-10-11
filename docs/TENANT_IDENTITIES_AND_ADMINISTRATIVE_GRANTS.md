@@ -77,7 +77,9 @@ staging and external restore admission are separate gates. Local proof does not
 establish a production RPO/RTO or S3 anti-rewind runner. An isolated, unreleased
 `0.1.0a38` foundation adds persistent S2 policy and optional S3 lifecycle
 observation; [current scope and remaining gates](S2_S3_FOUNDATION_2026-10-11.md)
-are explicit. S2 remains unwired from runtime authorization; S3 is opt-in and
+are explicit. The explicit S2 credential/target/account/list facade and focused concurrency
+are [locally qualified](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md); existing
+mounted IAM authorization remains unadopted. S3 is opt-in and
 unadopted by public consumers. Namespace stages remain unimplemented. S1 delivery
 does not adopt proposed DD-062 or resolve the remaining S0 decisions.
 

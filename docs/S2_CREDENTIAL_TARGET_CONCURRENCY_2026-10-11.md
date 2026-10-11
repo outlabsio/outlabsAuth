@@ -1,6 +1,6 @@
 # Staff credentials, targets, lists and concurrent withdrawal
 
-Date: 2026-10-11. Runtime source `2e9097c418dd59a872cea97011f39058cb61d46b`.
+Date: 2026-10-11. Runtime source `501bf269a7534cd3ecdee559981db7d095467a28`.
 Candidate `0.1.0a38`, unreleased; public a37 consumers keep their pins.
 This follows [the retained-policy/observer foundation](S2_S3_FOUNDATION_2026-10-11.md)
 and qualifies the explicit SDK facade below. It does not close the complete
@@ -16,7 +16,8 @@ only. Simultaneous key/bearer headers, integration credentials, service tokens,
 forged actor dictionaries, another Auth installation/session and a context
 carried across transaction completion are refused. A context is private-sealed
 and bound to the exact caller transaction. User/root/status/security epoch and
-key state/expiry are read afresh.
+key state/expiry are read afresh. A context cannot outlive the verified JWT
+expiration even while its host transaction remains open.
 
 `authorize(action, entity_id)` binds one action and target to the same grant.
 A personal key's actual persisted scopes and anchor/inheritance intersect that
@@ -71,11 +72,11 @@ apply its effect immediately in the same bounded transaction.
 
 ## Local qualification
 
-- All **1,584 collected tests pass**, zero failures/errors/skips, PostgreSQL 16
+- All **1,585 collected tests pass**, zero failures/errors/skips, PostgreSQL 16
   and required Redis 7. Four disjoint file shards cover exact collected nodes:
-  214, 214, 213 integration cases and 943 unit cases. JUnit totals/exit codes
+  214, 214, 214 integration cases and 943 unit cases. JUnit totals/exit codes
   match the collection manifest.
-- **17 new integration cases**, including actual HTTP host routes and verified
+- **18 new integration cases**, including actual HTTP host routes and verified
   credentials, SQL action/count/keyset/group/closure behavior, personal-key
   issuance/proof, account-root and dormant platform protection, and eight real
   competing-transaction cases. Database lock observation proves a sensitive
@@ -84,7 +85,7 @@ apply its effect immediately in the same bounded transaction.
 - Genuine populated installed a37 upgrade reaches `0028`, retaining existing
   UUIDs, credentials and platform classification. Frozen lifecycle rollback,
   savepoint/cancellation and retained evidence cases remain green.
-- Fresh noneditable wheel and sdist each pass **44 focused cases**, plus actual
+- Fresh noneditable wheel and sdist each pass **45 focused cases**, plus actual
   configured-constructor failure/commit and original-name retention smoke.
   All **239 packaged files** match the wheel in both installed environments.
 - Ruff, changed Python Black, MyPy across the five touched service/facade modules,
@@ -93,12 +94,12 @@ apply its effect immediately in the same bounded transaction.
 
 | Artifact from the runtime commit | SHA-256 |
 | --- | --- |
-| `outlabs_auth-0.1.0a38-py3-none-any.whl` | `7c5b063a330475ed2148c91687bbbea3dd78e51d5f4e6e5aa61efbbe9c8f542a` |
-| `outlabs_auth-0.1.0a38.tar.gz` | `0c71b3db729c813898ae520ad8e08886d505da516c895d9fead1a01968a07a3b` |
+| `outlabs_auth-0.1.0a38-py3-none-any.whl` | `5202a3baeabbe1d5d2fb89fc4b4337dc36c7b3369769bb12f6ca740e3ba29245` |
+| `outlabs_auth-0.1.0a38.tar.gz` | `91f419c59b3dd6f9dd0a91707f5a1aa20d6417b05ab4fe69376d5299ad2dfc6b` |
 
 Local artifacts/logs are disposable evidence under
 `~/Documents/tmp/business-api-a38-context-sync-20261011/`. These artifacts
-supersede the earlier local foundation build; no a38 release exists.
+supersede the earlier local foundation and `2e9097c` builds; no a38 release exists.
 
 ## Remaining exits
 

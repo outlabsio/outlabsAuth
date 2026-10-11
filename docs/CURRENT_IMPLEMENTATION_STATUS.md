@@ -32,8 +32,12 @@ staging and release-train adoption remain separate gates.
 The earlier pure administrative evaluator retains its 51 cases. The isolated
 unreleased a38 foundation now adds separate persistent policy, immutable
 lineage/audit and optional same-transaction lifecycle observation. It does not
-activate administrative route/principal/list authorization or complete host
-owned replay. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)
+activate existing mounted administrative routes or complete host-owned replay.
+The explicit verified staff facade qualifies real credential/account targets,
+action-bound SQL entity lists and concurrent withdrawal at `501bf26`: 1,585
+full local cases, 45 each installed artifact, 239 matched package files.
+[Current acceptance and remaining exits](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md)
+retain full IAM/credential writer inventory, numeric budgets and release gates. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)
 keep S2/S3 stage exits open; namespaces retain their later stage. These local corrections do not accept DD-062 or a deployed host.
 
 ## Completed Slices

@@ -36,7 +36,8 @@ This `docs/` tree is design specs and maintainer material.
 - **TASKQ_AUTHENTICATED_CONTEXT_PLAN.md** - Implemented candidate for once-per-request API-key accounting and auth-owned two-phase authorization; joint TaskQ audit/release pending
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
 - **HOST_INTEGRATION_QUERIES.md** - Supported auth-owned query boundaries for embedded host applications
-- **TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md** - Proposed design (revision 0.2) for customer identities and target-bound staff grants, with staged delivery S0–S7; start at its "Start here" section. Grants and namespaces remain unimplemented
+- **TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md** - Proposed design (revision 0.2) for customer identities and target-bound staff grants, with staged delivery S0–S7; start at its "Start here" section. Retained grants and an explicit SDK facade exist in unreleased a38; mounted IAM adoption and namespaces remain gated
+- **S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md** - Verified staff credential, target/account, SQL-list and concurrent withdrawal acceptance; 1,585 complete local tests, 45 each installed artifact; remaining budgets/writer/release gates
 - **TENANT_AUTH_SECURITY_PATCH.md** - Local first S1 slice: conditioned decision freshness and retained-deleted identifier reservation; regression evidence and remaining security/release gates
 - **TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md** - Consolidated three-lane independent review of revision 0.1 (nine findings, reproductions in `reviews/tenant-auth-2026-10-10/`), reconciled in the proposal
 - **AUTH_UI.md** - External admin UI repository location and repo boundary

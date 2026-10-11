@@ -8,7 +8,7 @@ runtime staff authority, implement namespaces or close the S2/S3 stage exits.
 
 Latest credential, SQL projection and concurrent withdrawal qualification is
 [the S2 follow-up receipt](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md)
-(runtime `2e9097c`, 1,584 complete tests, 44 each installed artifact). The
+(runtime `501bf26`, 1,585 complete tests, 45 each installed artifact). The
 foundation evidence below is preserved as the earlier checkpoint.
 
 ## Persistent administrative policy
