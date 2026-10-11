@@ -156,6 +156,11 @@ class APIKey(BaseModel, table=True):
     )
 
     # === Status & Lifecycle ===
+    staff_managed: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, default=False, server_default="false"),
+        description="Credential lifecycle is owned by the explicit staff facade",
+    )
     status: APIKeyStatus = Field(
         default=APIKeyStatus.ACTIVE,
         sa_column=Column(String(20), nullable=False, default="active"),

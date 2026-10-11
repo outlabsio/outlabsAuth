@@ -25,8 +25,10 @@ from outlabs_auth.routers.roles import get_roles_router
 from outlabs_auth.routers.self_service import get_self_service_users_router
 from outlabs_auth.routers.session import get_session_router
 from outlabs_auth.routers.users import get_users_router
+from outlabs_auth.routers.staff import get_staff_router
 
 __all__ = [
+    "get_staff_router",
     "get_auth_router",
     "get_capabilities_router",
     "discover_mounted_auth_surfaces",

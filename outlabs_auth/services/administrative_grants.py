@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -77,6 +77,27 @@ class AdministrativeGrantService:
         return actor
 
     async def _path(self, session: AsyncSession, target_id: UUID, now: datetime, *, lock: bool = False) -> list[Entity]:
+        # Walk only this target's parents in one bounded statement. Reconstruct
+        # from fresh, locked rows for writes: a move between discovery and lock
+        # acquisition must fail closed rather than authorizing stale ancestry.
+        e = cast(Any, Entity).__table__
+        ancestry = (
+            select(e.c.id, e.c.parent_id, literal(0).label("depth"))
+            .where(e.c.id == target_id)
+            .cte("staff_target_ancestry", recursive=True)
+        )
+        ancestry = ancestry.union_all(
+            select(e.c.id, e.c.parent_id, (ancestry.c.depth + 1).label("depth"))
+            .join(ancestry, e.c.id == ancestry.c.parent_id)
+            .where(ancestry.c.depth < self.max_depth + 1)
+        )
+        statement = select(Entity).where(cast(Any, Entity.id).in_(select(ancestry.c.id)))
+        if lock:
+            # PostgreSQL cannot lock recursive CTE results directly. Lock the
+            # base rows in UUID order and validate their current parent links.
+            statement = statement.order_by(cast(Any, Entity.id)).with_for_update(read=True)
+        rows = (await session.execute(statement.execution_options(populate_existing=True))).scalars().all()
+        by_id = {entity.id: entity for entity in rows}
         path: list[Entity] = []
         seen: set[UUID] = set()
         cursor: UUID | None = target_id
@@ -84,9 +105,7 @@ class AdministrativeGrantService:
             if cursor in seen or len(path) > self.max_depth:
                 raise InvalidInputError(message="Invalid administrative target ancestry")
             seen.add(cursor)
-            entity = (
-                await session.execute(_fresh(select(Entity).where(cast(Any, Entity.id) == cursor), lock))
-            ).scalar_one_or_none()
+            entity = by_id.get(cursor)
             if entity is None or entity.entity_class != EntityClass.STRUCTURAL or entity.status != "active":
                 raise InvalidInputError(message="Administrative target is not active and structural")
             if (entity.valid_from is not None and now < entity.valid_from) or (

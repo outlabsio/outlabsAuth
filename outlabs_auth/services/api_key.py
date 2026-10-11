@@ -306,6 +306,8 @@ class APIKeyService(BaseService[APIKey]):
             )
 
         # Generate API key
+        if _staff_approval is not None and self.policy_service is None:
+            raise InvalidInputError(message="Staff credential policy is unavailable")
         full_key, prefix = APIKey.generate_key(prefix_type)
         key_hash = APIKey.hash_key(full_key)
 
@@ -330,6 +332,7 @@ class APIKeyService(BaseService[APIKey]):
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
             description=description,
+            staff_managed=_staff_approval is not None,
         )
 
         session.add(api_key)
@@ -1945,9 +1948,33 @@ class APIKeyService(BaseService[APIKey]):
         Returns:
             Optional[APIKey]: Updated key or None
         """
-        api_key = await self.get_by_id(session, key_id)
+        api_key = (
+            await session.execute(
+                select(APIKey)
+                .where(cast(Any, APIKey.id) == key_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if not api_key:
             return None
+
+        if api_key.staff_managed:
+            if _staff_approval is None or self.policy_service is None:
+                raise InvalidInputError(message="Staff credentials require the staff lifecycle workflow")
+            if set(updates) - {"scopes", "expires_at"}:
+                raise InvalidInputError(message="Staff credentials can only narrow scopes and expiry")
+            if "scopes" in updates and not set(updates["scopes"]).issubset(
+                await self.get_api_key_scopes(session, key_id)
+            ):
+                raise InvalidInputError(message="Staff credential scopes cannot expand")
+            if "expires_at" in updates and (
+                updates["expires_at"] is None
+                or updates["expires_at"].tzinfo is None
+                or api_key.expires_at is None
+                or not datetime.now(timezone.utc) < updates["expires_at"] <= api_key.expires_at
+            ):
+                raise InvalidInputError(message="Staff credential expiry cannot expand")
 
         resolved_owner = await self.resolve_api_key_owner(session, api_key)
         if resolved_owner is None:
@@ -1975,7 +2002,9 @@ class APIKeyService(BaseService[APIKey]):
                 ) from exc
 
         grant_fields_changed = any(field in updates for field in {"scopes", "entity_id", "inherit_from_tree"})
-        if self.policy_service is not None and grant_fields_changed:
+        if self.policy_service is not None and (
+            grant_fields_changed or api_key.staff_managed or _staff_approval is not None
+        ):
             effective_scopes = (
                 updates["scopes"] if "scopes" in updates else await self.get_api_key_scopes(session, key_id)
             )
@@ -2073,9 +2102,26 @@ class APIKeyService(BaseService[APIKey]):
         _staff_approval: Any = None,
     ) -> tuple[str, APIKey]:
         """Rotate an API key and emit a single lifecycle audit event."""
-        api_key = await self.get_api_key(session, key_id)
+        api_key = (
+            await session.execute(
+                select(APIKey)
+                .where(cast(Any, APIKey.id) == key_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if api_key is None:
             raise InvalidInputError(message="API key not found", details={"key_id": str(key_id)})
+        if api_key.staff_managed:
+            from outlabs_auth.services.api_key_policy import _StaffKeyApproval
+
+            if (
+                not isinstance(_staff_approval, _StaffKeyApproval)
+                or self.policy_service is None
+                or _staff_approval.issuer is not self.policy_service._staff_approval_issuer
+                or _staff_approval.key_id != key_id
+            ):
+                raise InvalidInputError(message="Staff credentials require the staff lifecycle workflow")
 
         resolved_owner = await self.resolve_api_key_owner(session, api_key)
         if resolved_owner is None:

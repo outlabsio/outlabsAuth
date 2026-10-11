@@ -19,7 +19,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException, Request
-from sqlalchemy import Text, and_, func, literal, or_, select
+from sqlalchemy import Text, and_, func, literal, or_, select, union_all
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import aliased
@@ -392,6 +392,7 @@ class AdministrativeAuthorization:
             key.entity_id,
             tuple(sorted(set(scopes))),
             key.inherit_from_tree,
+            key.id,
         )
 
     async def update_personal_key(
@@ -628,9 +629,39 @@ class AdministrativeAuthorization:
         # of potentially stale closure rows. Only active structural paths qualify.
         query_now = func.statement_timestamp()
         e = cast(Any, Entity).__table__
+        anchors = [grant.entity_id for grant, _, _ in refs if grant.selector_kind in {"entity", "subtree"}]
+        parent_paths = (
+            select(e.c.id, e.c.parent_id, literal(0).label("depth"))
+            .where(e.c.id.in_(anchors), _active_entity(e.c, query_now))
+            .cte("staff_selector_parents", recursive=True)
+        )
+        parent_paths = parent_paths.union_all(
+            select(e.c.id, e.c.parent_id, parent_paths.c.depth + 1)
+            .join(parent_paths, e.c.id == parent_paths.c.parent_id)
+            .where(parent_paths.c.depth < self.grants.max_depth, _active_entity(e.c, query_now))
+        )
+        roots = [select(parent_paths.c.id).where(parent_paths.c.parent_id.is_(None))]
+        a = cast(Any, AdministrativeAdmission).__table__
+        for grant, _, _ in refs:
+            if grant.selector_kind == "group":
+                # Restrict the forest before traversing it; admission pins are
+                # checked again against the live grant in the final predicate.
+                roots.append(
+                    select(a.c.customer_root_id).where(
+                        a.c.group_id == grant.group_id,
+                        a.c.closed_at.is_(None),
+                        a.c.id.in_([UUID(value) for value in grant.admission_ids]),
+                    )
+                )
+        selected_roots = union_all(*roots).cte("staff_selector_roots")
         tree = (
             select(e.c.id, e.c.id.label("root_id"), literal(0).label("depth"), array([e.c.id]).label("path"))
-            .where(e.c.parent_id.is_(None), e.c.id != self.grants.trusted_root, _active_entity(e.c, query_now))
+            .where(
+                e.c.parent_id.is_(None),
+                e.c.id != self.grants.trusted_root,
+                e.c.id.in_(select(selected_roots.c.id)),
+                _active_entity(e.c, query_now),
+            )
             .cte("staff_tree", recursive=True)
         )
         child = e.alias("staff_child")

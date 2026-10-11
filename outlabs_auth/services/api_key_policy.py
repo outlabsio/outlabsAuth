@@ -61,6 +61,7 @@ class _StaffKeyApproval:
     entity_id: UUID
     scopes: tuple[str, ...]
     inherit_from_tree: bool
+    key_id: UUID | None = None
 
 
 class APIKeyPolicyService:
@@ -193,6 +194,8 @@ class APIKeyPolicyService:
         """Validate the effective state after an update."""
         try:
             if staff_approval is not None:
+                if not isinstance(staff_approval, _StaffKeyApproval) or staff_approval.key_id != api_key.id:
+                    raise self._policy_error("invalid_staff_key_approval", message="Staff approval targets another key")
                 await self.validate_create(
                     session,
                     actor_user_id=actor_user_id,
