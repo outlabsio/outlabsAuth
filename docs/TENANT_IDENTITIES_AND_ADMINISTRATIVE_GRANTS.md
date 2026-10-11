@@ -74,8 +74,11 @@ reproduced gaps; all three reviewers are green. The
 accepted source, exact artifact and public-release evidence. Review boundaries are
 in [S1_REVIEW_A37.md](S1_REVIEW_A37.md). Consumer adoption, certified release train,
 staging and external restore admission are separate gates. Local proof does not
-establish a production RPO/RTO or S3 anti-rewind runner. S2 grants, S3 observer and
-namespace stages remain unimplemented; the prototype is still unwired. S1 delivery
+establish a production RPO/RTO or S3 anti-rewind runner. An isolated, unreleased
+`0.1.0a38.dev0` foundation adds persistent S2 policy and optional S3 lifecycle
+observation; [current scope and remaining gates](S2_S3_FOUNDATION_2026-10-11.md)
+are explicit. S2 remains unwired from runtime authorization; S3 is opt-in and
+unadopted by public consumers. Namespace stages remain unimplemented. S1 delivery
 does not adopt proposed DD-062 or resolve the remaining S0 decisions.
 
 **Earlier planning checkpoint on 2026-10-10:** design revision 0.2 plus a completed independent review

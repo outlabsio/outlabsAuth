@@ -23,6 +23,7 @@ from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS, UnitOfWorkState
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.fastapi import ExceptionHandlerMode
 from outlabs_auth.maintenance import MaintenanceReport
+from outlabs_auth.services.lifecycle_events import LifecycleDispatcher, LifecycleObserver
 from outlabs_auth.utils.ip import ip_matches_rules
 
 logger = logging.getLogger("outlabs_auth")
@@ -63,6 +64,7 @@ class OutlabsAuth:
         initialize_timeout_seconds: float = 120.0,
         database_schema: Optional[str] = None,
         echo_sql: bool = False,
+        lifecycle_observers: Optional[list[LifecycleObserver]] = None,
         # Core configuration
         secret_key: str = "",
         algorithm: str = "HS256",
@@ -217,6 +219,7 @@ class OutlabsAuth:
         )
 
         # Create configuration object
+        self._lifecycle_observers = tuple(lifecycle_observers or ())
         self.config = AuthConfig(
             database_url=database_url,
             database_schema=database_schema,
@@ -554,6 +557,8 @@ class OutlabsAuth:
         # Internal wiring for DD-059 intent enrichment (root-entity slug/type
         # and invite metadata cold-loads through the request-scoped cache).
         self.user_service._session_factory = self._session_factory
+        lifecycle_dispatcher = LifecycleDispatcher(self._lifecycle_observers)
+        self.user_service.lifecycle_dispatcher = lifecycle_dispatcher
         # DD-059 slice 4: the auth service runs the sign-in gate at every
         # token-minting path against the same resolution component.
         self.auth_service.frontend_resolver = self.frontend_resolver
@@ -630,6 +635,8 @@ class OutlabsAuth:
                 role_service=self.role_service,
             )
             self.entity_service.membership_service = self.membership_service
+            self.membership_service.lifecycle_dispatcher = lifecycle_dispatcher
+            self.entity_service.lifecycle_dispatcher = lifecycle_dispatcher
             self.entity_service.role_service = self.role_service
             self.entity_service.user_audit_service = self.user_audit_service
 

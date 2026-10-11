@@ -22,6 +22,13 @@ from .activity_metric import (
     UserActivity,
 )
 from .auth_challenge import AuthChallenge
+from .administrative_grant import (
+    AdministrativeAdmission,
+    AdministrativeAudit,
+    AdministrativeGrantRecord,
+    AdministrativeGroup,
+    AdministrativeTemplateRevision,
+)
 
 # === API Key Models ===
 from .api_key import (
@@ -91,6 +98,11 @@ from .user_role_membership import UserRoleMembership
 
 # === All Models (for Alembic) ===
 __all__ = [
+    "AdministrativeAdmission",
+    "AdministrativeAudit",
+    "AdministrativeGrantRecord",
+    "AdministrativeGroup",
+    "AdministrativeTemplateRevision",
     # Enums
     "UserStatus",
     "AuthChallengeType",
@@ -172,6 +184,11 @@ SIMPLE_RBAC_MODELS = [
 ]
 
 ENTERPRISE_RBAC_MODELS = [
+    AdministrativeAdmission,
+    AdministrativeAudit,
+    AdministrativeGrantRecord,
+    AdministrativeGroup,
+    AdministrativeTemplateRevision,
     Entity,
     EntityClosure,
     EntityMembership,

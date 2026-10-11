@@ -139,3 +139,36 @@ Point the UI as described in [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 - [03-Configuration.md](./03-Configuration.md)
 - [22-JWT-Tokens.md](./22-JWT-Tokens.md)
 - Live OpenAPI on a running example (`/docs`)
+
+## Unreleased transactional lifecycle observer
+
+The local `0.1.0a38.dev0` candidate adds optional `lifecycle_observers` to the
+Auth constructor. Public a37 does not provide this option. Do not enable it in
+a deployed consumer before the library/host artifact and writer coverage gates
+in `docs/S2_S3_FOUNDATION_2026-10-11.md` qualify.
+
+An observer is an async callable `(session, event)`. `event` is a frozen scalar
+`LifecycleEvent` with a unique event UUID, aware UTC occurrence time, kind,
+applicable user/entity/root/membership/actor UUIDs, frozen names, lifecycle
+statuses and source. It carries no passwords, email addresses or tokens.
+
+Write host-owned evidence through that exact AsyncSession. The caller owns the
+transaction; the observer must not commit, roll back, open another transaction,
+change IAM authority or perform mail/network side effects. Observer failure
+poisons the active transaction, so a caught error cannot be committed until
+rollback. A failed savepoint can be discarded by rolling back that savepoint;
+rolling back a later savepoint cannot clear a failure in its outer transaction.
+
+Membership changes/removals, user suspension/retained deletion/hard deletion and
+archive cascades invoke the observer before destructive cleanup. Evidence must
+use independent host storage without cascading IAM foreign keys to survive
+hard deletion. Repeated revocation emits no duplicate removal. Generic
+structural hard deletion is refused; use the archive workflow and retain its
+evidence. Direct database edits are outside the supported service lifecycle.
+
+No configured observers means no observer queries or events. The callback is
+not an external delivery guarantee: write an outbox with the evidence, commit,
+then deliver separately. Without verified provider idempotency, record UNKNOWN
+outcomes and the possibility of duplicate physical delivery. Crosswalks,
+source-owned contributions, recovery fencing and cohort completeness remain
+host responsibilities.

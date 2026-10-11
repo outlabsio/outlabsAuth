@@ -310,9 +310,9 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Current Library Version**: 0.1.0a37
+**Current Library Version**: 0.1.0a38.dev0 (local, unreleased; public release remains a37)
 
-**Release evidence**: [S1 qualification and publication receipt](./docs/S1_RELEASE_CANDIDATE_A37.md). Package publication and consumer adoption are separate gates.
+**Release evidence**: [Public S1 a37 receipt](./docs/S1_RELEASE_A37.md). [Local S2/S3 foundation](./docs/S2_S3_FOUNDATION_2026-10-11.md) keeps administrative admission unwired; package publication and consumer adoption are separate gates.
 
 **Release Stage**: Alpha
 

@@ -29,10 +29,12 @@ admission/revocation reconstruction is a host obligation. Independent refresh-re
 containment is qualified for ordinary configured-engine sessions, with externally
 held connections and single-connection pools explicitly unqualified. Consumer pins,
 staging and release-train adoption remain separate gates.
-The pure administrative evaluator has 51 focused cases and remains unwired to
-persistence, routes, principal loading and host queries. Persistent groups/grants,
-transactional removal observation/replay and qualified namespaces retain their
-separate stages. These local corrections do not accept DD-062 or a deployed host.
+The earlier pure administrative evaluator retains its 51 cases. The isolated
+unreleased a38.dev0 foundation now adds separate persistent policy, immutable
+lineage/audit and optional same-transaction lifecycle observation. It does not
+activate administrative route/principal/list authorization or complete host
+owned replay. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)
+keep S2/S3 stage exits open; namespaces retain their later stage. These local corrections do not accept DD-062 or a deployed host.
 
 ## Completed Slices
 

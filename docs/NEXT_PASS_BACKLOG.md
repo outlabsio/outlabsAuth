@@ -16,9 +16,14 @@ This document is intentionally short. It is not a full project plan. It is a wor
   consumer's package/schema/staging acceptance. External restore admission,
   production budgets and the S3 anti-rewind replay/outbox remain separate.
   Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
-- **S0 decisions and later stages (not started).** Record DD-062 dispositions before
-  S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's
-  "Start here" section.
+- **S2/S3 local foundation, stage exits open.** Separate retained policy and opt-in
+  transactional lifecycle observation exist in unreleased a38.dev0; see
+  [qualification and limits](S2_S3_FOUNDATION_2026-10-11.md). Next verified
+  credential/target facade, IAM/detail/list guards, protected accounts,
+  sensitive-write withdrawal/topology serialization and numeric budgets, then
+  full installed S3 writer/failure acceptance and a separately qualified release.
+  Keep runtime grants unwired. Record remaining DD-062/S0 dispositions before
+  adopting broader policy; namespaces, delegation and machine grants remain deferred.
 
 ## Shipped Since Last Backlog Update (2026-10)
 

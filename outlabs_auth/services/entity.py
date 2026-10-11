@@ -51,6 +51,7 @@ from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.services.lifecycle_events import LifecycleDispatcher
 
 ROOT_NAMING_PATTERN_FIELDS = (
     "child_name_pattern",
@@ -105,6 +106,7 @@ class EntityService(BaseService[Entity]):
         self.redis_client = redis_client
         self.observability = observability
         self.config_service = config_service
+        self.lifecycle_dispatcher = LifecycleDispatcher()
         self.membership_service: Optional["MembershipService"] = None
         self.role_service: Optional["RoleService"] = None
         self.api_key_service: Optional["APIKeyService"] = None
@@ -918,6 +920,18 @@ class EntityService(BaseService[Entity]):
         archive_root_entity_id = await self._resolve_root_entity_id(session, entity)
         previous_status = entity.status
 
+        await self.lifecycle_dispatcher.emit(
+            session,
+            kind="entity.archived",
+            occurred_at=datetime.now(timezone.utc),
+            entity_id=entity.id,
+            customer_root_id=archive_root_entity_id,
+            actor_id=deleted_by_id,
+            previous_status=previous_status,
+            status="archived",
+            source="entity_service.delete_entity",
+        )
+
         # Soft delete
         entity.status = "archived"
         await session.flush()
@@ -984,6 +998,14 @@ class EntityService(BaseService[Entity]):
 
         await self._invalidate_permission_cache(session, entity_id, scope_global=True)
         return True
+
+    async def delete(self, session: AsyncSession, obj: Entity) -> bool:
+        """Structural purge needs reviewed maintenance, never generic SDK CRUD.
+
+        A cascade could null account roots and erase relationship provenance.
+        The supported lifecycle is archive via delete_entity().
+        """
+        raise InvalidInputError(message="Use the entity archive workflow; structural purge requires fenced maintenance")
 
     async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
         """

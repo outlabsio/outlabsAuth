@@ -51,6 +51,7 @@ from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.services.lifecycle_events import LifecycleDispatcher
 from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
 from outlabs_auth.utils.validation import validate_email, validate_name, validate_phone
 
@@ -99,6 +100,7 @@ class UserService(BaseService[User]):
         self.user_audit_service = user_audit_service
         self.transactional_mail_service = transactional_mail_service
         self.transactional_messaging_service = transactional_messaging_service
+        self.lifecycle_dispatcher = LifecycleDispatcher()
         # Internal session factory for intent enrichment (DD-059): root-entity
         # slug/type and invite metadata cold-loads. Wired by OutlabsAuth at
         # service construction; hosts that build UserService directly may leave
@@ -941,6 +943,21 @@ class UserService(BaseService[User]):
             raise InvalidInputError(message="Use the delete workflow to revoke access and retain the identity")
         old_status = user.status
         old_suspended_until = user.suspended_until
+        if old_status != status:
+            await self.lifecycle_dispatcher.emit(
+                session,
+                kind="user.status_changed",
+                occurred_at=datetime.now(timezone.utc),
+                user_id=user.id,
+                customer_root_id=user.root_entity_id,
+                actor_id=changed_by_id,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                previous_status=old_status.value if isinstance(old_status, UserStatus) else str(old_status),
+                status=status.value if isinstance(status, UserStatus) else str(status),
+                reason=reason,
+                source="user_service.update_user_status",
+            )
         user.status = status
 
         # Handle suspended_until field
@@ -1228,6 +1245,19 @@ class UserService(BaseService[User]):
         previous_superuser = user.is_superuser
         previous_epoch = user.session_security_epoch
         deleted_at = datetime.now(timezone.utc)
+        await self.lifecycle_dispatcher.emit(
+            session,
+            kind="user.deleted",
+            occurred_at=deleted_at,
+            user_id=user.id,
+            customer_root_id=user.root_entity_id,
+            actor_id=deleted_by_id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            previous_status=user.status.value if isinstance(user.status, UserStatus) else str(user.status),
+            status="deleted",
+            source="user_service.delete_user",
+        )
         await self._retain_platform_classification(session, user)
         user.is_superuser = False
 
@@ -1331,6 +1361,38 @@ class UserService(BaseService[User]):
             )
 
         return True
+
+    async def delete(self, session: AsyncSession, obj: User) -> bool:
+        """Supported SDK hard deletion captures identity and every relationship first.
+
+        Raw SQL deletion is fenced maintenance and bypasses this contract. Rows
+        with retained administrative authority may refuse deletion via RESTRICT.
+        """
+        user = await self.get_user_by_id(session, obj.id, for_update=True)
+        if user is None:
+            return False
+        now = datetime.now(timezone.utc)
+        await self.lifecycle_dispatcher.emit(
+            session,
+            kind="user.hard_deleted",
+            occurred_at=now,
+            user_id=user.id,
+            customer_root_id=user.root_entity_id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            previous_status=user.status.value if isinstance(user.status, UserStatus) else str(user.status),
+            status="hard_deleted",
+            source="user_service.delete",
+        )
+        if self.membership_service is not None:
+            rows = (
+                (await session.execute(select(EntityMembership).where(cast(Any, EntityMembership.user_id) == user.id)))
+                .scalars()
+                .all()
+            )
+            for membership in rows:
+                await self.membership_service.delete(session, membership)
+        return await super().delete(session, user)
 
     def _scope_filter(self, scope_entity_ids: List[UUID]) -> Any:
         """

@@ -42,6 +42,7 @@ from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.services.lifecycle_events import LifecycleDispatcher
 from outlabs_auth.utils.lifecycle import lifecycle_update_grants_access
 
 
@@ -86,6 +87,7 @@ class MembershipService(BaseService[EntityMembership]):
         self.config = config
         self.observability = observability
         self.user_audit_service = user_audit_service
+        self.lifecycle_dispatcher = LifecycleDispatcher()
 
     @staticmethod
     def _membership_roles_option() -> Any:
@@ -379,13 +381,20 @@ class MembershipService(BaseService[EntityMembership]):
         """
         start_time = time.perf_counter()
 
-        # Find membership
-        membership = await self.get_one(
-            session,
-            cast(Any, EntityMembership.user_id) == user_id,
-            cast(Any, EntityMembership.entity_id) == entity_id,
-            options=[self._membership_roles_option()],
-        )
+        # Serialize repeated removal so only the actual transition emits
+        # evidence. Refresh a previously loaded row after the lock is acquired.
+        membership = (
+            await session.execute(
+                select(EntityMembership)
+                .where(
+                    cast(Any, EntityMembership.user_id) == user_id,
+                    cast(Any, EntityMembership.entity_id) == entity_id,
+                )
+                .options(self._membership_roles_option())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
 
         if not membership:
             raise MembershipNotFoundError(
@@ -393,6 +402,8 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
+        if membership.status == MembershipStatus.REVOKED:
+            return False
         previous_snapshot = await self._build_membership_history_snapshot(session, membership)
         membership.status = MembershipStatus.REVOKED
         membership.revoked_at = datetime.now(timezone.utc)
@@ -423,6 +434,39 @@ class MembershipService(BaseService[EntityMembership]):
 
         await self._invalidate_membership_permissions_cache(session, user_id)
         return True
+
+    async def delete(self, session: AsyncSession, obj: EntityMembership) -> bool:
+        """Capture hard-removal evidence before cascading IAM history disappears."""
+        membership = (
+            await session.execute(
+                select(EntityMembership)
+                .where(cast(Any, EntityMembership.id) == obj.id)
+                .options(self._membership_roles_option())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if membership is None:
+            return False
+        if self.lifecycle_dispatcher.observers:
+            snapshot = await self._build_membership_history_snapshot(session, membership)
+            user = await session.get(User, membership.user_id)
+            await self.lifecycle_dispatcher.emit(
+                session,
+                kind="membership.hard_deleted",
+                occurred_at=datetime.now(timezone.utc),
+                user_id=membership.user_id,
+                entity_id=membership.entity_id,
+                membership_id=membership.id,
+                customer_root_id=snapshot["root_entity_id"],
+                first_name=user.first_name if user else None,
+                last_name=user.last_name if user else None,
+                previous_status=snapshot["status"],
+                status="hard_deleted",
+                source="membership_service.delete",
+            )
+        await self._invalidate_membership_permissions_cache(session, membership.user_id)
+        return await super().delete(session, membership)
 
     async def update_membership(
         self,
@@ -1442,6 +1486,24 @@ class MembershipService(BaseService[EntityMembership]):
             occurred_at=history.event_at,
             subject_user=subject_user,
         )
+        if self.lifecycle_dispatcher.observers:
+            user = subject_user if subject_user is not None else await session.get(User, membership.user_id)
+            await self.lifecycle_dispatcher.emit(
+                session,
+                kind=f"membership.{event_type}",
+                occurred_at=history.event_at,
+                user_id=membership.user_id,
+                entity_id=membership.entity_id,
+                membership_id=membership.id,
+                customer_root_id=current_snapshot["root_entity_id"],
+                actor_id=actor_user_id,
+                first_name=user.first_name if user else None,
+                last_name=user.last_name if user else None,
+                previous_status=previous_snapshot["status"] if previous_snapshot else None,
+                status=current_snapshot["status"],
+                reason=reason,
+                source=event_source,
+            )
         return history
 
     async def _record_user_membership_audit_event(
