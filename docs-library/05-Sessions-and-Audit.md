@@ -172,3 +172,33 @@ then deliver separately. Without verified provider idempotency, record UNKNOWN
 outcomes and the possibility of duplicate physical delivery. Crosswalks,
 source-owned contributions, recovery fencing and cohort completeness remain
 host responsibilities.
+
+
+## Unreleased explicit staff host facade
+
+The local a38 candidate offers
+`auth.host_query_service.staff_administration(auth, trusted_internal_root_id=...)`.
+Configure the control-root UUID on the server. Authenticate through the facade
+with the actual request and exact host AsyncSession; its context cannot cross
+a transaction, session or installation. Human JWTs and personal keys intersect
+current target-bound grants; machine credentials cannot borrow staff authority.
+
+Use `authorize(action=..., entity_id=...)` for detail and
+`authorize_account(action=..., user_id=...)` for root-owned account actions.
+For sensitive effects request `protected_write=True`, check `allowed`, and
+perform the effect in that same bounded transaction before committing. Set host
+lock/statement budgets and roll back failures. The library holds the qualifying
+policy rows and rechecks them after waits. Multi-target operations still need
+qualified ordering, failure handling and writer inventory.
+
+`entity_page(action=..., limit=..., cursor=...)` filters/counts/pages authorized
+entity projections in SQL. A list admission is not write authorization.
+`create_personal_key` is explicit JWT-only self-service with exact bounded
+scopes and a durable anchor; ordinary mounted SDK key policy stays in force.
+Unanchored legacy keys require explicit opt-in. Key update/rotation, complete
+IAM route pairing, large-tree numeric budgets and restricted DML privileges
+remain gates. Nothing activates this facade on existing routes.
+
+Qualification and remaining release/consumer gates are recorded in
+`docs/S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md`; do not adopt an unreleased
+local build in a deployed consumer. Public a37 does not provide this facade.

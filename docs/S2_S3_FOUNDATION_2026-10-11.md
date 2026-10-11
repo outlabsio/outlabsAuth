@@ -6,6 +6,11 @@ The [tenant/admin plan](TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md) is the
 design authority. This foundation does not accept all DD-062 decisions, activate
 runtime staff authority, implement namespaces or close the S2/S3 stage exits.
 
+Latest credential, SQL projection and concurrent withdrawal qualification is
+[the S2 follow-up receipt](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md)
+(runtime `2e9097c`, 1,584 complete tests, 44 each installed artifact). The
+foundation evidence below is preserved as the earlier checkpoint.
+
 ## Persistent administrative policy
 
 The additive `20261011_0027` migration follows public a37 head
