@@ -30,24 +30,24 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
 4. Run packaging and bootstrap tests:
    - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py tests/unit/test_bootstrap.py -q`
    - `TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test uv run --extra test python -m pytest tests/integration/test_packaged_cli_migrations.py -q`
-5. Run the full test suite and the API integration suite (see
-   [API Integration Validation](#api-integration-validation) below). The
-   `Release Readiness` workflow runs both automatically (`full-suite` and
-   `api-integration` jobs with ephemeral Postgres + Redis services) on every
-   PR and on `main`/tags — run locally to iterate faster than CI:
+5. Run the full test suite and the API integration suite locally (see
+   [API Integration Validation](#api-integration-validation) below), using owned
+   disposable Postgres + Redis. Record the exact commit, command and outcome.
+   Hosted GitHub CI is not a test or release gate:
    - `TEST_REDIS_URL=redis://localhost:56379/15 TEST_REDIS_REQUIRED=1 uv run pytest -q`
    - `TEST_REDIS_URL=redis://localhost:56379/15 TEST_REDIS_REQUIRED=1 uv run pytest -m redis -q`
    - `uv run python scripts/run_enterprise_example_smoke.py`
-6. If the release contains new Alembic revisions, wait for the required
-   [`seeded-upgrade-rehearsal`](#database-upgrade-rehearsal) CI job. It
-   reconstructs the preceding release's schema shape in a disposable Postgres
-   container, seeds affected auth records, upgrades to the current head, checks
-   the transformed data and schema, then verifies a second upgrade is a no-op.
-   This is the standard release rehearsal; it does not require a consumer
-   application's database or credentials.
+6. If the release contains new Alembic revisions, run the local
+   [database upgrade rehearsal](#database-upgrade-rehearsal), including lock,
+   index-validity, rollback and recovery acceptance for security barriers.
 7. Build distributions locally:
    - `uv build --no-sources`
-8. Push the branch and wait for the `Release Readiness` workflow to pass.
+8. Qualify the exact hashed wheel and sdist in fresh environments outside the
+   checkout. The packaged migration tests accept `OUTLABS_AUTH_TEST_ARTIFACT`
+   plus its required `OUTLABS_AUTH_TEST_ARTIFACT_SHA256`; record installed imports,
+   migrations, security regressions, numeric budgets and the recovery artifact.
+   Push the reviewed branch when publication is authorized. Historical
+   `Release Readiness` jobs are not acceptance evidence.
 9. Merge to `main`.
 10. Create and push the version tag:
     - `git tag vX.Y.ZaN`
@@ -112,9 +112,8 @@ role (don't mutate shared seed data — create throwaway roles), and
 
 ## Database Upgrade Rehearsal
 
-For releases that ship Alembic revisions, the `seeded-upgrade-rehearsal` CI job
-is required. It uses the repository's disposable Postgres container and does
-the following:
+For releases that ship Alembic revisions, the local rehearsal uses owned disposable
+Postgres and does the following:
 
 - creates the preceding release's schema shape;
 - inserts affected user, refresh-token, and API-key rows;
@@ -122,16 +121,18 @@ the following:
   family backfill, indexes, and the new receipt table; and
 - reruns the upgrade to prove idempotency.
 
-The `api-integration` and `simple-example-integration` jobs separately seed,
-start, and exercise the EnterpriseRBAC and SimpleRBAC FastAPI examples over
-HTTP. A consuming application may still choose to rehearse its own deployment,
-but it is not a prerequisite for publishing this library release.
+Run `scripts/run_enterprise_example_smoke.py` locally against a separate disposable
+database to seed, start and exercise the FastAPI example over HTTP. Consumer
+staging and production promotion are separate authorized gates, with the same
+tests rerun in staging. Consult [Auth recovery](AUTH_RECOVERY.md) before database
+restore or rollback to validators that predate a credential barrier.
 
 ## GitHub Actions Publish Flow
 
 The public release workflow lives in [`.github/workflows/publish-pypi.yml`](../.github/workflows/publish-pypi.yml).
 
-- `Release Readiness` remains the branch/tag validation gate.
+- Local test/qualification receipts are the validation gate; `Release Readiness`
+  checks are historical configuration, not release evidence.
 - `Publish PyPI` runs on `v*` tags.
 - The publish job uses `pypa/gh-action-pypi-publish@release/v1` with GitHub OIDC trusted publishing.
 

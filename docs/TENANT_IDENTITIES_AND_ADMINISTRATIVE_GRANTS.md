@@ -70,10 +70,14 @@ section 19 delivery order. The companion
 implements all eight baseline corrections, including cache validity transitions,
 identity-only restore, durable session revocation and proof-bound OAuth association.
 The candidate has two additive nullable user columns; the storage correction and
-its rationale are in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). Complete
-S1 acceptance still needs migration-runner safety, outage/recovery fencing, numeric
-budgets and immutable installed artifacts. S2 grants, S3 observer and namespace
-stages remain unimplemented. The prototype is still unwired.
+its rationale are in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). `eaa5ff3`
+also implements bounded migration/index safety and reconnect authority fencing;
+local [numeric budgets](S1_PERFORMANCE_QUALIFICATION.md) and hashed wheel/sdist
+[installed acceptance](S1_ARTIFACT_QUALIFICATION.md) are recorded. The complete
+security release, consumer staging and externally enforced restore admission remain
+open; local proof does not establish a production RPO/RTO or S3 anti-rewind runner.
+S2 grants, S3 observer and namespace stages remain unimplemented. The prototype
+is still unwired.
 
 **Earlier planning checkpoint on 2026-10-10:** design revision 0.2 plus a completed independent review
 (nine findings, all reconciled in section 21.4). Nothing is implemented, no decision
@@ -94,8 +98,9 @@ Sections 7–18 are the detailed contract to consult per stage, not a reading li
    [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) as DD-062, and the numeric budgets
    for section 18.4. Consumers record their private inventories.
 2. **S1 (one security patch):** qualify the implemented B1–B3, TI-01–TI-04 and
-   F-admin-01 corrections together. Complete the migration runner, recovery and
-   installed-artifact gates, and record numeric budgets. The epoch and historical
+   F-admin-01 corrections together. Review the local migration/recovery, numeric
+   budget and installed-artifact receipts, then qualify the exact new-version
+   release artifacts and consumer rollout. The epoch and historical
    protection columns follow section 15.6; the original one-column estimate is
    superseded by the two-column correction in the receipt. Keep warm-path query
    budgets unchanged.

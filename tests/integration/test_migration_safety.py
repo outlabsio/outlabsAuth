@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import command
@@ -80,10 +81,11 @@ async def test_invalid_index_is_never_treated_as_complete(monkeypatch):
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
             await connection.execute(text(f'CREATE TABLE "{schema}".users (invite_token text)'))
             await connection.execute(text(f"INSERT INTO \"{schema}\".users VALUES ('duplicate'), ('duplicate')"))
-            with pytest.raises(Exception, match="duplicate"):
+            with pytest.raises(IntegrityError) as duplicate:
                 await connection.execute(
                     text(f'CREATE UNIQUE INDEX CONCURRENTLY ix_users_invite_token ON "{schema}".users(invite_token)')
                 )
+            assert duplicate.value.orig.sqlstate == "23505"
             valid = (
                 await connection.execute(
                     text(
@@ -210,6 +212,7 @@ asyncio.run(_run_alembic_command(os.environ['TEST_DATABASE_URL'], schema=os.envi
                             await observer.execute(
                                 text(
                                     "SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' "
+                                    "AND datname=current_database() "
                                     "AND query LIKE '%outlabs_auth:migrate:%' AND pid<>pg_backend_pid()"
                                 )
                             )
@@ -246,10 +249,11 @@ async def test_head_shortcut_refuses_invalid_auth_index(prior_head):
                 User.__table__.insert(),
                 [{"id": uuid4(), "email": "a@example.test"}, {"id": uuid4(), "email": "b@example.test"}],
             )
-            with pytest.raises(Exception, match="duplicate"):
+            with pytest.raises(IntegrityError) as duplicate:
                 await connection.execute(
                     text(f'CREATE UNIQUE INDEX CONCURRENTLY bad_auth_recovery_index ON "{schema}".users ((1))')
                 )
+            assert duplicate.value.orig.sqlstate == "23505"
         with pytest.raises(RuntimeError, match="bad_auth_recovery_index"):
             await run_migrations(TEST_DATABASE_URL, schema=schema)
     finally:

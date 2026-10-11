@@ -843,12 +843,16 @@ async def test_outlabs_auth_shutdown_cleans_up_background_resources():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("lock_timeout", ["5s", "100ms"])
+async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(
+    monkeypatch: pytest.MonkeyPatch, lock_timeout
+):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         database_schema="auth_schema",
         migration_statement_timeout="90s",
+        migration_lock_timeout=lock_timeout,
     )
     run_migrations = AsyncMock()
 
@@ -860,6 +864,7 @@ async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monk
         "postgresql+asyncpg://example:example@localhost:5432/test",
         schema="auth_schema",
         statement_timeout="90s",
+        lock_timeout=lock_timeout,
     )
 
 

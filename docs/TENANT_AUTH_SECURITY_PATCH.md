@@ -1,7 +1,7 @@
 # Tenant Auth baseline security patch
 
 **Date:** 2026-10-11
-**Status:** All eight baseline corrections implemented locally; complete S1 release qualification remains open.
+**Status:** All eight baseline corrections and local migration/recovery/budget/artifact qualification pass; the complete S1 release and consumer adoption remain open.
 **Branch/base:** `codex/auth-security-20261010`, from merged `main baba18c`.
 **Package baseline:** `0.1.0a36`; two additive nullable columns and migration `20261011_0026` are in the candidate. No version, tag or consumer pin change.
 
@@ -26,8 +26,8 @@ This conservative guard applies to all decisions on that conditioned path. It
 does not yet distinguish a particular unconditioned role inside an installation
 that has other conditions. Policy-loading and request-local caches remain, and
 ordinary RBAC retains its decision cache, including ABAC configurations with no
-stored conditions. Condition-capable cold-path cost still needs the S1 budget
-qualification. Do not market this as transition-aware decision caching.
+stored conditions. The [numeric qualification](S1_PERFORMANCE_QUALIFICATION.md)
+records its conditioned-path cost. Do not market this as transition-aware decision caching.
 
 The effective-permission projection delegates conditioned checks to the same
 guard. Regression cases cover individual checks and permission-list projection,
@@ -65,8 +65,8 @@ without leaking uncommitted grants or revocations.
 If an action raises after commit, other queued actions are attempted and the first
 exception propagates. The database is already committed; this is not a rollback.
 This mechanism adds no durable outbox and does not change the backend's existing
-fail-soft behavior. Cache outages/recovery, restore fencing and consumer staging
-remain part of complete S1 acceptance.
+fail-soft behavior. The recovery continuation below fences reconnects; external
+restore admission and consumer staging remain operational acceptance obligations.
 
 ### B2: snapshots carry pre-authority provenance
 
@@ -101,8 +101,8 @@ stay unchanged. Cold permission loads retain ACTIVE scheduled bindings, and obse
 both their future start and their end before evaluating current authority. Expired
 rows remain SQL-filtered on the memoized paths. Direct role grants, direct entity
 memberships and inherited memberships participate; no additional SQL is added.
-Scheduled bindings add graph rows to the cold load: high-cardinality cold cost still
-belongs to the complete S1 budget gate.
+Scheduled bindings add graph rows to the cold load: the numeric qualification now
+measures 250 future roles; arbitrary graph cardinality is not a latency guarantee.
 
 Cache hits propagate their deadline to later derived entries, so an aggregate hit
 cannot give a snapshot or decision a new unrestricted lease. Writes round Redis TTLs
@@ -184,8 +184,27 @@ history. This cannot reconstruct history already erased before the patch.
 Migration `20261011_0026` preserves existing rows and is idempotent. Routine downgrade
 refuses to remove the credential barrier. Retaining columns alone does not make old
 code safe: a code rollback to validators that ignore the epoch requires the separate
-credential/reset or traffic-fencing recovery procedure. Bounded migration-runner
-locks, installed artifacts, restore fencing and rollout acceptance remain open.
+credential/reset or traffic-fencing recovery procedure. Local runner, installed
+artifact and recovery evidence is below; consumer rollout acceptance remains open.
+
+### Migration safety and recovered authority (2026-10-11)
+
+`eaa5ff3` adds a separate default **5s lock_timeout**, validated within 1ms–30s,
+and at most three retries of rolled-back PostgreSQL lock timeout `55P03`. Same-process
+commands serialize Alembic's global proxy; independent processes hold a target-schema
+transaction advisory mutex before migration setup. Locks/settings are transaction-local
+on caller connections. Historical index helpers require valid/ready/live catalog state;
+the at-head shortcut audits Auth-owned indexes too. No auto-drop or concurrent-index
+conversion is inferred. [Migration/recovery contract](AUTH_RECOVERY.md).
+
+Redis startup/recovery advances the shared global authority version before advertising
+availability and clears the recovering worker's optional local key snapshots. Failure
+keeps caching unavailable. This prevents a missed offline invalidation from reviving an
+old shared allow on reconnect, while preserving counters. It does not provide durable
+publication during a partial partition or immediate coherence for another worker's
+opt-in local TTL. Database backup restore still requires externally held signing/cache
+generations and reconstructed later revocations; the local security-state rewind test
+proves signing-key fencing, not a full production restore or S3 runner/outbox acceptance.
 
 ## Regression and local qualification
 
@@ -289,13 +308,54 @@ locks, installed artifacts, restore fencing and rollout acceptance remain open.
 Tests use disposable loopback databases/cache and synthetic accounts. They do not
 qualify deployed consumers, production data or the complete administrative model.
 
+### Migration, recovery, performance and artifacts (2026-10-11)
+
+- Archived `a6305fe` reproduces two real migration failures: default lock timeout
+  is unbounded (`0`) and a failed concurrent unique index is incorrectly treated
+  as complete. It also reproduces a committed offline permission revocation
+  becoming an ALLOW after Redis reconnect. These are assertion failures with
+  working real fixtures, not unavailable dependencies.
+- Expanded migration qualification exposed Alembic's process-global proxy race;
+  bounded process serialization fixes it. Real PostgreSQL cases now cover lock
+  exhaustion/rollback, release-and-retry, separate-process advisory locking,
+  unchanged caller settings and at-head refusal of an invalid index. The final
+  migration/security-state set passes **16**; recovery/Redis primitives pass **14**.
+- The first complete run is **1509 passed / 1 failed**: an old forwarding mock
+  did not expect the new lock-timeout argument. Its regression now tests both
+  5s and 100ms forwarding; **42** focused core/migration checks pass. The fresh
+  complete run is **1511 passed, 485 existing fixture/library warnings, 490.49s**,
+  real PostgreSQL and required Redis, **no failures or skips**. A final isolated
+  separate-process observer also filters its own database, avoiding cross-fixture
+  activity being mistaken for its lock proof.
+- **55 installed wheel cases + 55 installed sdist cases + 94 earlier installed
+  wheel cache/identifier regressions pass**, with immutable hashes and imports
+  outside the checkout. All **233 packaged library files** match qualified source
+  bytes. [Installed artifact receipt](S1_ARTIFACT_QUALIFICATION.md).
+- Cold/warm numeric SQL and local p95 ceilings pass with zero or **250 scheduled
+  roles**. All **10 warm key/token scenarios**, each 100 samples, also pass with
+  **zero SQL and zero failures** at both serial and ten-operation concurrency.
+  [Measured budgets and their limits](S1_PERFORMANCE_QUALIFICATION.md).
+- The owned Enterprise HTTP example passes **62/62** checks plus its smoke flow.
+  Ruff over the repository, Black over all **25** changed Python files, targeted
+  MyPy on CLI/migration safety, release metadata and **12** release-document/package
+  checks pass. No hosted CI was used as a gate; no workflow was enabled or changed.
+
+These results qualify the local candidate. No version/tag, published artifact,
+consumer pin, deployment or live migration is implied. The historical a36 package
+identifier must change and the resulting exact release artifacts must be qualified
+before publication/adoption. Restore admission remains an external host obligation;
+full production restore, accepted RPO/RTO and later S3 replay/outbox fences are not
+claimed by the security-state rewind test.
+
 ## S1 remaining work and release boundary
 
 | Finding | Next correction / required proof |
 | --- | --- |
-| Migration safety | Bounded runner `lock_timeout`, validity-checked index helpers, runner qualification of the additive security migration and installed-artifact checks. |
-| Outage / recovery | Cache outage/reconnect qualification, restore anti-rewind procedure and a code-rollback fence for validators that do not understand the security epoch. |
-| Performance / release | Record numeric budgets; preserve warm query contracts; measure conditioned paths. Build and test immutable artifacts, then follow the separate release and consumer staging contracts. |
+| Migration safety | Locally implemented/tested bounded runner, lock-only retries, concurrent runners, rollback and index-validity checks. Review exact release artifacts; invalid indexes require explicit repair. |
+| Outage / recovery | Reconnect/local snapshot fencing and backup-epoch signing-key refusal pass locally. Adopting hosts must enforce the external admission fence and reconstruct later revocations; full restore/RPO/RTO and S3 runner/outbox proof are not claimed. |
+| Performance | Numeric SQL caps and local p95 ceilings pass; [measurement receipt](S1_PERFORMANCE_QUALIFICATION.md). Production hardware/latency budgets and S2 staff-grant budgets still need owner disposition. |
+| Installed artifacts | Hashed wheel/sdist pass outside-checkout installation and security/migration acceptance; [artifact receipt](S1_ARTIFACT_QUALIFICATION.md). They remain unreleased candidates with the historical a36 version identifier. |
+| Release and consumers | Review the complete S1 candidate and D35/recovery contract; select a new version, rebuild/qualify its exact artifacts, verify the Auth/TaskQ release train and private consumer inventory, then follow separately authorized publication, consumer staging and promotion. |
 
 The eventual S1 security patch remains a single release containing the complete
 accepted baseline correction. These eight local corrections are not a partially published
@@ -305,9 +365,8 @@ release, deployment or consumer upgrade follows from this receipt.
 
 ## Implementation notes for the next pass
 
-All eight baseline findings now have local implementations. Finish the migration
-runner lock budget, validity-checked index helpers, outage/recovery fencing, numeric
-cold/conditioned budgets and immutable installed-artifact acceptance before publishing
-one complete S1 patch. No consumer adoption, persistent staff grants or replay/history
-acceptance follows from local source qualification. The pure S2 evaluator remains
-unwired.
+All eight baseline findings and the local runner/recovery/budget/artifact work now
+have implementations and acceptance evidence. Review the operational boundaries
+and prepare one complete S1 release under the
+separate release contract. No consumer adoption, persistent staff grants or replay/history
+acceptance follows from local qualification. The pure S2 evaluator remains unwired.

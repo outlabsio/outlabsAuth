@@ -17,8 +17,11 @@ baseline (cache invalidation, account restore, OAuth enrollment, conditioned cac
 they are planned as one S1 security patch. The local candidate implements all eight
 baseline corrections: F-admin-01, TI-01–TI-04 and B1–B3; see the
 [implementation and qualification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
-Complete S1 runner, outage/recovery, numeric-budget, installed-artifact and release
-qualification remain open. Its additive migration uses two nullable user columns
+The `eaa5ff3` continuation adds bounded migration/index safety and reconnect authority
+fencing. Local numeric SQL/latency gates and hashed installed wheel/sdist acceptance
+are documented in that receipt; release and consumer staging remain open. External
+restore admission/revocation reconstruction is still a host obligation, not a new
+library admission controller or production recovery SLA. Its additive migration uses two nullable user columns
 for historical platform protection and monotonic proof generation, correcting the
 original one-column estimate. No version, tag or consumer upgrade has shipped.
 The pure administrative evaluator has 51 focused cases and remains unwired to

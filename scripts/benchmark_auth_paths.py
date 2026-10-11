@@ -15,17 +15,18 @@ from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import text
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import SQLModel
 from starlette.requests import Request
 
 from outlabs_auth import EnterpriseRBAC, SimpleRBAC
+from outlabs_auth.models.sql.api_key import APIKey
 from tests.integration.query_budget_support import (
     attach_query_counter,
     seed_enterprise_admin_api_key_query_context,
     seed_enterprise_query_budget_context,
 )
-
 
 DEFAULT_DATABASE_URL = os.getenv(
     "AUTH_BENCH_DATABASE_URL",
@@ -170,6 +171,7 @@ async def build_auth(
         "access_token_expire_minutes": 60,
         "enable_token_cleanup": False,
         "redis_url": redis_mode.redis_url,
+        "redis_key_prefix": f"outlabs-auth:local-benchmark:{uuid.uuid4().hex}" if redis_mode.redis_url else None,
         "enable_caching": redis_mode.enable_caching,
     }
     if preset == "simple":
@@ -612,6 +614,14 @@ async def run_suite(args: argparse.Namespace) -> list[BenchmarkResult]:
             try:
                 auth = await build_auth(preset, bench_db.engine, redis_mode)
                 scenarios = await build_scenarios(auth, preset, args)
+                # This schema contains only synthetic benchmark keys. Retain
+                # limiter/counter work without measuring legitimate 60/min
+                # refusals after hundreds of intentional requests to one key.
+                async with auth.get_session() as session:
+                    await session.execute(update(APIKey).values(rate_limit_per_minute=1_000_000))
+                    await session.commit()
+                if auth.cache_service:
+                    await auth.cache_service.invalidate_all_permissions()
                 for scenario in scenarios:
                     if not args.include_service_tokens and scenario.auth_kind == "service_token":
                         continue

@@ -14,9 +14,12 @@ This document is intentionally short. It is not a full project plan. It is a wor
   historical protection from effective authority; TI-02 uses exact monotonic
   session generations; TI-03 rechecks initiating proof under a commit-held user
   lock. The additive migration has two nullable columns, correcting the one-column
-  estimate. Complete runner/index safety, outage/recovery fencing, numeric cold
-  budgets, immutable installed-artifact acceptance and the single S1 release remain
-  open. Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
+  estimate. `eaa5ff3` adds bounded runner/index checks and authority reconnect fencing;
+  numeric cold/warm gates and installed wheel/sdist acceptance are recorded locally.
+  Review the complete candidate, external restore-admission obligations and proposed
+  production budgets; then prepare the exact new-version artifacts and the single S1
+  release. Publication, consumer staging/promotion and S3 anti-rewind replay/outbox
+  acceptance remain separate. Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S0 decisions and later stages (not started).** Record DD-062 dispositions before
   S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's
   "Start here" section.
