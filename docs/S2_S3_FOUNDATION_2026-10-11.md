@@ -115,13 +115,41 @@ must retain an UNKNOWN outcome. Credentials must not rotate on retries.
 - Lifecycle cases exercise frozen names after hard deletion, repeated revoke,
   suspension/retained deletion/archive, observer failure caught by a caller,
   premature observer commit refusal and nested transaction failure ownership.
-- Final complete PostgreSQL/required-Redis qualification is in progress with
-  optional mocked channel SDKs installed. Earlier runs caught enum-only status
-  formatting against string-valued rows and unsupported `.dev0` packaging
-  metadata. Both were corrected; behavioral dev0 artifacts are superseded by
-  the unreleased a38 candidate. A further reproduced delete/restore and
-  suspension/reactivation grant-revival gap is corrected by epoch pinning.
-  Final results are recorded below only after completion.
+- Final runtime source `df0c29526e967ae4853b1bd1a3a7c447e22becb3` passes
+  **all 1,567 collected tests**, with no failures, errors or skips. The complete
+  suite ran in four local shards: three integration shards of 208 cases and
+  one unit shard of 943, each with a separate disposable PostgreSQL database
+  and Redis index. Exact collected node IDs were partitioned once, without
+  overlap; JUnit totals and successful exits matched every selected node.
+  Optional mocked channel SDKs were installed. Independent required-Redis
+  acceptance also passes **102 tests / 1,465 deselected**.
+- Earlier runs caught enum-only status formatting against string-valued rows
+  and unsupported `.dev0` packaging metadata. Both were corrected; behavioral
+  dev0 artifacts are superseded by this unreleased a38 candidate. Reproduced
+  delete/restore and suspension/reactivation grant revival is corrected by
+  epoch pinning; password-change withdrawal and an explicit fresh grant also
+  pass. No release metadata guard was weakened.
+- A wheel and an sdist built from that clean committed runtime source each
+  pass **27 installed cases** (17 policy, one genuine populated-a37 upgrade,
+  nine lifecycle), outside the source checkout with noneditable imports.
+  Each separately passes the actual configured Enterprise constructor smoke:
+  shared dispatcher, caught observer failure refusing commit, and original
+  names surviving hard deletion. All **237 installed package files** match
+  the exact wheel bytes. These are local candidate artifacts, not published
+  or accepted for consumer runtime admission.
+- Whole-repository Ruff, Black on all 16 changed Python files, targeted MyPy
+  on the three foundation modules and supported a38 release metadata pass.
+  The isolated canonical handbook port passes site lint, types and static
+  generation; the rendered lifecycle page preserves the unreleased/public-a37
+  boundary. No site deployment is included.
+
+| Local candidate artifact | SHA-256 |
+| --- | --- |
+| `outlabs_auth-0.1.0a38-py3-none-any.whl` | `8c08a1aae04e77816a5aee7b4edece5ca7feb0242ffeea68f5773eda661262ea` |
+| `outlabs_auth-0.1.0a38.tar.gz` | `6e45d42920f6eab0ecdddac3fc0cf4dc19d6296e3fe1f4f315bd6c3de5130920` |
+
+Receipt-only commits after `df0c295` do not change these qualified runtime
+bytes. Complete S2/S3 stage acceptance remains subject to the gates below.
 
 Run from a Python 3.12 development/test environment with disposable local
 Postgres and real Redis:
