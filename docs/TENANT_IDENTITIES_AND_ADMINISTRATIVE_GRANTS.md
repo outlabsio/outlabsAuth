@@ -66,21 +66,17 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
-**Latest implementation state on 2026-10-11:** the local, unreleased S1 candidate
-implements all eight baseline corrections, including cache validity transitions,
-identity-only restore, durable session revocation and proof-bound OAuth association.
-The candidate has two additive nullable user columns; the storage correction and
-its rationale are in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). `eaa5ff3`
-also implements bounded migration/index safety and reconnect authority fencing;
-local [numeric budgets](S1_PERFORMANCE_QUALIFICATION.md) and hashed wheel/sdist
-[installed acceptance](S1_ARTIFACT_QUALIFICATION.md) are recorded. The complete
-new-version [a37 candidate](S1_RELEASE_CANDIDATE_A37.md) is now locally qualified
-at `f00eb25` with new immutable hashes and train preflight. The published a36,
-canonical release train and consumer pins are unchanged. The complete
-security release, consumer staging and externally enforced restore admission remain
-open; local proof does not establish a production RPO/RTO or S3 anti-rewind runner.
-S2 grants, S3 observer and namespace stages remain unimplemented. The prototype
-is still unwired.
+**Latest implementation state on 2026-10-11:** S1 implements all eight baseline
+corrections, two nullable security-state columns, bounded migration/index checks,
+and recovery fencing. Independent publication review closed eight additional
+reproduced gaps; all three reviewers are green. The
+[current qualification/publication receipt](S1_RELEASE_CANDIDATE_A37.md) owns
+accepted source, exact artifact and public-release evidence. Review boundaries are
+in [S1_REVIEW_A37.md](S1_REVIEW_A37.md). Consumer adoption, certified release train,
+staging and external restore admission are separate gates. Local proof does not
+establish a production RPO/RTO or S3 anti-rewind runner. S2 grants, S3 observer and
+namespace stages remain unimplemented; the prototype is still unwired. S1 delivery
+does not adopt proposed DD-062 or resolve the remaining S0 decisions.
 
 **Earlier planning checkpoint on 2026-10-10:** design revision 0.2 plus a completed independent review
 (nine findings, all reconciled in section 21.4). Nothing is implemented, no decision

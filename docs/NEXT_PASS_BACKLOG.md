@@ -7,21 +7,14 @@ This document is intentionally short. It is not a full project plan. It is a wor
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-- **S1 baseline security patch (local, unreleased).** All eight baseline defects
-  have candidate implementations and permanent regression evidence in
-  [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). B3 bounds cached allows,
-  denials, aggregates and snapshots at expiry/scheduled activation; TI-01 separates
-  historical protection from effective authority; TI-02 uses exact monotonic
-  session generations; TI-03 rechecks initiating proof under a commit-held user
-  lock. The additive migration has two nullable columns, correcting the one-column
-  estimate. `eaa5ff3` adds bounded runner/index checks and authority reconnect fencing;
-  numeric cold/warm gates and installed wheel/sdist acceptance are recorded locally.
-  Review the complete candidate, external restore-admission obligations and proposed
-  production budgets; the [a37 candidate](S1_RELEASE_CANDIDATE_A37.md) now has new
-  version metadata, immutable artifacts and complete local qualification. Prepare
-  the accepted merge/public hashes and published train next. Publication,
-  consumer staging/promotion and S3 anti-rewind replay/outbox
-  acceptance remain separate. Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
+- **S1 release admission.** All eight baseline defects and eight additional
+  reproduced publication-review gaps are corrected. Three independent reviewers
+  are green; see [review boundaries](S1_REVIEW_A37.md) and
+  [current qualification/publication receipt](S1_RELEASE_CANDIDATE_A37.md).
+  Final exact artifacts/public hashes precede the public release train and each
+  consumer's package/schema/staging acceptance. External restore admission,
+  production budgets and the S3 anti-rewind replay/outbox remain separate.
+  Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S0 decisions and later stages (not started).** Record DD-062 dispositions before
   S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's
   "Start here" section.

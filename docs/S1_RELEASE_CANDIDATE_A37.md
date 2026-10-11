@@ -1,10 +1,11 @@
 # Auth a37 S1 release candidate
 
-**Date:** 2026-10-11. **Status:** publication review and final qualification in progress; unpublished.
-**Latest:** [independent publication review](S1_REVIEW_A37.md) corrected eight
-additional reproduced gaps. The inputs/results below retain the pre-review build;
-they do not qualify the corrected runtime or the final publication artifacts.
-**Source:** `f00eb25`, branch `codex/auth-security-20261010`, based on `main baba18c`.
+**Date:** 2026-10-11. **Status:** independently reviewed; final local qualification and publication in progress.
+**Latest runtime:** `90de105`; test-double corrections `d6cdebf` do not alter runtime.
+All three reviewers are green after eight additional reproduced gaps were closed;
+see [independent publication review](S1_REVIEW_A37.md). Final accepted-merge artifacts
+and public hashes will be recorded below after qualification/publication. Historical
+`f00eb25` inputs/results remain below and do not qualify the corrected runtime.
 **Version:** `0.1.0a37`. **Auth head:** `20261011_0026`.
 
 This is one release for all eight S1 baseline corrections, bounded migration/index
@@ -13,7 +14,7 @@ safety and Redis recovery fencing. The [implementation receipt](TENANT_AUTH_SECU
 retain the rationale and limits. The unwired staff-grant prototype remains unchanged;
 S2 grants, S3 history/replay and identity namespaces are separate work.
 
-## Immutable candidate inputs
+## Historical pre-review candidate inputs
 
 `uv build --no-sources` built the sdist and then its wheel from clean `f00eb25`.
 Every one of the wheel's 233 packaged library files byte-matches that source.
@@ -29,7 +30,7 @@ These identify this local build. They are not public-index hashes or downstream
 lock receipts. The earlier a36-labelled candidate artifacts remain historical
 qualification evidence and must never replace published a36.
 
-## Local acceptance
+## Historical pre-review local acceptance
 
 | Gate | Result |
 | --- | --- |
@@ -78,12 +79,13 @@ in the original artifact receipt. Do not add the checkout to `PYTHONPATH`.
 
 ## Remaining release and admission gates
 
-1. Review the complete diff and recovery boundaries. Approve publication separately
-   from consumer deployment; no tag, push, publication, consumer pin or live schema
-   change has happened.
+1. Independent cache, account/session/OAuth and migration/recovery reviews are
+   green. Publication is explicitly authorized separately from consumer deployment.
+   Final full local and exact accepted-merge artifact qualification remain required.
 2. After authorized merge, verify the accepted source/metadata bytes, build and
    qualify the exact publication artifacts at that merge commit, tag that commit,
-   and leave the protected `pypi` publishing environment for its explicit approval.
+   and approve the protected `pypi` publishing environment only under the explicit
+   publication delegation, after verifying its unique pending deployment and run SHA.
    Record the public wheel/sdist hashes; do not infer them from these local hashes.
 3. Resolve a published release train from the public index and qualify each actual
    consumer's unchanged or independently approved TaskQ version. A candidate

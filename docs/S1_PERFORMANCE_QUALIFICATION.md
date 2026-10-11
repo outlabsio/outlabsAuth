@@ -4,6 +4,33 @@
 `a6305fe`. Both include the eight S1 corrections; this comparison isolates the
 migration/recovery slice. No deployed consumer or production latency SLO is qualified.
 
+## Post-review warm-path requalification
+
+Runtime `90de105` was requalified on 2026-10-11 with 100 requests after 20
+warmups, real Redis, both presets, and concurrency 1 and 10. Each sample now
+resets request memoization on entry/exit, as the host middleware does. The first
+repetition incorrectly reused synthetic request memos and suppressed anchored-key
+cache publication (15 SQL/request); that run is rejected. Correcting the harness
+restores all ten paths to zero SQL and zero failures without a runtime change.
+Every successful warmup is required; failed warmups cannot be ignored.
+
+| Scenario | Serial p95 | Concurrency 10 p95 |
+| --- | ---: | ---: |
+| `simple_service_token_permission` | 0.04ms | 0.06ms |
+| `simple_user_api_key_global` | 2.90ms | 6.52ms |
+| `simple_user_api_key_dependency_global` | 2.55ms | 2.79ms |
+| `simple_seeded_service_token_permission` | 0.05ms | 0.05ms |
+| `enterprise_service_token_permission` | 0.10ms | 0.05ms |
+| `enterprise_personal_api_key_unanchored` | 1.30ms | 6.39ms |
+| `enterprise_personal_api_key_dependency_unanchored` | 1.37ms | 2.74ms |
+| `enterprise_personal_api_key_anchored_tree` | 3.12ms | 4.13ms |
+| `enterprise_system_api_key_global` | 2.35ms | 3.02ms |
+| `enterprise_system_api_key_entity_tree` | 4.34ms | 3.82ms |
+
+All paths meet the existing 10ms local review ceiling. These are loopback fixture
+observations under concurrent suite work, not a production latency/capacity SLO.
+The earlier comparison tables below remain historical runtime `eaa5ff3` evidence.
+
 ## Numeric regression gates
 
 The permanent SQL gates in `test_s1_coldpath_budgets.py` use real PostgreSQL and

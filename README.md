@@ -48,10 +48,11 @@ and its [independent review packet](./docs/TENANT_AUTH_REVIEW_PACKET.md). These 
 design documents; scoped identities and persistent administrative grants are not
 activated by this draft.
 
-**Local security work:** [S1 implementation receipt](./docs/TENANT_AUTH_SECURITY_PATCH.md)
+**S1 security release:** [S1 implementation receipt](./docs/TENANT_AUTH_SECURITY_PATCH.md)
 records all eight baseline fixes, migration safety, recovery fencing and their
-regressions. The complete a37 candidate is undergoing publication review;
-consumer adoption remains separately gated.
+regressions. The a37 [independent review](./docs/S1_REVIEW_A37.md) and
+[qualification receipt](./docs/S1_RELEASE_CANDIDATE_A37.md) record the acceptance
+boundaries; consumer adoption requires its own package, migration and staging gates.
 
 Deep host DX / feature matrix when you need them:
 [API design](./docs/API_DESIGN.md),
@@ -311,7 +312,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 **Current Library Version**: 0.1.0a37
 
-**Publication Status**: Local S1 release candidate; publication and consumer adoption remain pending.
+**Release evidence**: [S1 qualification and publication receipt](./docs/S1_RELEASE_CANDIDATE_A37.md). Package publication and consumer adoption are separate gates.
 
 **Release Stage**: Alpha
 

@@ -22,6 +22,7 @@ from starlette.requests import Request
 
 from outlabs_auth import EnterpriseRBAC, SimpleRBAC
 from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.services import request_cache
 from tests.integration.query_budget_support import (
     attach_query_counter,
     seed_enterprise_admin_api_key_query_context,
@@ -514,11 +515,16 @@ async def build_scenarios(
 
 
 async def run_timed(operation: Callable[[], Awaitable[bool]]) -> tuple[bool, float]:
+    # Each sample represents a new request. Direct library/dependency calls do
+    # not pass through the ASGI middleware that owns this boundary in a host.
+    request_cache.reset()
     start = time.perf_counter()
     try:
         ok = await operation()
     except Exception:
         ok = False
+    finally:
+        request_cache.reset()
     return ok, (time.perf_counter() - start) * 1000
 
 
@@ -560,7 +566,9 @@ async def benchmark_scenario(
     args: argparse.Namespace,
 ) -> BenchmarkResult:
     for _ in range(args.warmup):
-        await scenario.operation()
+        ok, _ = await run_timed(scenario.operation)
+        if not ok:
+            raise RuntimeError(f"Warmup failed for {scenario.name}")
 
     counter, cleanup = attach_query_counter(auth.engine)
     try:

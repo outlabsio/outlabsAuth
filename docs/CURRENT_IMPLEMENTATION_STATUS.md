@@ -17,16 +17,18 @@ baseline (cache invalidation, account restore, OAuth enrollment, conditioned cac
 they are planned as one S1 security patch. The local candidate implements all eight
 baseline corrections: F-admin-01, TI-01–TI-04 and B1–B3; see the
 [implementation and qualification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
-The local `f00eb25` candidate is versioned a37 and has a fresh 1511-pass full suite,
-93-case real-Redis gate and hashed installed-wheel/sdist acceptance; see the
-[release-candidate receipt](S1_RELEASE_CANDIDATE_A37.md). Published a36 is unchanged.
-The `eaa5ff3` continuation adds bounded migration/index safety and reconnect authority
-fencing. Local numeric SQL/latency gates and hashed installed wheel/sdist acceptance
-are documented in that receipt; release and consumer staging remain open. External
-restore admission/revocation reconstruction is still a host obligation, not a new
-library admission controller or production recovery SLA. Its additive migration uses two nullable user columns
-for historical platform protection and monotonic proof generation, correcting the
-original one-column estimate. No tag, publication or consumer upgrade has shipped.
+Independent publication review closed eight additional reproduced authority,
+challenge and durable-replay gaps at runtime `90de105`; all three reviewers are
+green. Test doubles at `d6cdebf` follow refreshed/locked reads. Final full local
+and exact accepted-merge wheel/sdist qualification precede authorized publication;
+see [the current release receipt](S1_RELEASE_CANDIDATE_A37.md) and
+[independent review](S1_REVIEW_A37.md). Older `f00eb25` results are historical.
+Migration `20261011_0026` adds two nullable security-state columns. Bounded
+migration/index checks and reconnect fencing are implemented; external restore
+admission/revocation reconstruction is a host obligation. Independent refresh-replay
+containment is qualified for ordinary configured-engine sessions, with externally
+held connections and single-connection pools explicitly unqualified. Consumer pins,
+staging and release-train adoption remain separate gates.
 The pure administrative evaluator has 51 focused cases and remains unwired to
 persistence, routes, principal loading and host queries. Persistent groups/grants,
 transactional removal observation/replay and qualified namespaces retain their
