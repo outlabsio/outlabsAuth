@@ -157,7 +157,8 @@ class AdministrativeAuthorization:
             expires = context._claims.get("exp")
             if (
                 not proof_is_current(context._claims, user)
-                or type(expires) not in {int, float}
+                or not isinstance(expires, (int, float))
+                or isinstance(expires, bool)
                 or not expires > datetime.now(timezone.utc).timestamp()
             ):
                 return None
