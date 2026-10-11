@@ -432,3 +432,133 @@ async def test_verified_context_cannot_outlive_its_jwt(world, monkeypatch):
     ).allowed
     with pytest.raises(HTTPException):
         await w.facade.entity_page(w.session, ctx, action="case:read")
+
+
+async def test_owned_key_narrow_rotate_revoke_and_metadata_projection(world):
+    from outlabs_auth.models.sql.api_key import APIKey
+    from outlabs_auth.models.sql.enums import APIKeyStatus
+
+    w = world
+    await grant(w, w.update, w.a, "subtree")
+    ctx = await context(w)
+    full, key = await w.facade.create_personal_key(
+        w.session, ctx, name="owned", entity_id=w.a.id, scopes=["case:update", "user:update"]
+    )
+    _, foreign = await w.auth.api_key_service.create_api_key(
+        w.session, owner_id=w.platform.id, name="foreign", scopes=["case:update"]
+    )
+    deadline = datetime.now(timezone.utc) + timedelta(hours=9, seconds=37)
+    await w.facade.update_personal_key(w.session, ctx, key_id=key.id, scopes=["case:update"], expires_at=deadline)
+    page = await w.facade.personal_key_page(w.session, ctx, limit=1)
+    assert page.total == 1 and page.items[0].id == key.id and page.next_after is None
+    assert not hasattr(page.items[0], "key_hash") and not hasattr(page.items[0], "prefix")
+    assert (await w.facade.personal_key_page(w.session, ctx, after=key.id)).total == 1
+    replacement, new = await w.facade.rotate_personal_key(w.session, ctx, key_id=key.id)
+    assert new.id != key.id and new.expires_at == deadline
+    assert new.entity_id == w.a.id and not new.inherit_from_tree
+    assert await w.auth.api_key_service.get_api_key_scopes(w.session, new.id) == ["case:update"]
+    assert key.status == APIKeyStatus.REVOKED
+    assert (await w.facade.personal_key_page(w.session, ctx, limit=1)).total == 2
+    with pytest.raises(HTTPException):
+        await w.facade.revoke_personal_key(w.session, ctx, key_id=foreign.id)
+    await w.session.commit()
+    with pytest.raises(HTTPException):
+        await context(w, key=full)
+    key_ctx = await context(w, key=replacement)
+    assert (await w.facade.authorize(w.session, key_ctx, action="case:update", entity_id=w.a.id)).allowed
+    for method in [w.facade.rotate_personal_key, w.facade.revoke_personal_key]:
+        with pytest.raises(HTTPException, match="human JWT"):
+            await method(w.session, key_ctx, key_id=new.id)
+    with pytest.raises(HTTPException):
+        await w.facade.personal_key_page(w.session, key_ctx)
+    jwt_ctx = await context(w)
+    assert await w.facade.revoke_personal_key(w.session, jwt_ctx, key_id=new.id)
+    await w.session.commit()
+    assert (
+        await w.session.execute(select(APIKey).where(APIKey.id == new.id))
+    ).scalar_one().status == APIKeyStatus.REVOKED
+
+
+@pytest.mark.parametrize("attempt", ["expand", "empty", "wildcard", "extend", "naive", "expired"])
+async def test_key_update_refuses_expansion_or_invalid_deadline(world, attempt):
+    w = world
+    await grant(w, w.update, w.a)
+    ctx = await context(w)
+    _, key = await w.facade.create_personal_key(
+        w.session, ctx, name="ceiling", entity_id=w.a.id, scopes=["case:update"]
+    )
+    await w.session.commit()
+    original = key.expires_at
+    ctx = await context(w)
+    scopes = {"expand": ["user:update"], "empty": [], "wildcard": ["case:*"]}.get(attempt, ["case:update"])
+    expires = {
+        "extend": original + timedelta(seconds=1),
+        "naive": datetime.now(),
+        "expired": datetime.now(timezone.utc) - timedelta(seconds=1),
+    }.get(attempt)
+    with pytest.raises(HTTPException):
+        await w.facade.update_personal_key(w.session, ctx, key_id=key.id, scopes=scopes, expires_at=expires)
+    assert await w.auth.api_key_service.get_api_key_scopes(w.session, key.id) == ["case:update"]
+    assert key.expires_at == original
+
+
+async def test_key_rotation_requires_live_grants_but_self_revoke_does_not(world):
+    w = world
+    g = await grant(w, w.read, w.a)
+    ctx = await context(w)
+    _, key = await w.facade.create_personal_key(
+        w.session, ctx, name="withdrawn", entity_id=w.a.id, scopes=["case:read"]
+    )
+    await w.session.commit()
+    await w.svc.revoke_grant(w.session, actor_id=w.platform.id, grant_id=g.id)
+    await w.session.commit()
+    ctx = await context(w)
+    with pytest.raises(HTTPException, match="outside current"):
+        await w.facade.rotate_personal_key(w.session, ctx, key_id=key.id)
+    assert (await w.session.execute(text("SELECT count(*) FROM api_keys"))).scalar_one() == 1
+    assert await w.facade.revoke_personal_key(w.session, ctx, key_id=key.id)
+
+
+async def test_rotation_rollback_restores_original_key_and_discards_replacement(world):
+    from outlabs_auth.models.sql.enums import APIKeyStatus
+
+    w = world
+    await grant(w, w.read, w.a)
+    ctx = await context(w)
+    full, key = await w.facade.create_personal_key(
+        w.session, ctx, name="atomic", entity_id=w.a.id, scopes=["case:read"]
+    )
+    key_id = key.id
+    await w.session.commit()
+    async with w.factory() as writer:
+        ctx = await context(w, writer)
+        _, new = await w.facade.rotate_personal_key(writer, ctx, key_id=key_id)
+        new_id = new.id
+        await writer.rollback()
+    assert await w.auth.api_key_service.get_api_key(w.session, new_id) is None
+    original = await w.auth.api_key_service.get_api_key(w.session, key_id)
+    assert original.status == APIKeyStatus.ACTIVE
+    assert (await context(w, key=full)).key_id == key_id
+
+
+async def test_protected_write_lock_timeout_requires_rollback_and_has_no_effect(world):
+    from sqlalchemy.exc import DBAPIError, PendingRollbackError
+    from outlabs_auth.models.sql.administrative_grant import AdministrativeGrantRecord
+
+    w = world
+    g = await grant(w, w.update, w.a)
+    await w.session.commit()
+    async with w.factory() as blocker:
+        await blocker.execute(
+            select(AdministrativeGrantRecord).where(AdministrativeGrantRecord.id == g.id).with_for_update()
+        )
+        async with w.factory() as writer:
+            await writer.execute(text("SET LOCAL lock_timeout='100ms'"))
+            ctx = await context(w, writer)
+            with pytest.raises(DBAPIError):
+                await w.facade.authorize(writer, ctx, action="case:update", entity_id=w.a.id, protected_write=True)
+            with pytest.raises((DBAPIError, PendingRollbackError)):
+                await writer.execute(text("UPDATE staff_effects SET value=99"))
+            await writer.rollback()
+        await blocker.rollback()
+    assert (await w.session.execute(text("SELECT value FROM staff_effects"))).scalar_one() == 0

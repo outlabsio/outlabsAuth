@@ -1931,6 +1931,7 @@ class APIKeyService(BaseService[APIKey]):
         key_id: UUID,
         actor_user_id: Optional[UUID] = None,
         event_source: str = "api_key_service.update_api_key",
+        _staff_approval: Any = None,
         **updates,
     ) -> Optional[APIKey]:
         """
@@ -1991,6 +1992,7 @@ class APIKeyService(BaseService[APIKey]):
                 scopes=effective_scopes,
                 entity_id=effective_entity_id,
                 inherit_from_tree=effective_inherit_from_tree,
+                **({"staff_approval": _staff_approval} if _staff_approval is not None else {}),
             )
 
         previous_snapshot = None
@@ -2068,6 +2070,7 @@ class APIKeyService(BaseService[APIKey]):
         *,
         actor_user_id: Optional[UUID] = None,
         event_source: str = "api_key_service.rotate_api_key",
+        _staff_approval: Any = None,
     ) -> tuple[str, APIKey]:
         """Rotate an API key and emit a single lifecycle audit event."""
         api_key = await self.get_api_key(session, key_id)
@@ -2121,7 +2124,13 @@ class APIKeyService(BaseService[APIKey]):
             event_source=event_source,
             record_audit=False,
             record_observability=False,
+            **({"_staff_approval": _staff_approval} if _staff_approval is not None else {}),
         )
+        if _staff_approval is not None:
+            # Staff rotation retains the exact original deadline; ceiling days
+            # are only a creation adapter and cannot extend authority.
+            new_key.expires_at = api_key.expires_at
+            await session.flush()
         await self._revoke_api_key_model(
             session,
             api_key=api_key,

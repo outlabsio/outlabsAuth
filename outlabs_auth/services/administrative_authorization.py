@@ -69,6 +69,22 @@ class StaffEntityPage:
     next_cursor: str | None
 
 
+@dataclass(frozen=True)
+class StaffKeyView:
+    id: UUID
+    name: str
+    status: APIKeyStatus
+    entity_id: UUID | None
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class StaffKeyPage:
+    items: tuple[StaffKeyView, ...]
+    total: int
+    next_after: UUID | None
+
+
 def _deny(
     reason: AdministrativeDecisionReason = AdministrativeDecisionReason.UNTRUSTED_ACTOR,
 ) -> AdministrativeDecision:
@@ -320,6 +336,170 @@ class AdministrativeAuthorization:
             event_source="staff_authorization.create_personal_key",
         )
         return cast(tuple[str, APIKey], result)
+
+    async def _owned_personal_key(
+        self, session: AsyncSession, context: StaffContext, key_id: UUID, *, active: bool
+    ) -> APIKey:
+        if context.source != "jwt" or await self._actor(session, context) is None:
+            raise HTTPException(403, "Key management requires a current human JWT")
+        key = (
+            await session.execute(
+                select(APIKey)
+                .where(
+                    cast(Any, APIKey.id) == key_id,
+                    cast(Any, APIKey.owner_id) == context.user_id,
+                    cast(Any, APIKey.key_kind) == APIKeyKind.PERSONAL,
+                    cast(Any, APIKey.integration_principal_id).is_(None),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        # Recheck after waiting on the key. Lock ownership, not the login row.
+        if key is None or await self._actor(session, context) is None:
+            raise HTTPException(403, "Personal key ownership refused")
+        if active and (
+            key.status != APIKeyStatus.ACTIVE
+            or key.entity_id is None
+            or key.expires_at is None
+            or key.expires_at <= datetime.now(timezone.utc)
+        ):
+            raise HTTPException(403, "Only active anchored expiring keys can be updated or rotated")
+        return key
+
+    async def _key_approval(self, session: AsyncSession, context: StaffContext, key: APIKey, scopes: list[str]) -> Any:
+        from outlabs_auth.services.api_key_policy import _StaffKeyApproval
+
+        if not scopes or len(set(scopes)) > 64 or any("*" in scope for scope in scopes):
+            raise HTTPException(403, "Staff key scopes must be bounded exact actions")
+        if key.entity_id is None:
+            raise HTTPException(403, "Staff key anchor is required")
+        for scope in sorted(set(scopes)):
+            if not (
+                await self.authorize(session, context, action=scope, entity_id=key.entity_id, protected_write=True)
+            ).allowed:
+                raise HTTPException(403, "Staff key scope is outside current administrative authority")
+        actor = await self._actor(session, context)
+        policy = self.auth.api_key_service.policy_service
+        if actor is None or policy is None:
+            raise HTTPException(403, "Staff key policy admission refused")
+        return _StaffKeyApproval(
+            policy._staff_approval_issuer,
+            session,
+            session.sync_session.get_transaction(),
+            actor.id,
+            int(actor.session_security_epoch or 0),
+            key.entity_id,
+            tuple(sorted(set(scopes))),
+            key.inherit_from_tree,
+        )
+
+    async def update_personal_key(
+        self,
+        session: AsyncSession,
+        context: StaffContext,
+        *,
+        key_id: UUID,
+        scopes: list[str],
+        expires_at: datetime | None = None,
+    ) -> APIKey:
+        """Narrow an owned key; anchor, inheritance, owner and status cannot change."""
+        key = await self._owned_personal_key(session, context, key_id, active=True)
+        previous = await self.auth.api_key_service.get_api_key_scopes(session, key_id)
+        if not set(scopes).issubset(previous):
+            raise HTTPException(403, "Staff key updates cannot expand scopes")
+        if expires_at is not None and (
+            expires_at.tzinfo is None
+            or key.expires_at is None
+            or not datetime.now(timezone.utc) < expires_at <= key.expires_at
+        ):
+            raise HTTPException(403, "Staff key updates can only shorten a future expiry")
+        approval = await self._key_approval(session, context, key, scopes)
+        updates: dict[str, Any] = {"scopes": sorted(set(scopes))}
+        if expires_at is not None:
+            updates["expires_at"] = expires_at
+        result = await self.auth.api_key_service.update_api_key(
+            session,
+            key_id,
+            actor_user_id=context.user_id,
+            event_source="staff_authorization.update_personal_key",
+            _staff_approval=approval,
+            **updates,
+        )
+        return cast(APIKey, result)
+
+    async def rotate_personal_key(
+        self, session: AsyncSession, context: StaffContext, *, key_id: UUID
+    ) -> tuple[str, APIKey]:
+        """Retain exact restrictions/deadline; issue and revoke in one transaction."""
+        key = await self._owned_personal_key(session, context, key_id, active=True)
+        scopes = await self.auth.api_key_service.get_api_key_scopes(session, key_id)
+        approval = await self._key_approval(session, context, key, scopes)
+        result = await self.auth.api_key_service.rotate_api_key(
+            session,
+            key_id,
+            actor_user_id=context.user_id,
+            event_source="staff_authorization.rotate_personal_key",
+            _staff_approval=approval,
+        )
+        return cast(tuple[str, APIKey], result)
+
+    async def revoke_personal_key(self, session: AsyncSession, context: StaffContext, *, key_id: UUID) -> bool:
+        """Self-revocation remains available after administrative grants end."""
+        await self._owned_personal_key(session, context, key_id, active=False)
+        return bool(
+            await self.auth.api_key_service.revoke_api_key(
+                session, key_id, actor_user_id=context.user_id, event_source="staff_authorization.revoke_personal_key"
+            )
+        )
+
+    async def personal_key_page(
+        self, session: AsyncSession, context: StaffContext, *, limit: int = 50, after: UUID | None = None
+    ) -> StaffKeyPage:
+        """Own credential metadata only; SQL filters before count and keyset limit."""
+        actor = await self._actor(session, context)
+        if context.source != "jwt" or actor is None:
+            raise HTTPException(403, "Key inventory requires a current human JWT")
+        if not 1 <= limit <= 100:
+            raise HTTPException(422, "Staff page size must be 1..100")
+        active_actor = (
+            select(cast(Any, User.id))
+            .where(
+                cast(Any, User.id) == actor.id,
+                cast(Any, User.status) == UserStatus.ACTIVE,
+                cast(Any, User.root_entity_id) == self.grants.trusted_root,
+                func.coalesce(cast(Any, User.session_security_epoch), 0) == int(actor.session_security_epoch or 0),
+            )
+            .exists()
+        )
+        k = cast(Any, APIKey).__table__
+        allowed = (
+            select(k.c.id, k.c.name, k.c.status, k.c.entity_id, k.c.expires_at)
+            .where(
+                k.c.owner_id == actor.id,
+                k.c.key_kind == APIKeyKind.PERSONAL,
+                k.c.integration_principal_id.is_(None),
+                active_actor,
+            )
+            .cte("staff_owned_keys")
+        )
+        count = select(func.count().label("total")).select_from(allowed).cte("staff_key_count")
+        page = (
+            select(allowed)
+            .where(allowed.c.id > after if after else literal(True))
+            .order_by(allowed.c.id)
+            .limit(limit + 1)
+            .cte("staff_key_page")
+        )
+        rows = (
+            await session.execute(
+                select(page, count.c.total).select_from(count.outerjoin(page, literal(True))).order_by(page.c.id)
+            )
+        ).all()
+        views = [StaffKeyView(r.id, r.name, r.status, r.entity_id, r.expires_at) for r in rows if r.id is not None]
+        return StaffKeyPage(
+            tuple(views[:limit]), int(rows[0].total), views[limit - 1].id if len(views) > limit else None
+        )
 
     async def authorize_account(
         self, session: AsyncSession, context: StaffContext, *, action: str, user_id: UUID, protected_write: bool = False
