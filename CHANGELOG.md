@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a38] - Unreleased
+
+### Added
+
+- Additive migration `20261011_0027` stores separate immutable administrative
+  template revisions, groups, pinned customer admissions, grants and audit.
+  Administrative authority stays unwired from runtime routes, credentials and
+  list predicates; this is a local foundation, not an adoption-ready release.
+- Optional same-transaction lifecycle observers capture frozen scalar membership,
+  user and archive evidence before destructive cleanup. Failed observation
+  refuses commit until rollback; nested rollback cannot clear an outer failure.
+- Platform-only policy management refreshes locked actors after concurrent
+  demotion. Request retries cannot revive revoked grants or removed admissions.
+- Administrative grants pin their holder's security epoch: delete/restore,
+  suspension/reactivation and password security changes require a new explicit
+  platform-approved grant rather than reviving earlier administrative access.
+
+### Changed
+
+- Generic structural SDK hard deletion is refused in favor of the supported
+  archive workflow, including when no observer is configured. Existing mounted
+  routes retain their tenant authorization contract.
+- Consumers must migrate out of process and qualify the complete S2/S3 facade,
+  protected-account/retirement, concurrency, query/performance and host replay
+  gates before enabling administrative authority or adopting the observer.
+  See `docs/S2_S3_FOUNDATION_2026-10-11.md`. No publication or consumer upgrade
+  accompanies this local version.
+
 ## [0.1.0a37] - 2026-10-11
 
 ### Fixed

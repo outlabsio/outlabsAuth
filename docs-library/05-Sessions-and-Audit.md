@@ -142,7 +142,7 @@ Point the UI as described in [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 
 ## Unreleased transactional lifecycle observer
 
-The local `0.1.0a38.dev0` candidate adds optional `lifecycle_observers` to the
+The local `0.1.0a38` candidate adds optional `lifecycle_observers` to the
 Auth constructor. Public a37 does not provide this option. Do not enable it in
 a deployed consumer before the library/host artifact and writer coverage gates
 in `docs/S2_S3_FOUNDATION_2026-10-11.md` qualify.

@@ -17,7 +17,7 @@ This document is intentionally short. It is not a full project plan. It is a wor
   production budgets and the S3 anti-rewind replay/outbox remain separate.
   Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S2/S3 local foundation, stage exits open.** Separate retained policy and opt-in
-  transactional lifecycle observation exist in unreleased a38.dev0; see
+  transactional lifecycle observation exist in unreleased a38; see
   [qualification and limits](S2_S3_FOUNDATION_2026-10-11.md). Next verified
   credential/target facade, IAM/detail/list guards, protected accounts,
   sensitive-write withdrawal/topology serialization and numeric budgets, then

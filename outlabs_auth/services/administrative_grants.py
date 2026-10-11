@@ -379,12 +379,23 @@ class AdministrativeGrantService:
             request_hash=_hash(payload),
             reason=reason,
             grantor_id=actor_id,
+            holder_security_epoch=int(holder.session_security_epoch or 0),
             valid_from=valid_from,
             valid_until=valid_until,
         )
         session.add(grant)
         await session.flush()
-        await self._audit(session, actor_id, grant.id, "grant.issued", {**payload, "admission_ids": pins})
+        await self._audit(
+            session,
+            actor_id,
+            grant.id,
+            "grant.issued",
+            {
+                **payload,
+                "admission_ids": pins,
+                "holder_security_epoch": grant.holder_security_epoch,
+            },
+        )
         return grant
 
     async def revoke_grant(self, session: AsyncSession, *, actor_id: UUID, grant_id: UUID) -> None:
@@ -441,6 +452,8 @@ class AdministrativeGrantService:
                     select(AdministrativeGrantRecord)
                     .where(
                         cast(Any, AdministrativeGrantRecord.user_id) == user_id,
+                        cast(Any, AdministrativeGrantRecord.holder_security_epoch)
+                        == int(holder.session_security_epoch or 0),
                         cast(Any, AdministrativeGrantRecord.revoked_at).is_(None),
                     )
                     .execution_options(populate_existing=True)

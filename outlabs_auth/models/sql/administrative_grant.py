@@ -9,7 +9,18 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field
@@ -73,7 +84,8 @@ class AdministrativeGrantRecord(BaseModel, table=True):
         CheckConstraint(
             "valid_from IS NULL OR valid_until IS NULL OR valid_from < valid_until", name="ck_auth_admin_window"
         ),
-        Index("ix_auth_admin_grant_actor_window", "user_id", "revoked_at", "valid_until"),
+        CheckConstraint("holder_security_epoch >= 0", name="ck_auth_admin_holder_epoch"),
+        Index("ix_auth_admin_grant_actor_window", "user_id", "holder_security_epoch", "revoked_at", "valid_until"),
     )
     user_id: UUID = Field(
         sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
@@ -101,6 +113,7 @@ class AdministrativeGrantRecord(BaseModel, table=True):
     request_hash: str = Field(sa_column=Column(String(64), nullable=False))
     reason: str = Field(sa_column=Column(String(500), nullable=False))
     grantor_id: UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), nullable=False))
+    holder_security_epoch: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, default=0))
     valid_from: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     valid_until: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     revoked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))

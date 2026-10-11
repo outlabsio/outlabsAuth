@@ -1,6 +1,6 @@
 # S2 persistent policy and S3 lifecycle observation: local foundation
 
-Date: 2026-10-11. Candidate **0.1.0a38.dev0**, unreleased. Public a37 and its
+Date: 2026-10-11. Candidate **0.1.0a38**, unreleased. Public a37 and its
 accepted security proof remain in [S1_RELEASE_A37.md](S1_RELEASE_A37.md).
 The [tenant/admin plan](TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md) is the
 design authority. This foundation does not accept all DD-062 decisions, activate
@@ -42,6 +42,12 @@ switches and expired windows deny. One complete grant must match both the exact
 action and target; permission read-at-A and update-at-B cannot be stitched.
 Account operations may request the customer root rather than a practice target.
 Supplied personal-key action/entity ceilings are intersected with the result.
+A grant pins the holder's monotonic session security epoch. Retained delete/
+restore, suspension/reactivation and password security changes cannot revive
+an earlier grant; a fresh platform-approved request is required at the new
+security boundary. Epoch matching is in the indexed actor query and immutable
+lineage/audit, not another legacy runtime query. This conservative initial rule
+applies only to administrative grants, not ordinary memberships/roles.
 
 This is a fresh-DB evaluator **without a runtime admission caller**. It does
 not authenticate the supplied UUID or ceiling sets. Do not call it from a route
@@ -109,9 +115,12 @@ must retain an UNKNOWN outcome. Credentials must not rotate on retries.
 - Lifecycle cases exercise frozen names after hard deletion, repeated revoke,
   suspension/retained deletion/archive, observer failure caught by a caller,
   premature observer commit refusal and nested transaction failure ownership.
-- Final complete PostgreSQL/required-Redis rerun is in progress. The first run
-  found enum-only status formatting against legacy string-valued rows; that
-  implementation was corrected rather than weakening tenant regression tests.
+- Final complete PostgreSQL/required-Redis qualification is in progress with
+  optional mocked channel SDKs installed. Earlier runs caught enum-only status
+  formatting against string-valued rows and unsupported `.dev0` packaging
+  metadata. Both were corrected; behavioral dev0 artifacts are superseded by
+  the unreleased a38 candidate. A further reproduced delete/restore and
+  suspension/reactivation grant-revival gap is corrected by epoch pinning.
   Final results are recorded below only after completion.
 
 Run from a Python 3.12 development/test environment with disposable local
@@ -135,7 +144,9 @@ explicitly unqualified, not equivalent to a migration-pass claim.
 2. An exhaustive IAM/detail/account/host operation inventory and action-bound SQL
    list predicates, including empty scope. Existing tenant rules remain intact.
    Account-root checks must protect platform, historical-platform and dormant
-   system-wide accounts, not merely map a practice to its root.
+   system-wide accounts, not merely map a practice to its root. Holder security
+   epoch pinning closes reproduced administrative grant revival after identity
+   restore; end-to-end credential and account operations still require acceptance.
 3. Withdrawal, admission, definition and topology changes serialized against
    sensitive writes/multi-target effects, with failure injection. Current fresh
    checks alone do not promise that a concurrently revoked grant cannot race a

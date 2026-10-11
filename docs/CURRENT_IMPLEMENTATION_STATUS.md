@@ -30,7 +30,7 @@ containment is qualified for ordinary configured-engine sessions, with externall
 held connections and single-connection pools explicitly unqualified. Consumer pins,
 staging and release-train adoption remain separate gates.
 The earlier pure administrative evaluator retains its 51 cases. The isolated
-unreleased a38.dev0 foundation now adds separate persistent policy, immutable
+unreleased a38 foundation now adds separate persistent policy, immutable
 lineage/audit and optional same-transaction lifecycle observation. It does not
 activate administrative route/principal/list authorization or complete host
 owned replay. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)

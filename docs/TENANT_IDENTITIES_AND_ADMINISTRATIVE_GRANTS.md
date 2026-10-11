@@ -75,7 +75,7 @@ accepted source, exact artifact and public-release evidence. Review boundaries a
 in [S1_REVIEW_A37.md](S1_REVIEW_A37.md). Consumer adoption, certified release train,
 staging and external restore admission are separate gates. Local proof does not
 establish a production RPO/RTO or S3 anti-rewind runner. An isolated, unreleased
-`0.1.0a38.dev0` foundation adds persistent S2 policy and optional S3 lifecycle
+`0.1.0a38` foundation adds persistent S2 policy and optional S3 lifecycle
 observation; [current scope and remaining gates](S2_S3_FOUNDATION_2026-10-11.md)
 are explicit. S2 remains unwired from runtime authorization; S3 is opt-in and
 unadopted by public consumers. Namespace stages remain unimplemented. S1 delivery

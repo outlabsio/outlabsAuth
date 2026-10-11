@@ -96,6 +96,7 @@ def upgrade() -> None:
         sa.Column("request_hash", sa.String(64), nullable=False),
         sa.Column("reason", sa.String(500), nullable=False),
         sa.Column("grantor_id", pg.UUID(as_uuid=True), nullable=False),
+        sa.Column("holder_security_epoch", sa.BigInteger(), nullable=False),
         sa.Column("valid_from", sa.DateTime(timezone=True)),
         sa.Column("valid_until", sa.DateTime(timezone=True)),
         sa.Column("revoked_at", sa.DateTime(timezone=True)),
@@ -108,6 +109,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "valid_from IS NULL OR valid_until IS NULL OR valid_from < valid_until", name="ck_auth_admin_window"
         ),
+        sa.CheckConstraint("holder_security_epoch >= 0", name="ck_auth_admin_holder_epoch"),
     )
     create(
         "auth_administrative_audit",
@@ -127,7 +129,7 @@ def upgrade() -> None:
         (
             "auth_administrative_grants",
             "ix_auth_admin_grant_actor_window",
-            ["user_id", "revoked_at", "valid_until"],
+            ["user_id", "holder_security_epoch", "revoked_at", "valid_until"],
             {},
         ),
         ("auth_administrative_audit", "ix_auth_admin_audit_subject", ["subject_id", "created_at"], {}),

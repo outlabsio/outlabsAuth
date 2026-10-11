@@ -125,6 +125,39 @@ async def test_management_rechecks_a_demoted_platform_actor(world):
         await w.svc.create_group(w.session, actor_id=w.platform.id, group_key="must-not-exist")
 
 
+@pytest.mark.parametrize("boundary", ["delete_restore", "suspend_reactivate", "password"])
+async def test_security_boundary_cannot_revive_an_old_administrative_grant(world, boundary):
+    w = world
+    old = await grant(w, w.read, w.a)
+    staff_id, target_id, template_id, platform_id = w.staff.id, w.a.id, w.read.id, w.platform.id
+    await w.session.commit()
+    assert (await check(w, "case:read", w.a)).allowed
+    if boundary == "delete_restore":
+        assert await w.users.delete_user(w.session, staff_id)
+        await w.users.restore_user(w.session, staff_id)
+    elif boundary == "suspend_reactivate":
+        await w.users.update_user_status(w.session, staff_id, UserStatus.SUSPENDED)
+        await w.users.update_user_status(w.session, staff_id, UserStatus.ACTIVE)
+    else:
+        await w.users.change_password(w.session, staff_id, "SyntheticReplacement456!")
+    await w.session.commit()
+    assert not (await check(w, "case:read", w.a)).allowed
+    # Explicit platform approval may create a new grant at the current security
+    # generation. The original request identity never reissues the old grant.
+    fresh = await w.svc.issue_grant(
+        w.session,
+        actor_id=platform_id,
+        user_id=staff_id,
+        template_id=template_id,
+        selector_kind="entity",
+        target_id=target_id,
+        request_key=uuid4().hex,
+        reason="Explicit approval after security boundary",
+    )
+    assert fresh.id != old.id
+    assert (await check(w, "case:read", w.a)).allowed
+
+
 async def test_subtree_and_account_root_and_personal_key_ceilings(world):
     w = world
     await grant(w, w.update, w.child, "subtree")
