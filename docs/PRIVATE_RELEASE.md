@@ -52,7 +52,10 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
 10. Create and push the version tag:
     - `git tag vX.Y.ZaN`
     - `git push origin vX.Y.ZaN`
-11. Open the `Publish PyPI` run after its package-verification job passes. The
+11. Open the `Publish PyPI` run after its build job passes. Download that run's
+    exact wheel and sdist, record their hashes, and qualify both locally in fresh
+    environments before approving publication. The hosted workflow builds and
+    publishes only; it does not run tests. The
     protected `pypi` environment requires an explicit approval for the exact tag/run;
     approve only after confirming the run SHA is the accepted merge commit. Confirm
     the workflow completes and the release appears on PyPI, then record the public
@@ -134,6 +137,8 @@ The public release workflow lives in [`.github/workflows/publish-pypi.yml`](../.
 - Local test/qualification receipts are the validation gate; `Release Readiness`
   checks are historical configuration, not release evidence.
 - `Publish PyPI` runs on `v*` tags.
+- Its build job checks metadata and retains the distributions. Download and
+  qualify those exact distributions locally while publication awaits approval.
 - The publish job uses `pypa/gh-action-pypi-publish@release/v1` with GitHub OIDC trusted publishing.
 
 ## Local Fallback Publish

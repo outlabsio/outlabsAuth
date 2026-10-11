@@ -49,8 +49,9 @@ design documents; scoped identities and persistent administrative grants are not
 activated by this draft.
 
 **Local security work:** [S1 implementation receipt](./docs/TENANT_AUTH_SECURITY_PATCH.md)
-records the first two baseline fixes and their regressions. The complete patch
-and consumer adoption remain unreleased.
+records all eight baseline fixes, migration safety, recovery fencing and their
+regressions. The complete a37 candidate is undergoing publication review;
+consumer adoption remains separately gated.
 
 Deep host DX / feature matrix when you need them:
 [API design](./docs/API_DESIGN.md),
