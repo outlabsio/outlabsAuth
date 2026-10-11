@@ -12,13 +12,14 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import Request, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from outlabs_auth.services import request_cache
 from outlabs_auth.core.transaction_callbacks import defer_after_commit, mark_authority_change
 from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.session_security import advance_epoch
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
     InvalidCredentialsError,
@@ -41,7 +42,9 @@ from outlabs_auth.messaging.types import (
 )
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
+from outlabs_auth.models.sql.enums import APIKeyStatus, MembershipStatus, UserStatus
+from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.models.sql.token import RefreshToken
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
@@ -511,6 +514,7 @@ class UserService(BaseService[User]):
             last_name=last_name,
             status=UserStatus.ACTIVE,
             is_superuser=is_superuser,
+            platform_protected=True if is_superuser else None,
             root_entity_id=root_entity_id,
         )
 
@@ -537,6 +541,7 @@ class UserService(BaseService[User]):
         user_id: UUID,
         *,
         load_root_entity: bool = False,
+        for_update: bool = False,
     ) -> Optional[User]:
         """
         Get user by ID.
@@ -549,6 +554,14 @@ class UserService(BaseService[User]):
         Returns:
             User if found, None otherwise
         """
+        if for_update:
+            stmt = (
+                select(User)
+                .where(cast(Any, User.id) == UUID(str(user_id)))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            return (await session.execute(stmt)).scalar_one_or_none()
         options = [joinedload(cast(Any, User.root_entity))] if load_root_entity else None
         return await self.get_by_id(session, user_id, options=options)
 
@@ -810,7 +823,7 @@ class UserService(BaseService[User]):
         Raises:
             UserNotFoundError: If user doesn't exist
         """
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -840,6 +853,9 @@ class UserService(BaseService[User]):
                 user.id,
                 reason="Password changed",
             )
+
+        else:
+            await advance_epoch(session, user.id)
 
         # Emit notification
         if self.notifications:
@@ -902,7 +918,7 @@ class UserService(BaseService[User]):
         Raises:
             UserNotFoundError: If user doesn't exist
         """
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -917,6 +933,8 @@ class UserService(BaseService[User]):
                 },
             )
 
+        if status == UserStatus.DELETED:
+            raise InvalidInputError(message="Use the delete workflow to revoke access and retain the identity")
         old_status = user.status
         old_suspended_until = user.suspended_until
         user.status = status
@@ -928,6 +946,8 @@ class UserService(BaseService[User]):
             # Clear suspension when activating
             user.suspended_until = None
 
+        if status != UserStatus.ACTIVE and old_status != status:
+            await advance_epoch(session, user.id)
         await self.update(session, user)
         await self._invalidate_user_auth_snapshot(session, user.id)
 
@@ -981,7 +1001,7 @@ class UserService(BaseService[User]):
         direct roles, refresh tokens, and API keys remain revoked and require
         explicit re-grant or re-issuance.
         """
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -998,6 +1018,14 @@ class UserService(BaseService[User]):
             )
 
         previous_deleted_at = user.deleted_at
+        previous_superuser = user.is_superuser
+        previous_epoch = user.session_security_epoch
+        await self._retain_platform_classification(session, user)
+        user.is_superuser = False
+        await advance_epoch(session, user.id)
+        # Old retained rows, or grants incorrectly added while deleted, must
+        # not inherit access when their status becomes ACTIVE again.
+        await self._withdraw_retained_access(session, user.id, reason="Identity-only restore")
         user.status = UserStatus.ACTIVE
         user.deleted_at = None
         user.suspended_until = None
@@ -1029,14 +1057,60 @@ class UserService(BaseService[User]):
                 before={
                     "status": UserStatus.DELETED,
                     "deleted_at": previous_deleted_at,
+                    "is_superuser": previous_superuser,
+                    "session_security_epoch": previous_epoch,
                 },
                 after={
                     "status": user.status,
                     "deleted_at": user.deleted_at,
+                    "is_superuser": user.is_superuser,
+                    "platform_protected": user.platform_protected,
+                    "session_security_epoch": user.session_security_epoch,
                 },
             )
 
         return user
+
+    async def _retain_platform_classification(self, session: AsyncSession, user: User) -> None:
+        protected_role = (
+            (
+                await session.execute(
+                    select(UserRoleMembership.id)
+                    .join(Role, cast(Any, Role.id) == cast(Any, UserRoleMembership.role_id))
+                    .where(
+                        cast(Any, UserRoleMembership.user_id) == user.id,
+                        cast(Any, Role.is_global).is_(True),
+                        cast(Any, Role.root_entity_id).is_(None),
+                        cast(Any, Role.scope_entity_id).is_(None),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            is not None
+            if self.config.enable_entity_hierarchy
+            else False
+        )
+        if user.is_superuser or protected_role:
+            user.platform_protected = True
+
+    async def _withdraw_retained_access(self, session: AsyncSession, user_id: UUID, *, reason: str) -> None:
+        at = datetime.now(timezone.utc)
+        for model in (UserRoleMembership, EntityMembership):
+            await session.execute(
+                sql_update(model)
+                .where(cast(Any, model.user_id) == user_id, cast(Any, model.status) != MembershipStatus.REVOKED)
+                .values(status=MembershipStatus.REVOKED, revoked_at=at, revocation_reason=reason)
+            )
+        await session.execute(
+            sql_update(RefreshToken)
+            .where(cast(Any, RefreshToken.user_id) == user_id, cast(Any, RefreshToken.is_revoked).is_(False))
+            .values(is_revoked=True, revoked_at=at, revoked_reason=reason)
+        )
+        await session.execute(
+            sql_update(APIKey)
+            .where(cast(Any, APIKey.owner_id) == user_id, cast(Any, APIKey.status) != APIKeyStatus.REVOKED)
+            .values(status=APIKeyStatus.REVOKED)
+        )
 
     async def update_superuser_status(
         self,
@@ -1048,7 +1122,7 @@ class UserService(BaseService[User]):
         reason: Optional[str] = None,
     ) -> User:
         """Grant or revoke platform-wide superuser privileges."""
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -1082,6 +1156,8 @@ class UserService(BaseService[User]):
                 )
 
         user.is_superuser = is_superuser
+        if is_superuser or previous_is_superuser:
+            user.platform_protected = True
         await self.update(session, user)
         await self._invalidate_user_auth_snapshot(session, user.id)
 
@@ -1120,13 +1196,17 @@ class UserService(BaseService[User]):
         Returns:
             True if deleted, False if not found
         """
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             return False
         if user.status == UserStatus.DELETED:
             return False
 
+        previous_superuser = user.is_superuser
+        previous_epoch = user.session_security_epoch
         deleted_at = datetime.now(timezone.utc)
+        await self._retain_platform_classification(session, user)
+        user.is_superuser = False
 
         revoked_membership_count = 0
         revoked_role_count = 0
@@ -1158,6 +1238,9 @@ class UserService(BaseService[User]):
                 reason="User deleted",
             )
 
+        else:
+            await advance_epoch(session, user.id)
+
         if self.api_key_service is not None:
             revoked_api_key_count = await self.api_key_service.revoke_user_api_keys(
                 session,
@@ -1166,6 +1249,8 @@ class UserService(BaseService[User]):
                 reason="User deleted",
                 event_source="user_service.delete_user",
             )
+        # Also cover standalone UserService and incomplete pre-patch wiring.
+        await self._withdraw_retained_access(session, user.id, reason="User deleted")
 
         previous_status = user.status
         user.status = UserStatus.DELETED
@@ -1203,10 +1288,15 @@ class UserService(BaseService[User]):
                 before={
                     "status": previous_status,
                     "deleted_at": None,
+                    "is_superuser": previous_superuser,
+                    "session_security_epoch": previous_epoch,
                 },
                 after={
                     "status": user.status,
                     "deleted_at": user.deleted_at,
+                    "is_superuser": user.is_superuser,
+                    "platform_protected": user.platform_protected,
+                    "session_security_epoch": user.session_security_epoch,
                 },
                 metadata={
                     "revoked_membership_count": revoked_membership_count,
@@ -1512,6 +1602,7 @@ class UserService(BaseService[User]):
             last_name=last_name,
             status=UserStatus.INVITED,
             is_superuser=is_superuser,
+            platform_protected=True if is_superuser else None,
             root_entity_id=root_entity_id,
             invite_token=hashed_token,
             invite_token_expires=expires,

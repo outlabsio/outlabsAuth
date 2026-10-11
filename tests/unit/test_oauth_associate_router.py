@@ -167,7 +167,12 @@ async def test_oauth_associate_authorize_uses_route_name_when_redirect_url_missi
     response = await authorize(
         request=request,
         response=Response(),
-        auth_context={"user_id": str(uuid4())},
+        auth_context={
+            "user_id": str(uuid4()),
+            "source": "jwt",
+            "metadata": {"iat": 1791700000},
+            "user": SimpleNamespace(can_authenticate=lambda: True, last_password_change=None),
+        },
         scopes=["user:email"],
     )
 
@@ -307,7 +312,9 @@ async def test_oauth_associate_callback_updates_existing_linked_account_for_same
     oauth_client = DummyOAuthClient("github")
     auth = _make_auth()
     user_id = uuid4()
-    user = SimpleNamespace(id=user_id, auth_methods=["PASSWORD"])
+    user = SimpleNamespace(
+        id=user_id, auth_methods=["PASSWORD"], can_authenticate=lambda: True, last_password_change=None
+    )
     auth.user_service.get_user_by_id.return_value = user
     router = get_oauth_associate_router(
         oauth_client,
@@ -378,6 +385,8 @@ async def test_oauth_associate_callback_rejects_different_existing_account_for_s
     auth.user_service.get_user_by_id.return_value = SimpleNamespace(
         id=user_id,
         auth_methods=[],
+        can_authenticate=lambda: True,
+        last_password_change=None,
     )
     router = get_oauth_associate_router(
         oauth_client,
@@ -442,7 +451,7 @@ async def test_oauth_associate_callback_updates_existing_provider_account_branch
     oauth_client = DummyOAuthClient("github")
     auth = _make_auth()
     user_id = uuid4()
-    user = SimpleNamespace(id=user_id, auth_methods=[])
+    user = SimpleNamespace(id=user_id, auth_methods=[], can_authenticate=lambda: True, last_password_change=None)
     auth.user_service.get_user_by_id.return_value = user
     router = get_oauth_associate_router(
         oauth_client,
@@ -513,7 +522,9 @@ async def test_oauth_associate_callback_redirects_when_success_url_configured(
     oauth_client = DummyOAuthClient("github")
     auth = _make_auth()
     user_id = uuid4()
-    user = SimpleNamespace(id=user_id, auth_methods=["PASSWORD"])
+    user = SimpleNamespace(
+        id=user_id, auth_methods=["PASSWORD"], can_authenticate=lambda: True, last_password_change=None
+    )
     auth.user_service.get_user_by_id.return_value = user
     router = get_oauth_associate_router(
         oauth_client,

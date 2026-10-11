@@ -1,15 +1,15 @@
 # Tenant Auth baseline security patch
 
-**Date:** 2026-10-10
-**Status:** S1 guards and transactional cache fences, local and unreleased.
+**Date:** 2026-10-11
+**Status:** All eight baseline corrections implemented locally; complete S1 release qualification remains open.
 **Branch/base:** `codex/auth-security-20261010`, from merged `main baba18c`.
-**Package baseline:** `0.1.0a36`; no version, tag, schema or consumer pin change.
+**Package baseline:** `0.1.0a36`; two additive nullable columns and migration `20261011_0026` are in the candidate. No version, tag or consumer pin change.
 
 The [tenant and administrative-grant plan](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 requires eight baseline corrections before later stages use the existing identity
-and permission machinery. This receipt records four corrections, their regression
-evidence and the remaining work. A passing current suite does not close defects
-that have not yet been implemented. The administrative evaluator prototype stays
+and permission machinery. This receipt records eight local corrections, their regression
+evidence and the remaining release qualification. Local implementation does not
+close the operational release gates. The administrative evaluator prototype stays
 unwired.
 
 ## Implemented in this slice
@@ -93,6 +93,100 @@ the version-checked profile. Memory epochs remain process-local; shared Redis
 epochs are required for coherence across workers. These changes do not claim that the opt-in
 profile provides immediate cross-process revocation.
 
+### B3: mutation versions and time validity are independent
+
+Permission decisions, aggregate permission sets and compiled API-key snapshots
+carry a server-owned next-transition deadline, checked even when mutation versions
+stay unchanged. Cold permission loads retain ACTIVE scheduled bindings, and observe
+both their future start and their end before evaluating current authority. Expired
+rows remain SQL-filtered on the memoized paths. Direct role grants, direct entity
+memberships and inherited memberships participate; no additional SQL is added.
+Scheduled bindings add graph rows to the cold load: high-cardinality cold cost still
+belongs to the complete S1 budget gate.
+
+Cache hits propagate their deadline to later derived entries, so an aggregate hit
+cannot give a snapshot or decision a new unrestricted lease. Writes round Redis TTLs
+down and refuse a subsecond or elapsed lease; jitter cannot extend a deadline.
+Readers also check the deadline explicitly, including the optional per-process
+snapshot cache. Key expiry and the policy-checked anchor entity's validity bound
+snapshots too. A paused writer keeps its observed deadline. Old payloads without a
+time proof miss; legacy custom decision/aggregate backends without the explicit
+`supports_authority_deadlines` contract are bypassed. Conditioned final decisions
+still use the conservative F-admin-01 bypass.
+
+### TI-01: identity-only restore and historical platform protection
+
+`platform_protected` is a sticky, nullable historical classification, never an
+allow/bypass. Creation or explicit grant of superuser privilege records it; revoking
+that privilege retains it. Enterprise direct system-wide role assignment records
+it too. Delete and restore capture retained system-wide grants, irrespective of
+membership status/window or definition status, before clearing effective privilege
+and withdrawing artifacts. Ordinary SimpleRBAC roles keep their prior classification.
+
+Deletion clears `is_superuser`. Restore never re-grants it and retires leftover
+roles, memberships, refresh rows and owned keys, including retained rows from old
+or incomplete service wiring. A generic status edit cannot bypass the deletion
+workflow. Limited administrators cannot edit a former operator, including when
+user-scope enforcement is disabled; enforced tenant visibility still returns 404
+before protected-target 403. Self-profile behavior and existing global administration
+stay within their previous boundaries. Delete/restore audit records include the
+privilege, classification and proof-generation transition.
+
+### TI-02: monotonic security epochs and precise issuance
+
+`session_security_epoch` is a nullable BIGINT on the already-loaded user row. NULL
+means the unrevoked legacy generation zero. An atomic database increment advances
+it on account-wide session revocation, password security changes and non-active
+lifecycle transitions, including retained deletion and restoration. Rollback leaves
+the durable generation unchanged; concurrent increments cannot lose a revocation.
+New access and refresh pairs carry `security_epoch`; both bearer paths and refresh
+rotation require exact, non-negative integer equality. Old claims are accepted only
+at generation zero. Restore never lowers the generation, so even a same-clock-tick
+delete/restore cannot revive old JWTs. Revocation works with refresh storage disabled.
+
+Refresh and security writers acquire the user row before refresh-token rows, avoiding
+a reversed lock order. Newly issued JWTs also carry exact integer `iat_us`; existing
+`iat_ms`/`iat` forms remain readable. This prevents a fresh proof being rejected merely
+because password-change microseconds were truncated in its millisecond claim.
+Account-wide logout now cancels all access proofs; a specific refresh-token logout
+keeps its existing per-session/optional blacklist behavior. `exclude_family_id`
+retains the current family and does not advance the account-wide generation;
+per-family access-proof cancellation is outside this account-wide fix.
+
+### TI-03: enrollment rechecks the initiating proof at commit
+
+Association initiation requires a verified JWT user session and binds its epoch
+and issuance precision inside signed state. API keys do not enroll login methods.
+After provider exchange and state consumption, the callback loads the current user
+with `FOR UPDATE`, rechecks authentication eligibility, the exact initiating epoch
+and password-security time, and retains the lock through link persistence, host hook
+and commit. A completed reset, revoke-all, suspension/reactivation or delete/restore
+cancels a pending flow; enrollment and security revocation serialize at that row.
+The accepted state remains burned if the later eligibility check fails.
+
+New state records store a fixed-size SHA-256 lookup key, avoiding the existing
+255-character SQL limit as signed proof claims grow. Consumption reads both hashed
+and legacy raw state keys. Browser binding, profile, one-time use and PKCE/nonce
+checks remain. Old epoch-less state is usable only on a still-unrevoked generation
+zero account; new-generation accounts refuse it. Namespace-specific cancellation
+and the full qualified-mode matrix still belong to S5.
+
+### Storage contract correction (D35)
+
+The earlier S1 estimate of one nullable column covered session revocation but could
+not retain a flag-only former operator's protected classification. The candidate uses
+two nullable columns: BIGINT epoch and BOOLEAN historical protection. Neither has a
+server default, backfill or index, so adding them does not rewrite a populated user
+table. The existing installation is interpreted lazily: effective superuser/current
+Enterprise system-role checks still work, and qualifying operations capture durable
+history. This cannot reconstruct history already erased before the patch.
+
+Migration `20261011_0026` preserves existing rows and is idempotent. Routine downgrade
+refuses to remove the credential barrier. Retaining columns alone does not make old
+code safe: a code rollback to validators that ignore the epoch requires the separate
+credential/reset or traffic-fencing recovery procedure. Bounded migration-runner
+locks, installed artifacts, restore fencing and rollout acceptance remain open.
+
 ## Regression and local qualification
 
 - Before the fixes, the initial regression set had **6 failures and 2 passes**:
@@ -152,6 +246,46 @@ profile provides immediate cross-process revocation.
   an empty `info` dictionary. Custom authentication results without observation
   support keep their previous shape and are not compiled into shared snapshots.
 
+### Expiry and identity/security continuation (2026-10-11)
+
+- B3 commit `14bba85` adds **32** memory/required-Redis cases for scheduled activation
+  and expiry of direct roles, direct/ancestor memberships, aggregate/decision leases,
+  compiled snapshots with local TTL zero/120, key/anchor expiry, subsecond lease
+  refusal and legacy payload rejection. **All 12** corrected window cases fail on
+  the preceding `0d08a68` source. Focused cache/transaction/warm-budget qualification:
+  **133 passed**. Fixture setup failures were corrected before the baseline result.
+- The lifecycle baseline run on archived pre-patch source reproduces **10 failures
+  and 1 passing control**. Current coverage has **24** cases: both bearer paths,
+  all retained direct-role membership states, exact epoch claims, stateless refresh,
+  rollback/concurrent increments, same-clock issuance, a real HTTP limited-admin
+  guard and incomplete legacy artifact cleanup on restore.
+- Pending association on archived source reproduces **5 failures and 1 passing
+  control** after reset, revoke-all, password change, suspension/reactivation and
+  delete/restore. All **7** current cases pass, including a real PostgreSQL lock
+  race: enrollment holds the user lock through the host hook and link commit;
+  the revocation writer is observed waiting on that lock before it advances the
+  epoch. This establishes transaction ordering, not cancellation of a link that
+  committed before a later revocation.
+- Populated-user migration and tenant-scope acceptance pass **52** cases. The
+  migration is applied twice, preserves rows, leaves both columns nullable without
+  defaults and preserves `pg_relation_filenode` (no table rewrite). The downgrade
+  test refuses removal of the proof barrier. Runner lock/recovery acceptance is
+  still separate.
+- Initial expanded full qualification: **1485 passed, 278 fixture/library warnings,
+  433.23 seconds**, with real PostgreSQL and required Redis; no failures or skips.
+  Final review strengthened the retained-role test to require the original removal
+  timestamp/reason. It reproduced one failure in the new standalone delete fallback;
+  removing its duplicate bulk update preserves that history. The final focused
+  lifecycle/retained-delete/OAuth run passes **34** cases. Fresh full qualification
+  after that correction and final formatting: **1485 passed, 278 fixture/library
+  warnings, 440.38 seconds**, with real PostgreSQL and `TEST_REDIS_REQUIRED=1`;
+  no failures or skips. Warning categories remain the existing deprecated Redis
+  fixture close, model/library deprecations and synthetic short signing-key cases.
+- Ruff over the repository, Black over all **26** touched Python files and targeted
+  MyPy on session-security and cache-validity modules pass. Existing warm query
+  contracts are unchanged. High-cardinality scheduled/conditioned cold-path latency,
+  outage recovery and installed artifacts still need their own acceptance evidence.
+
 Tests use disposable loopback databases/cache and synthetic accounts. They do not
 qualify deployed consumers, production data or the complete administrative model.
 
@@ -159,27 +293,21 @@ qualify deployed consumers, production data or the complete administrative model
 
 | Finding | Next correction / required proof |
 | --- | --- |
-| B3 | Bound decision, aggregate and API-key snapshot validity by relevant membership/role deadlines; cover expiry and scheduled activation with no version change. |
-| TI-01 | Withdraw effective privilege on deletion/restore while retaining historical protection from limited administrators. Include dormant/scheduled privileged roles in that classification. |
-| TI-02 | Add a monotonic account session-security epoch, advance it on lifecycle/security revocation, compare it on both bearer paths, and preserve it on restore. Qualify token precision and delete/restore races. |
-| TI-03 | At OAuth association commit, recheck current eligibility and initiating proof against the security epoch. Qualify reset, revoke-all, suspend and delete/restore during a pending association. |
-| Migration safety | Bounded runner `lock_timeout`, validity-checked index helpers, online nullable session-epoch migration and installed-artifact checks. |
+| Migration safety | Bounded runner `lock_timeout`, validity-checked index helpers, runner qualification of the additive security migration and installed-artifact checks. |
+| Outage / recovery | Cache outage/reconnect qualification, restore anti-rewind procedure and a code-rollback fence for validators that do not understand the security epoch. |
 | Performance / release | Record numeric budgets; preserve warm query contracts; measure conditioned paths. Build and test immutable artifacts, then follow the separate release and consumer staging contracts. |
 
 The eventual S1 security patch remains a single release containing the complete
-accepted baseline correction. These four local corrections are not a partially published
+accepted baseline correction. These eight local corrections are not a partially published
 security release. S2 persistent administrative grants, S3 lifecycle observation
 and S4/S5 identity namespaces are still separate stages. No grant activation,
 release, deployment or consumer upgrade follows from this receipt.
 
 ## Implementation notes for the next pass
 
-- B1/B2 have local transactional/cache implementations; the four remaining
-  baseline defects are B3 and TI-01/TI-02/TI-03. Complete runner, outage/recovery,
-  artifact and performance gates still apply before any S1 release.
-- TI-01 cannot close by clearing `is_superuser` alone. `routers/users.py`
-  currently protects that flag and, via `user_is_global_account`, direct
-  system-wide role holders across active/scheduled/suspended/expired/revoked
-  states. A former superuser without a direct role also needs durable historical
-  protection. Resolve D35's storage/compatibility contract before claiming the
-  one-column S1 migration promise covers both that protection and session epochs.
+All eight baseline findings now have local implementations. Finish the migration
+runner lock budget, validity-checked index helpers, outage/recovery fencing, numeric
+cold/conditioned budgets and immutable installed-artifact acceptance before publishing
+one complete S1 patch. No consumer adoption, persistent staff grants or replay/history
+acceptance follows from local source qualification. The pure S2 evaluator remains
+unwired.

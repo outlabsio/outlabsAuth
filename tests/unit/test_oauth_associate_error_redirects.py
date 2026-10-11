@@ -142,7 +142,9 @@ async def test_invalid_state_redirects_with_invalid_state_code():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_account_linked_to_another_user_redirects_with_already_linked():
-    user = SimpleNamespace(id=uuid4(), auth_methods=["PASSWORD"])
+    user = SimpleNamespace(
+        id=uuid4(), auth_methods=["PASSWORD"], can_authenticate=lambda: True, last_password_change=None
+    )
     other_link = SimpleNamespace(user_id=uuid4())
     callback = _callback(
         _auth(user),

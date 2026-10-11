@@ -66,11 +66,14 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
-**Latest implementation state on 2026-10-10:** a local, unreleased S1 candidate
-fixes F-admin-01 conditioned decision freshness, TI-04 deleted-identifier
-reservation and B1/B2 transactional cache publication/snapshot provenance. See [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md) for tests,
-limits and the four remaining defects. S1 is not complete; S2 grants, S3 observer
-and namespace stages remain unimplemented. The prototype is still unwired.
+**Latest implementation state on 2026-10-11:** the local, unreleased S1 candidate
+implements all eight baseline corrections, including cache validity transitions,
+identity-only restore, durable session revocation and proof-bound OAuth association.
+The candidate has two additive nullable user columns; the storage correction and
+its rationale are in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). Complete
+S1 acceptance still needs migration-runner safety, outage/recovery fencing, numeric
+budgets and immutable installed artifacts. S2 grants, S3 observer and namespace
+stages remain unimplemented. The prototype is still unwired.
 
 **Earlier planning checkpoint on 2026-10-10:** design revision 0.2 plus a completed independent review
 (nine findings, all reconciled in section 21.4). Nothing is implemented, no decision
@@ -90,10 +93,12 @@ Sections 7–18 are the detailed contract to consult per stage, not a reading li
 1. **S0:** record maintainer dispositions for the S0 decisions in
    [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) as DD-062, and the numeric budgets
    for section 18.4. Consumers record their private inventories.
-2. **S1 (one security patch):** turn both reproduction scripts into permanent
-   regression tests that fail on the a36 baseline, then fix B1–B3, TI-01–TI-04 and
-   F-admin-01 until they pass. Add the session security-epoch column with the
-   section 15.6 rules. Keep warm-path query budgets unchanged.
+2. **S1 (one security patch):** qualify the implemented B1–B3, TI-01–TI-04 and
+   F-admin-01 corrections together. Complete the migration runner, recovery and
+   installed-artifact gates, and record numeric budgets. The epoch and historical
+   protection columns follow section 15.6; the original one-column estimate is
+   superseded by the two-column correction in the receipt. Keep warm-path query
+   budgets unchanged.
 3. Then S2 and S3 in parallel, and S4 when a consumer needs it.
 
 **A consumer does not need every stage.** One whose population has no identifier
@@ -1922,7 +1927,7 @@ prevent a credible fixed completion date.
 | Stage | Delivers | Schema effect | Effect on existing legacy installations | Depends on | Revision 0.1 packages |
 | --- | --- | --- | --- | --- | --- |
 | S0 Decide and measure | Dispositions for decisions blocking S1–S3; consumer inventories; numeric budgets | None | None | — | WP00 (first part) |
-| S1 Correct baseline defects | Section 12.3 fixes (B1–B3, TI-01–TI-04, F-admin-01); migration-runner `lock_timeout`, validity-checked index helpers | One additive nullable column for the session security epoch (online) | Security and correctness only: restored accounts lose old tokens and superuser state; budgets unchanged | S0 | New |
+| S1 Correct baseline defects | Section 12.3 fixes (B1–B3, TI-01–TI-04, F-admin-01); migration-runner `lock_timeout`, validity-checked index helpers | Two additive nullable columns: monotonic session epoch and sticky platform protection (online; D35 implementation correction, 2026-10-11) | Security and correctness only: restored accounts lose old tokens and superuser state; budgets unchanged | S0 | New |
 | S2 Administrative grants over existing identities | Sections 7.3–7.6, 9, 10.1, 11, 12.1–12.2; disabled by default | Additive tables only | None unless grants are created | S1 | WP03, WP04, WP05 (authorization part) |
 | S3 Lifecycle observer | Section 13.3 same-transaction observer; generic conditional writes only if D20 requires them | None or additive | None unless a host registers an observer | S1 | WP06 |
 | S4 Namespace expand in legacy mode | Sections 7.1–7.2 storage with a legacy default; capability record; namespace-aware code resolving only the legacy namespace | Additive and online (section 15.6) | None: global uniqueness, sessions, keys and rate-limit keys unchanged | S1 | WP01, WP02 (legacy half) |
@@ -1948,8 +1953,10 @@ host, and a numeric budget table for section 18.4.
 
 **S1 — correct baseline defects.** Fix B1–B3, TI-01–TI-04 and F-admin-01 (section
 12.3). Add bounded `lock_timeout` and `indisvalid`-checked index helpers to the
-migration runner. Release as a security patch whose only schema change is the
-nullable session-epoch column. Its behavior changes are intended: a restored account
+migration runner. Release as a security patch whose only schema changes are the
+nullable session-epoch and historical-protection columns. The earlier one-column
+estimate is superseded; see the [implementation receipt](./TENANT_AUTH_SECURITY_PATCH.md).
+Its behavior changes are intended: a restored account
 no longer regains superuser state or pre-deletion tokens, a pending association no
 longer completes after a security change, a deleted account's email is frozen, and
 conditioned decisions are no longer cached on an incomplete key. Exit: the review's
@@ -2301,8 +2308,8 @@ role policy or migration acceptance.
 | New same-email authentication, grants, queries, schema and client flows | Not implemented by this proposal | Work packages and gates must supply evidence |
 | Frozen host removal history/replay reconciler | Not implemented in Auth | Generic transaction contracts proposed; source-specific owner remains host |
 | Revision 0.2 delivery order S0–S7 and constraints C1–C10 | Proposed design | Sequencing and design rules for review; D27–D34 pending disposition |
-| Cache defects B1–B3 | Observed in released a36 source | B1/B2 locally implemented ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); B3 and complete release qualification remain open |
-| Independent review findings TI-01–TI-04, F-admin-01, F-MR-01–F-MR-04 | Reproduced or reasoned against revision 0.1; reconciled into revision 0.2 | F-admin-01 and TI-04 have local fixes ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); the other findings and release acceptance remain open |
+| Cache defects B1–B3 | Observed in released a36 source | B1/B2/B3 locally implemented ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); complete release qualification remains open |
+| Independent review findings TI-01–TI-04, F-admin-01, F-MR-01–F-MR-04 | Reproduced or reasoned against revision 0.1; reconciled into revision 0.2 | TI-01–TI-04 and F-admin-01 have local fixes ([receipt](./TENANT_AUTH_SECURITY_PATCH.md)); replay findings and complete release acceptance remain open |
 | DD-062 acceptance | Pending independent technical and human review | No schema/runtime approval inferred |
 | Release/publication/consumer deployment/cutover | Not authorized or performed here | Separate accepted evidence and operational authorization required |
 
@@ -2334,3 +2341,12 @@ namespace cardinality, archival authority rules, consistent source cuts and runn
 fencing, old-reader/writer compatibility bridges, and one-time legacy conversion.
 These corrections improve the reviewable proposal; they do not resolve its pending
 maintainer/human decision register.
+
+**2026-10-11 — Local S1 implementation correction.** D35 needs durable historical
+protection as well as a session epoch. The candidate uses two online nullable user
+columns rather than the original one-column estimate, and an atomic integer epoch
+rather than a wall-clock-only barrier. New JWT issuance retains microsecond precision.
+Signed enrollment state carries initiating proof, stored by hash with legacy reads.
+See the [S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md) for reasons, compatibility,
+local tests and outstanding release gates. This does not accept DD-062, activate
+S2 grants or qualify S3 replay or a consumer release.

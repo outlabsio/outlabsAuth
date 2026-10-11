@@ -164,6 +164,22 @@ def get_users_router(
         for_mutation: bool = False,
     ) -> None:
         if not auth.config.enforce_user_scope:
+            if (
+                for_mutation
+                and actor_user.id != target_user.id
+                and getattr(target_user, "platform_protected", False) is True
+                and not actor_user.is_superuser
+            ):
+                historical_scope = await _resolve_actor_scope(session, actor_user)
+                if not auth.config.enable_entity_hierarchy or not historical_scope.get("is_global"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            "Only global administrators can modify a superuser account"
+                            if target_user.is_superuser
+                            else "Only global administrators can modify a protected platform account"
+                        ),
+                    )
             return
         if actor_user.id == target_user.id:
             return

@@ -340,7 +340,8 @@ def get_auth_router(
         Behavior:
         - Without refresh_token: Revokes ALL user sessions (logout from all devices)
         - With refresh_token: Revokes specific session
-        - immediate=false (default): Access token valid for 15 min
+        - All-device logout advances the account epoch and cancels access proofs
+        - Single-device immediate=false: Access token remains valid for its TTL
         - immediate=true: Access token blacklisted immediately (requires Redis)
 
         Security levels:
@@ -364,7 +365,7 @@ def get_auth_router(
                 redis_client=redis_client,
             )
         else:
-            # Logout from all devices (revoke all user's refresh tokens)
+            # Logout from all devices: advance the durable account proof generation.
             await auth.auth_service.revoke_all_user_tokens(session, auth_result["user_id"])
 
             # If immediate revocation requested, still blacklist current access token
@@ -954,9 +955,7 @@ def get_auth_router(
                     if scope_enforced(auth):
                         # A direct org-scoped role belongs to its holder's own
                         # tree, so the invitee is rooted where its roles are.
-                        role_roots = {
-                            role.root_entity_id for role in direct_roles if role.root_entity_id is not None
-                        }
+                        role_roots = {role.root_entity_id for role in direct_roles if role.root_entity_id is not None}
                         if len(role_roots) == 1:
                             requested_root_entity_id = next(iter(role_roots))
                 # DD-056 creation rule: a tenant-scoped inviter places the

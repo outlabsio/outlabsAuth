@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional, Protocol
 
 import jwt
 
+from outlabs_auth.core.session_security import proof_is_current
 from outlabs_auth.core.exceptions import (
     AuthenticationInfrastructureError,
     RateLimitError,
@@ -151,6 +152,8 @@ class JWTStrategy:
                         "can_authenticate": user.can_authenticate() if user else None,
                     },
                 )
+                if user and not proof_is_current(payload, user):
+                    return None
                 if user and self._token_is_stale(payload, getattr(user, "last_password_change", None)):
                     logger.info("jwt_stale_password_change", extra={"user_id": user_id})
                     return None
@@ -189,6 +192,15 @@ class JWTStrategy:
     @staticmethod
     def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
         if isinstance(value, Mapping):
+            issued_us = value.get("iat_us")
+            if issued_us is not None:
+                if type(issued_us) is not int:
+                    return None
+                try:
+                    seconds, microseconds = divmod(issued_us, 1_000_000)
+                    return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=microseconds)
+                except (ValueError, OSError, OverflowError):
+                    return None
             precise_issued_at = value.get("iat_ms")
             if precise_issued_at is not None:
                 try:

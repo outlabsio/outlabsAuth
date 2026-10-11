@@ -1,22 +1,22 @@
 # Next Pass Backlog
 
-**Updated**: 2026-10-10
+**Updated**: 2026-10-11
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-- **S1 baseline security patch (local candidate).** F-admin-01 conditioned
-  decision freshness, TI-04 deleted-email reservation and B1/B2 transaction/cache
-  fences have local fixes and
-  regression evidence in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md).
-  Four baseline defects remain; the full eight-defect patch is unreleased. Retained
-  reproductions: cache deadline validity B3, restore keeps superuser (TI-01), pre-deletion
-  access JWT revives after restore (TI-02), OAuth association commits after a security
-  change (TI-03). Migration helpers, numeric budgets and artifact qualification
-  also remain. Full scope and exit evidence:
-  [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
+- **S1 baseline security patch (local, unreleased).** All eight baseline defects
+  have candidate implementations and permanent regression evidence in
+  [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). B3 bounds cached allows,
+  denials, aggregates and snapshots at expiry/scheduled activation; TI-01 separates
+  historical protection from effective authority; TI-02 uses exact monotonic
+  session generations; TI-03 rechecks initiating proof under a commit-held user
+  lock. The additive migration has two nullable columns, correcting the one-column
+  estimate. Complete runner/index safety, outage/recovery fencing, numeric cold
+  budgets, immutable installed-artifact acceptance and the single S1 release remain
+  open. Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S0 decisions and later stages (not started).** Record DD-062 dispositions before
   S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's
   "Start here" section.

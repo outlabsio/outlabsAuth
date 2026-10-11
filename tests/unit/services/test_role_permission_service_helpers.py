@@ -180,14 +180,10 @@ def test_permission_matcher_agrees_with_permission_service_helpers():
     matcher = PermissionMatcher(granted)
     ancestor_matcher = PermissionMatcher(ancestor_granted)
     for required in requireds:
-        assert matcher.allows(required) == PermissionService._permission_set_allows(
-            required, granted
-        )
+        assert matcher.allows(required) == PermissionService._permission_set_allows(required, granted)
         assert ancestor_matcher.allows_from_ancestor(
             required
-        ) == PermissionService._permission_set_allows_from_ancestor(
-            required, ancestor_granted
-        )
+        ) == PermissionService._permission_set_allows_from_ancestor(required, ancestor_granted)
 
 
 @pytest.mark.unit
@@ -226,12 +222,15 @@ def test_permission_service_role_context_and_cache_helpers():
     archived_role.permissions = [active_permission]
     archived_role.entity_type_permissions = []
 
-    assert PermissionService._role_can_grant_at_entity(
-        role,
-        uuid4(),
-        uuid4(),
-        False,
-    ) is True
+    assert (
+        PermissionService._role_can_grant_at_entity(
+            role,
+            uuid4(),
+            uuid4(),
+            False,
+        )
+        is True
+    )
 
     scope_entity_id = uuid4()
     entity_only_role = _role(
@@ -239,28 +238,39 @@ def test_permission_service_role_context_and_cache_helpers():
         scope=RoleScope.ENTITY_ONLY,
         scope_entity_id=scope_entity_id,
     )
-    assert PermissionService._role_can_grant_at_entity(
-        entity_only_role,
-        scope_entity_id,
-        scope_entity_id,
-        True,
-    ) is True
-    assert PermissionService._role_can_grant_at_entity(
-        entity_only_role,
-        scope_entity_id,
-        uuid4(),
-        False,
-    ) is False
+    assert (
+        PermissionService._role_can_grant_at_entity(
+            entity_only_role,
+            scope_entity_id,
+            scope_entity_id,
+            True,
+        )
+        is True
+    )
+    assert (
+        PermissionService._role_can_grant_at_entity(
+            entity_only_role,
+            scope_entity_id,
+            uuid4(),
+            False,
+        )
+        is False
+    )
 
     assert service._get_role_permissions_for_context(role, "team") == [override_permission]
     assert service._get_role_permissions_for_context(role, "org") == [active_permission]
     assert service._get_role_permissions_for_context(archived_role, "team") == []
-    assert service._get_role_permissions_for_context(
-        role_with_inactive_override,
-        "team",
-    ) == []
+    assert (
+        service._get_role_permissions_for_context(
+            role_with_inactive_override,
+            "team",
+        )
+        == []
+    )
     assert service._get_role_permission_names_for_context(role, "team") == {"task:approve"}
 
+    assert service._can_use_permission_cache() is False  # Legacy custom backend.
+    service.cache_service = SimpleNamespace(supports_authority_deadlines=True)
     assert service._can_use_permission_cache() is True
 
     # Non-ABAC calls never add a context hash — resource/env/time context

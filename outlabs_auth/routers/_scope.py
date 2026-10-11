@@ -559,7 +559,7 @@ async def user_is_global_account(auth: Any, session: AsyncSession, user: Any) ->
     the role), so a tenant admin who could reset its password or email today
     would inherit global scope later.
     """
-    if bool(getattr(user, "is_superuser", False)):
+    if bool(getattr(user, "is_superuser", False)) or getattr(user, "platform_protected", False) is True:
         return True
     if not auth.config.enable_entity_hierarchy:
         return False

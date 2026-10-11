@@ -2,7 +2,7 @@
 
 import math
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, cast
 
 from outlabs_auth.services import request_cache
 
@@ -20,7 +20,7 @@ def record(subject: str, deadline: Optional[float]) -> None:
 
 
 def deadline(subject: str) -> Optional[float]:
-    return request_cache.get(("authority_deadline", subject))
+    return cast(Optional[float], request_cache.get(("authority_deadline", subject)))
 
 
 def observe_windows(subject: str, rows: Iterable[Any], *, observed_at: float) -> None:

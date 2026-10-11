@@ -60,6 +60,7 @@ def create_access_token(
             "exp": expire,
             "iat": issued_at,  # Issued at
             "iat_ms": int(issued_at.timestamp() * 1000),
+            "iat_us": int(issued_at.timestamp()) * 1_000_000 + issued_at.microsecond,
             "type": "access",
             "aud": audience,  # Audience claim for cross-application security
             "jti": jti,  # JWT ID for token revocation/blacklisting
@@ -117,6 +118,7 @@ def create_refresh_token(
             "exp": expire,
             "iat": issued_at,
             "iat_ms": int(issued_at.timestamp() * 1000),
+            "iat_us": int(issued_at.timestamp()) * 1_000_000 + issued_at.microsecond,
             "type": "refresh",
             "aud": audience,  # Audience claim for cross-application security
             "jti": jti,  # JWT ID ensures each token is unique
@@ -334,6 +336,8 @@ def create_token_pair(
     # Refresh token only needs user ID — plus azp so stateless deployments
     # keep session provenance across rotation.
     refresh_data: Dict[str, Any] = {"sub": user_id}
+    if additional_claims and "security_epoch" in additional_claims:
+        refresh_data["security_epoch"] = additional_claims["security_epoch"]
     if azp:
         refresh_data["azp"] = azp
     refresh_expires_delta = timedelta(days=refresh_token_expire_days)

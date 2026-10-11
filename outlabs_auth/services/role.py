@@ -1881,6 +1881,13 @@ class RoleService(BaseService[Role]):
             )
 
         self._require_direct_role_in_user_tree(role, user)
+        if (
+            self.config.enable_entity_hierarchy
+            and role.is_global
+            and role.root_entity_id is None
+            and role.scope_entity_id is None
+        ):
+            user.platform_protected = True
 
         # Keep one current-state row per (user, role) and reactivate it in place.
         membership_stmt = select(UserRoleMembership).where(

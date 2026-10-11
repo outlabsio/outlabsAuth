@@ -293,8 +293,8 @@ async def test_auth_service_refresh_access_token_covers_invalid_and_missing_payl
     )
     mock_session.execute = AsyncMock(
         side_effect=[
-            MagicMock(scalar_one_or_none=MagicMock(return_value=valid_token_model)),
             MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+            MagicMock(scalar_one_or_none=MagicMock(return_value=valid_token_model)),
         ]
     )
 

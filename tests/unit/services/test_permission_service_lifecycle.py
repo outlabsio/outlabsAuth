@@ -54,10 +54,7 @@ async def test_permission_service_status_cache_and_require_helpers(
     with pytest.raises(InvalidInputError, match="Use delete to archive permissions"):
         service._resolve_permission_status(status=DefinitionStatus.ARCHIVED)
 
-    assert (
-        service._resolve_permission_status(is_active=False)
-        == DefinitionStatus.INACTIVE
-    )
+    assert service._resolve_permission_status(is_active=False) == DefinitionStatus.INACTIVE
 
     cache = FakePermissionCache()
     cache.cached_value = True
@@ -70,9 +67,8 @@ async def test_permission_service_status_cache_and_require_helpers(
         permission="user:read",
         entity_id=entity_id,
     )
-    # Legacy bool-returning cache services are wrapped into the versioned
-    # (result, versions_token) contract with no token.
-    assert cached == (True, None)
+    # Legacy boolean entries have no time/version proof and must miss.
+    assert cached == (None, None)
 
     await service._cache_permission_result(
         use_cache=True,
@@ -90,7 +86,7 @@ async def test_permission_service_status_cache_and_require_helpers(
     )
 
     assert cache.get_calls == [(str(user_id), "user:read", str(entity_id), None)]
-    assert cache.set_calls == [(str(user_id), "user:read", False, str(entity_id), None)]
+    assert cache.set_calls == []  # No unsafe fallback write to a legacy setter.
 
     service.check_permission = AsyncMock(side_effect=[False, False, True, True, False])  # type: ignore[method-assign]
 
@@ -206,11 +202,14 @@ async def test_permission_service_crud_tag_and_archive_guards(
     assert await service.delete_permission(test_session, regular.id) is True
     assert await service.delete_permission(test_session, regular.id) is False
 
-    assert await service.get_permission_by_id(
-        test_session,
-        regular.id,
-        include_archived=False,
-    ) is None
+    assert (
+        await service.get_permission_by_id(
+            test_session,
+            regular.id,
+            include_archived=False,
+        )
+        is None
+    )
     archived = await service.get_permission_by_id(
         test_session,
         regular.id,

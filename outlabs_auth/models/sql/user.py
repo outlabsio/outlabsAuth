@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     Column,
     DateTime,
     ForeignKey,
@@ -138,6 +139,16 @@ class User(BaseModel, table=True):
     is_superuser: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, default=False),
+    )
+    platform_protected: Optional[bool] = Field(
+        default=None,
+        sa_column=Column(Boolean, nullable=True),
+        description="Sticky historical platform classification, never an effective permission",
+    )
+    session_security_epoch: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+        description="Monotonic proof generation; NULL is the unrevoked legacy generation zero",
     )
     email_verified: bool = Field(
         default=False,

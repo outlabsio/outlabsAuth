@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.session_security import advance_epoch, epoch, proof_is_current
 from outlabs_auth.core.exceptions import (
     AccountInactiveError,
     AccountLockedError,
@@ -310,7 +311,7 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=app,
             session_expires_at=family_expires_at,
-            additional_claims={"sid": str(family_id)},
+            additional_claims={"sid": str(family_id), "security_epoch": epoch(user)},
         )
         phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
 
@@ -426,7 +427,7 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=app,
             session_expires_at=family_expires_at,
-            additional_claims={"sid": str(family_id)},
+            additional_claims={"sid": str(family_id), "security_epoch": epoch(user)},
         )
 
         if self.config.store_refresh_tokens:
@@ -605,6 +606,16 @@ class AuthService:
                 details={"reason": "No user ID in token"},
             )
 
+        # Get user from database
+        user_stmt = (
+            select(User)
+            .where(cast(Any, User.id) == UUID(user_id))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        user_result = await session.execute(user_stmt)
+        user = cast(Optional[User], user_result.scalar_one_or_none())
+
         token_model = None
 
         # If refresh token storage is enabled, check database
@@ -705,11 +716,6 @@ class AuthService:
                 details={"reason": "absolute_session_expired"},
             )
 
-        # Get user from database
-        user_stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
-        user_result = await session.execute(user_stmt)
-        user = cast(Optional[User], user_result.scalar_one_or_none())
-
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -718,6 +724,11 @@ class AuthService:
 
         # Check user status
         self._check_user_status(user)
+
+        if not proof_is_current(payload, user):
+            raise RefreshTokenInvalidError(
+                message="Refresh token is no longer valid", details={"reason": "security_epoch_changed"}
+            )
 
         if self._token_is_stale(payload, user.last_password_change):
             if token_model is not None:
@@ -747,7 +758,10 @@ class AuthService:
             audience=self.config.jwt_audience,
             azp=azp,
             session_expires_at=family_expires_at,
-            additional_claims=({"sid": str(token_model.family_id)} if token_model is not None else None),
+            additional_claims={
+                **({"sid": str(token_model.family_id)} if token_model is not None else {}),
+                "security_epoch": epoch(user),
+            },
         )
 
         # Store the replacement before revoking the old token so the lineage is
@@ -841,6 +855,9 @@ class AuthService:
         # Check user status
         self._check_user_status(user)
 
+        if not proof_is_current(payload, user):
+            raise TokenInvalidError(message="Token is no longer valid", details={"reason": "security_epoch_changed"})
+
         if self._token_is_stale(payload, user.last_password_change):
             raise TokenInvalidError(
                 message="Token is no longer valid",
@@ -870,6 +887,8 @@ class AuthService:
         Returns:
             Number of tokens revoked
         """
+        if exclude_family_id is None:
+            await advance_epoch(session, user_id)
         if not self.config.store_refresh_tokens:
             return 0
 
@@ -1345,7 +1364,12 @@ class AuthService:
         hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
         # Find user by hashed token
-        stmt = select(User).where(cast(Any, User.password_reset_token) == hashed_token)
+        stmt = (
+            select(User)
+            .where(cast(Any, User.password_reset_token) == hashed_token)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -1916,6 +1940,15 @@ class AuthService:
     @staticmethod
     def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
         if isinstance(value, Mapping):
+            issued_us = value.get("iat_us")
+            if issued_us is not None:
+                if type(issued_us) is not int:
+                    return None
+                try:
+                    seconds, microseconds = divmod(issued_us, 1_000_000)
+                    return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=microseconds)
+                except (ValueError, OSError, OverflowError):
+                    return None
             precise_issued_at = value.get("iat_ms")
             if precise_issued_at is not None:
                 try:

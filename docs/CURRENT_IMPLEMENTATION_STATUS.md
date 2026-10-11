@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-10-10
+**Updated**: 2026-10-11
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -14,16 +14,17 @@ The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 [independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) await maintainer
 disposition (proposed DD-062). The review found eight defects in the released a36
 baseline (cache invalidation, account restore, OAuth enrollment, conditioned caching);
-they are planned as one S1 security patch. The local candidate now fixes
-conditioned decision-cache freshness (F-admin-01), deleted-identifier reservation
-(TI-04), transactional cache publication (B1) and pre-authority snapshot provenance
-(B2); [implementation and verification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
-The other four defects and complete S1 qualification/release remain open. The local pure administrative
-evaluator has 51 focused cases; it remains unwired to persistence, routes,
-principal loading and host queries. Namespace-qualified authentication, persistent
-groups/grants, transactional history integration and migration acceptance are
-proposed work, not completed slices. The local S1 candidate changes service guards and transaction/cache handling;
-it adds no schema, version, tag or release.
+they are planned as one S1 security patch. The local candidate implements all eight
+baseline corrections: F-admin-01, TI-01–TI-04 and B1–B3; see the
+[implementation and qualification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
+Complete S1 runner, outage/recovery, numeric-budget, installed-artifact and release
+qualification remain open. Its additive migration uses two nullable user columns
+for historical platform protection and monotonic proof generation, correcting the
+original one-column estimate. No version, tag or consumer upgrade has shipped.
+The pure administrative evaluator has 51 focused cases and remains unwired to
+persistence, routes, principal loading and host queries. Persistent groups/grants,
+transactional removal observation/replay and qualified namespaces retain their
+separate stages. These local corrections do not accept DD-062 or a deployed host.
 
 ## Completed Slices
 
@@ -108,14 +109,17 @@ it adds no schema, version, tag or release.
 - Deleted users are marked with `UserStatus.DELETED` and `deleted_at`.
 - Deleted-user emails remain permanently reserved for create and invite flows.
 - User delete runs as one service-centric workflow:
-  - revoke active entity memberships
-  - revoke exceptional direct user-role memberships
+  - retire all non-revoked entity memberships and direct user-role bindings
+  - preserve previously recorded revocation times and reasons
   - revoke refresh tokens in place
   - revoke user-owned API keys in place
+  - clear effective superuser privilege and retain historical platform protection
 - Deleted users cannot authenticate.
 - Restore exists and is identity-only:
   - restores user status and clears `deleted_at`
   - does not restore memberships, direct roles, refresh tokens, or API keys
+  - never restores superuser privilege; retires leftover legacy artifacts
+  - advances the durable security epoch, preventing old access/refresh proof revival
 
 ### OAuth and Human-User Identity Rules
 
@@ -130,6 +134,9 @@ it adds no schema, version, tag or release.
 - Invite-only OAuth is supported via `require_existing_user=True` on `get_oauth_router`.
 - OAuth self-register creates OAuth-only accounts (no `PASSWORD` auth method / no retained placeholder password hash).
 - Self-service social account list/unlink lives on `get_users_router` (`/me/social-accounts`); unlink is blocked when it would remove the last usable auth method.
+- Association requires a current JWT session and rechecks its security epoch and
+  password-security time under a user lock retained through link commit. A completed
+  security change cancels pending association; states remain one-time and browser-bound.
 
 ### Sessions and Cross-User Audit Search
 
@@ -141,6 +148,9 @@ it adds no schema, version, tag or release.
 - `user_audit_service` is always created on `initialize()`; `enable_audit_log` does not gate these HTTP routes.
 - Scoped Enterprise actors only see audit events whose `root_entity_id` is in their access scope.
 - Admin session revokes record user-audit events when the audit service is present.
+- Account-wide revocation invalidates access and refresh proofs with a monotonic
+  user epoch, even when refresh-token storage is disabled. Keeping the current
+  family retains the existing family-specific behavior rather than advancing that epoch.
 
 ### Passwordless, Phone Verify, and Multi-Channel Access Codes
 
