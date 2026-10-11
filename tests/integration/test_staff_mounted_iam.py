@@ -87,6 +87,8 @@ async def test_mounted_staff_refuses_customer_key_source_ambiguous_and_extra_fie
         )
         secret = issued.json()["secret"]
         key_headers = {"X-API-Key": secret}
+        alternate_revoke = await client.delete(f"/ordinary-keys/{issued.json()['key']['id']}", headers=key_headers)
+        assert alternate_revoke.status_code == 403, alternate_revoke.text
         for method, path, payload in [
             ("get", "/staff/keys", None),
             ("post", "/staff/keys", {}),

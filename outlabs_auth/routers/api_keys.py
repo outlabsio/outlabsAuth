@@ -342,6 +342,8 @@ def get_api_keys_router(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
         # Delete (revoke)
+        if api_key.staff_managed and auth_result.get("source") != "jwt":
+            raise HTTPException(status_code=403, detail="Staff key revocation requires a current human JWT")
         await auth.api_key_service.revoke_api_key(
             session,
             key_id,
