@@ -19,9 +19,9 @@ baseline corrections: F-admin-01, TI-01–TI-04 and B1–B3; see the
 [implementation and qualification receipt](./TENANT_AUTH_SECURITY_PATCH.md).
 Independent publication review closed eight additional reproduced authority,
 challenge and durable-replay gaps at runtime `90de105`; all three reviewers are
-green. Test doubles at `d6cdebf` follow refreshed/locked reads. Final full local
-and exact accepted-merge wheel/sdist qualification precede authorized publication;
-see [the current release receipt](S1_RELEASE_CANDIDATE_A37.md) and
+green. Test doubles at `d6cdebf` follow refreshed/locked reads. a37 is published from accepted merge `bf927276`, with 1540 full local tests,
+102 Redis tests and exact installed wheel/sdist gates at 178/84;
+see [the public release receipt](S1_RELEASE_A37.md) and
 [independent review](S1_REVIEW_A37.md). Older `f00eb25` results are historical.
 Migration `20261011_0026` adds two nullable security-state columns. Bounded
 migration/index checks and reconnect fencing are implemented; external restore

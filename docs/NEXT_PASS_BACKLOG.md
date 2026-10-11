@@ -7,11 +7,12 @@ This document is intentionally short. It is not a full project plan. It is a wor
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-- **S1 release admission.** All eight baseline defects and eight additional
+- **S1 consumer admission (library a37 published).** All eight baseline defects and eight additional
   reproduced publication-review gaps are corrected. Three independent reviewers
   are green; see [review boundaries](S1_REVIEW_A37.md) and
   [current qualification/publication receipt](S1_RELEASE_CANDIDATE_A37.md).
-  Final exact artifacts/public hashes precede the public release train and each
+  [Exact public artifacts](S1_RELEASE_A37.md) are verified; next qualify the
+  public release train and each
   consumer's package/schema/staging acceptance. External restore admission,
   production budgets and the S3 anti-rewind replay/outbox remain separate.
   Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).

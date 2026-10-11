@@ -70,7 +70,7 @@ section 19 delivery order. The companion
 corrections, two nullable security-state columns, bounded migration/index checks,
 and recovery fencing. Independent publication review closed eight additional
 reproduced gaps; all three reviewers are green. The
-[current qualification/publication receipt](S1_RELEASE_CANDIDATE_A37.md) owns
+[public a37 release receipt](S1_RELEASE_A37.md) owns
 accepted source, exact artifact and public-release evidence. Review boundaries are
 in [S1_REVIEW_A37.md](S1_REVIEW_A37.md). Consumer adoption, certified release train,
 staging and external restore admission are separate gates. Local proof does not

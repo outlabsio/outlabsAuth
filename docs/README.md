@@ -59,3 +59,5 @@ This `docs/` tree is design specs and maintainer material.
 2026-07-16. Where a doc and the code disagree, **the code wins** — and that is a bug in
 the doc worth fixing rather than working around. The `examples/` are the reference
 integration, and `README.md`'s quickstart is executed by a test.
+
+- **S1_RELEASE_A37.md** - Published a37 accepted merge/tag/run, verified public artifact hashes, independent review and local/installed qualification boundaries.

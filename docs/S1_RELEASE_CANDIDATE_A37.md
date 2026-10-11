@@ -1,10 +1,10 @@
 # Auth a37 S1 release candidate
 
-**Date:** 2026-10-11. **Status:** independently reviewed; final local qualification and publication in progress.
+**Date:** 2026-10-11. **Status:** published; final acceptance and public hashes are in [S1 release receipt](S1_RELEASE_A37.md).
 **Latest runtime:** `90de105`; test-double corrections `d6cdebf` do not alter runtime.
 All three reviewers are green after eight additional reproduced gaps were closed;
 see [independent publication review](S1_REVIEW_A37.md). Final accepted-merge artifacts
-and public hashes will be recorded below after qualification/publication. Historical
+and public hashes are recorded in [S1_RELEASE_A37.md](S1_RELEASE_A37.md). Historical
 `f00eb25` inputs/results remain below and do not qualify the corrected runtime.
 **Version:** `0.1.0a37`. **Auth head:** `20261011_0026`.
 
@@ -34,8 +34,8 @@ No runtime changes followed those reviews.
 
 The full suite ran from clean `d6cdebf`; later edits affect the benchmark and
 handbook/maintainer receipts, without changing library runtime or collected tests.
-Installed wheel/sdist tests must still qualify the exact accepted-merge artifacts;
-the protected publisher must qualify its exact outputs or prove identical hashes.
+Exact accepted-merge wheel/sdist tests passed 178/84; downloaded workflow and
+public files have identical hashes. See the final release receipt.
 Public release/train/consumer adoption are independently recorded gates.
 
 ## Historical pre-review candidate inputs
@@ -101,16 +101,12 @@ hashed wheel or sdist with its extras into a fresh environment, and provide
 `OUTLABS_AUTH_TEST_ARTIFACT` and `OUTLABS_AUTH_TEST_ARTIFACT_SHA256` as documented
 in the original artifact receipt. Do not add the checkout to `PYTHONPATH`.
 
-## Remaining release and admission gates
+## Release history and remaining admission gates
 
-1. Independent cache, account/session/OAuth and migration/recovery reviews are
-   green. Publication is explicitly authorized separately from consumer deployment.
-   Final full local and exact accepted-merge artifact qualification remain required.
-2. After authorized merge, verify the accepted source/metadata bytes, build and
-   qualify the exact publication artifacts at that merge commit, tag that commit,
-   and approve the protected `pypi` publishing environment only under the explicit
-   publication delegation, after verifying its unique pending deployment and run SHA.
-   Record the public wheel/sdist hashes; do not infer them from these local hashes.
+1. Independent reviews are green and the full local/installed gates passed.
+2. PR #33 merged at `bf927276`; tag `v0.1.0a37`, publishing-only run
+   `38133672796` and the exact public hashes are verified in
+   [S1_RELEASE_A37.md](S1_RELEASE_A37.md).
 3. Resolve a published release train from the public index and qualify each actual
    consumer's unchanged or independently approved TaskQ version. A candidate
    compatibility pass does not make a mixed pair match an older certified train.
