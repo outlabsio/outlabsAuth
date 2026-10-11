@@ -314,7 +314,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 Unreleased local candidate. Public release remains a37.
 
-**Release evidence**: [Public S1 a37 receipt](./docs/S1_RELEASE_A37.md). [Local S2/S3 foundation](./docs/S2_S3_FOUNDATION_2026-10-11.md) and [verified staff credential/list/concurrency facade](./docs/S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md) are qualified locally; mounted administrative admission remains unwired; package publication and consumer adoption are separate gates.
+**Release evidence**: [Public S1 a37 receipt](./docs/S1_RELEASE_A37.md). [Local S2/S3 foundation](./docs/S2_S3_FOUNDATION_2026-10-11.md) and [explicit staff mount and SQL budgets](./docs/S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md) are qualified locally; existing consumer IAM admission remains unadopted; package publication and consumer adoption are separate gates.
 
 **Release Stage**: Alpha
 

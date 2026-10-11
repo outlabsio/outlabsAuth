@@ -33,13 +33,15 @@ The earlier pure administrative evaluator retains its 51 cases. The isolated
 unreleased a38 foundation now adds separate persistent policy, immutable
 lineage/audit and optional same-transaction lifecycle observation. It does not
 activate existing mounted administrative routes or complete host-owned replay.
-The explicit verified staff facade qualifies real credential/account targets,
-action-bound SQL entity lists, protected withdrawal and owned-key lifecycle at
-`4c4aebf`: 1,596 full local cases, 56 each installed artifact with zero skips,
-and 239 matched package files.
-[Current acceptance and remaining exits](S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md)
-retain full IAM/credential writer inventory, numeric budgets and release gates. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)
-keep S2/S3 stage exits open; namespaces retain their later stage. These local corrections do not accept DD-062 or a deployed host.
+The explicit staff facade and opt-in mounted entity/owned-key workflow add
+managed-key provenance, alternate credential-route denial and constant-depth
+SQL budgets at runtime `fda9394`, schema 0029. Exact-selector list qualification
+uses 10,000 extra customer roots. [Current scope and local evidence](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md)
+keep broad IAM account/member mutation and projection pairing, worst-case group/
+grant scale, restricted DML, multi-effect concurrency and release/consumer gates
+open. [Earlier foundation evidence](S2_S3_FOUNDATION_2026-10-11.md) remains
+historical. No consumer startup is widened; namespaces retain their later stage.
+These local corrections do not accept DD-062 or a deployed host.
 
 ## Completed Slices
 

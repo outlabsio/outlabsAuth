@@ -1,5 +1,8 @@
 # Staff personal-key lifecycle and remaining credential acceptance
 
+Continued by [mounted credential and performance qualification](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md).
+The counts below remain the historical runtime `4c4aebf` receipt.
+
 Date: 2026-10-11. Runtime `4c4aebf66f6204f036c27a6b99552a86ec03982e`,
 unreleased a38 / schema `20261011_0028`.
 This continues [credential/target/list/concurrency qualification](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md).

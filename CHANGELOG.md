@@ -9,6 +9,14 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 ### Added
 
+- Explicit opt-in `get_staff_router` exposes action-qualified entity discovery
+  and JWT-owned credential lifecycle without adding grants to ordinary IAM.
+  Migration `20261011_0029` retains staff-key provenance and fences lifecycle
+  expansion; ordinary key update/rotation cannot bypass the staff workflow.
+  Ancestor and selected-root query changes add deterministic SQL budgets at
+  depths 1/8/32 and a 10,000-root filtered list baseline. Broader IAM mutation,
+  restricted DML, group scale and consumer activation remain separate gates.
+
 - Additive migration `20261011_0027` stores separate immutable administrative
   template revisions, groups, pinned customer admissions, grants and audit.
   Administrative authority stays unwired from existing mounted routes;

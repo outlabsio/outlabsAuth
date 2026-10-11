@@ -213,6 +213,21 @@ and UUID keyset pagination. It exposes no key secret/hash/prefix and grants no
 customer credential-management authority. Use this explicit facade for the
 qualified staff workflow; existing mounted key routes keep ordinary policy.
 
+The unreleased package also exports `get_staff_router` from
+`outlabs_auth.routers`. Mount it explicitly using the same application-lifetime
+facade and install `auth.instrument_fastapi(app)` before startup. Its default
+`/staff` surface provides action-qualified `/entities` discovery (`entity:read`)
+and JWT-owned `/keys` create, list, narrow, rotate and revoke operations. It does
+not mount customer account/session/password/OAuth or membership mutations.
+The host must pair and qualify those operations separately.
+
+Staff-minted keys retain `staff_managed` provenance. Ordinary SDK/mounted update
+and rotation refuse those keys; ordinary self-revocation also requires a human
+JWT. A database fence prevents provenance removal, owner/anchor/inheritance
+changes, reactivation and expiry expansion. Existing ordinary credentials keep
+their policy. This provenance does not establish restricted database privileges
+or a complete native-writer inventory.
+
 Unanchored legacy runtime keys require explicit opt-in; update/rotation refuse
 unanchored, revoked, expired or non-expiring keys. Complete IAM route pairing,
 customer credential inventory/management, large-tree numeric budgets and
@@ -220,5 +235,5 @@ restricted DML privileges remain gates. Nothing activates this facade on
 existing routes.
 
 Qualification and remaining release/consumer gates are recorded in
-`docs/S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md`; do not adopt an unreleased
+`docs/S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md`; do not adopt an unreleased
 local build in a deployed consumer. Public a37 does not provide this facade.
