@@ -16,7 +16,7 @@ from outlabs_auth.services.user import UserService
 async def test_deleted_identifier_change_is_rejected_before_profile_side_effects():
     service = UserService(AuthConfig(secret_key="deleted-identifier-regression-secret-0123456789"))
     user = User(id=uuid4(), email="reserved@example.test", status=UserStatus.DELETED, first_name="Reserved")
-    service.get_by_id = AsyncMock(return_value=user)
+    service.get_user_by_id = AsyncMock(return_value=user)
     service.get_one = AsyncMock(return_value=None)
     service.update = AsyncMock()
     with pytest.raises(InvalidInputError):

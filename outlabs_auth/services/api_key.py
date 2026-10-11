@@ -164,13 +164,15 @@ class APIKeyService(BaseService[APIKey]):
     ) -> Optional[ResolvedAPIKeyOwner]:
         """Resolve the concrete owner record for a stored API key."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None:
                 return None
             return ResolvedAPIKeyOwner(owner_type="integration_principal", integration_principal=principal)
 
         if api_key.owner_id is not None:
-            user = await session.get(User, api_key.owner_id)
+            user = await session.get(User, api_key.owner_id, populate_existing=True)
             if user is None:
                 return None
             return ResolvedAPIKeyOwner(owner_type="user", user=user)
@@ -440,6 +442,7 @@ class APIKeyService(BaseService[APIKey]):
             session,
             APIKey.prefix == prefix,
             APIKey.key_hash == key_hash,
+            populate_existing=True,
         )
 
         if not api_key:

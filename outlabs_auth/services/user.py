@@ -44,6 +44,7 @@ from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import APIKeyStatus, MembershipStatus, UserStatus
 from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.models.sql.auth_challenge import AuthChallenge
 from outlabs_auth.models.sql.token import RefreshToken
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
@@ -542,6 +543,7 @@ class UserService(BaseService[User]):
         *,
         load_root_entity: bool = False,
         for_update: bool = False,
+        populate_existing: bool = False,
     ) -> Optional[User]:
         """
         Get user by ID.
@@ -554,15 +556,17 @@ class UserService(BaseService[User]):
         Returns:
             User if found, None otherwise
         """
-        if for_update:
+        options = [joinedload(cast(Any, User.root_entity))] if load_root_entity else []
+        if for_update or populate_existing:
             stmt = (
                 select(User)
                 .where(cast(Any, User.id) == UUID(str(user_id)))
-                .with_for_update()
+                .options(*options)
                 .execution_options(populate_existing=True)
             )
+            if for_update:
+                stmt = stmt.with_for_update()
             return (await session.execute(stmt)).scalar_one_or_none()
-        options = [joinedload(cast(Any, User.root_entity))] if load_root_entity else None
         return await self.get_by_id(session, user_id, options=options)
 
     async def get_user_by_email(
@@ -659,7 +663,7 @@ class UserService(BaseService[User]):
         request body (including null/empty to clear). Changing phone resets
         ``phone_verified`` so hosts can re-run verification before WhatsApp OTP.
         """
-        user = await self.get_by_id(session, user_id)
+        user = await self.get_user_by_id(session, user_id, for_update=True)
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -1094,6 +1098,25 @@ class UserService(BaseService[User]):
             user.platform_protected = True
 
     async def _withdraw_retained_access(self, session: AsyncSession, user_id: UUID, *, reason: str) -> None:
+        # The caller holds the user mutex. Challenge issuers/consumers take the
+        # same lock first, so a delayed request cannot recreate a retired proof.
+        await session.execute(
+            sql_update(User)
+            .where(cast(Any, User.id) == user_id)
+            .values(
+                password_reset_token=None,
+                password_reset_expires=None,
+                invite_token=None,
+                invite_token_expires=None,
+                email_verification_token=None,
+                email_verification_expires=None,
+            )
+        )
+        await session.execute(
+            sql_update(AuthChallenge)
+            .where(cast(Any, AuthChallenge.user_id) == user_id, cast(Any, AuthChallenge.used_at).is_(None))
+            .values(used_at=datetime.now(timezone.utc))
+        )
         at = datetime.now(timezone.utc)
         for model in (UserRoleMembership, EntityMembership):
             await session.execute(

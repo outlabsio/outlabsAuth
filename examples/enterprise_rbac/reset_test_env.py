@@ -1917,7 +1917,7 @@ async def reset_database():
             else:
                 role_type = "Entity-defined"
                 defined_at = entity_display_by_id.get(str(role.scope_entity_id), "Unknown entity")
-                scope_label = role.scope.value
+                scope_label = getattr(role.scope, "value", role.scope)
 
             flags = []
             if role.is_system_role:

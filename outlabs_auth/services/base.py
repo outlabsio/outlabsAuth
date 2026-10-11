@@ -71,6 +71,7 @@ class BaseService(Generic[ModelType]):
         session: AsyncSession,
         *filters,
         options: Optional[List[Any]] = None,
+        populate_existing: bool = False,
     ) -> Optional[ModelType]:
         """
         Get a single record matching filters.
@@ -83,7 +84,7 @@ class BaseService(Generic[ModelType]):
         Returns:
             First matching record or None
         """
-        stmt = select(self.model).where(*filters)
+        stmt = select(self.model).where(*filters).execution_options(populate_existing=populate_existing)
         if options:
             for opt in options:
                 stmt = stmt.options(opt)

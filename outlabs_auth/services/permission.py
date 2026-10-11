@@ -263,14 +263,14 @@ class PermissionService(BaseService[Permission]):
             if depth_by_ancestor:
                 return set(depth_by_ancestor.keys())
             ancestor_ids: Set[UUID] = set()
-            current = await session.get(Entity, entity_id)
+            current = await session.get(Entity, entity_id, populate_existing=True)
             for _ in range(max_depth):
                 if current is None or current.id in ancestor_ids:
                     break
                 ancestor_ids.add(current.id)
                 if current.parent_id is None:
                     break
-                current = await session.get(Entity, current.parent_id)
+                current = await session.get(Entity, current.parent_id, populate_existing=True)
             return ancestor_ids
 
         return cast(
@@ -340,7 +340,7 @@ class PermissionService(BaseService[Permission]):
             return None
 
         async def _loader() -> Optional[Entity]:
-            return await session.get(Entity, entity_id)
+            return await session.get(Entity, entity_id, populate_existing=True)
 
         entity = await request_cache.get_or_load(("entity", entity_id), _loader)
         return entity.entity_type if entity is not None else None
@@ -440,6 +440,19 @@ class PermissionService(BaseService[Permission]):
 
         start_time = datetime.now(timezone.utc)
 
+        # Capture authority provenance before any request memo or ORM policy
+        # read. Retain the earliest counters across all checks in this request.
+        use_permission_cache = self._can_use_permission_cache() and not has_pending_cache_changes(session)
+        cached = None
+        perm_cache_versions: Optional[Dict[str, int]] = None
+        if use_permission_cache:
+            cached, perm_cache_versions = await self._get_cached_permission_result(
+                user_id=user_id, permission=permission, entity_id=entity_id
+            )
+            perm_cache_versions = request_cache.bind_authority_versions(
+                getattr(self, "cache_service", None), perm_cache_versions
+            )
+
         resolved_user = user
         if resolved_user is None:
             cached_user = request_cache.get(("user", user_id))
@@ -455,8 +468,6 @@ class PermissionService(BaseService[Permission]):
                 message="User not found",
                 details={"user_id": str(user_id)},
             )
-
-        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
         if abac_enabled and not await self._abac_conditions_exist(session):
@@ -481,17 +492,8 @@ class PermissionService(BaseService[Permission]):
         # Hashing caller context cannot bind that time or its next transition.
         # Evaluate both conditioned allows and denies afresh; ordinary RBAC and
         # the policy-loading caches retain their existing behavior.
-        use_permission_cache = (
-            self._can_use_permission_cache() and not abac_enabled and not has_pending_cache_changes(session)
-        )
-        perm_cache_versions: Optional[Dict[str, int]] = None
+        use_permission_cache = use_permission_cache and not abac_enabled
         if use_permission_cache:
-            cached, perm_cache_versions = await self._get_cached_permission_result(
-                user_id=user_id,
-                permission=permission,
-                entity_id=entity_id,
-                context_hash=cache_context_hash,
-            )
             if cached is not None:
                 self._log_permission_check(
                     user_id,
@@ -501,6 +503,11 @@ class PermissionService(BaseService[Permission]):
                     "cache",
                 )
                 return cached
+
+        # Context authority must be read after the versions used to tag this
+        # decision. Otherwise a concurrent type change can poison a newer cache
+        # generation with an old-type allow.
+        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
 
         # Superusers have all permissions
         if resolved_user.is_superuser:
@@ -742,7 +749,7 @@ class PermissionService(BaseService[Permission]):
                 )
             )
             observed_at = cache_validity.now()
-            result = await session.execute(stmt)
+            result = await session.execute(stmt.execution_options(populate_existing=True))
             rows = list(result.scalars().all())
             cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
             return rows
@@ -814,7 +821,7 @@ class PermissionService(BaseService[Permission]):
 
         async def _load() -> list[RoleCondition]:
             stmt = select(RoleCondition).where(cast(Any, RoleCondition.role_id) == role.id)
-            result = await session.execute(stmt)
+            result = await session.execute(stmt.execution_options(populate_existing=True))
             return list(result.scalars().all())
 
         return cast("list[RoleCondition]", await request_cache.get_or_load(cache_key, _load))
@@ -835,7 +842,7 @@ class PermissionService(BaseService[Permission]):
 
         async def _load() -> Dict[Optional[str], str]:
             stmt = select(SqlConditionGroup).where(cast(Any, SqlConditionGroup.id).in_(list(group_ids)))
-            result = await session.execute(stmt)
+            result = await session.execute(stmt.execution_options(populate_existing=True))
             return {str(group.id): group.operator for group in result.scalars().all()}
 
         return cast("Dict[Optional[str], str]", await request_cache.get_or_load(cache_key, _load))
@@ -889,7 +896,7 @@ class PermissionService(BaseService[Permission]):
                 )
             )
             observed_at = cache_validity.now()
-            memberships_result = await session.execute(memberships_stmt)
+            memberships_result = await session.execute(memberships_stmt.execution_options(populate_existing=True))
             rows = list(memberships_result.scalars().all())
             cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
             return rows
@@ -1078,7 +1085,7 @@ class PermissionService(BaseService[Permission]):
                 .options(selectinload(cast(Any, Permission.conditions)))
                 .where(cast(Any, Permission.id).in_(unloaded_permission_ids))
             )
-            perm_result = await session.execute(perm_stmt)
+            perm_result = await session.execute(perm_stmt.execution_options(populate_existing=True))
             permission_map = {permission.id: permission for permission in perm_result.scalars().all()}
             matching_perms = [permission_map.get(p.id, p) for p in matching_perms]
 
@@ -1207,6 +1214,10 @@ class PermissionService(BaseService[Permission]):
                 details={"user_id": str(user_id)},
             )
 
+        # Context-shaped graphs also need provenance before another check reuses them.
+        if entity_type is not None:
+            await self._observe_request_policy_versions(user_id)
+
         # Superusers have all permissions
         if resolved_user.is_superuser:
             cache_validity.record(str(user_id), None)
@@ -1232,6 +1243,7 @@ class PermissionService(BaseService[Permission]):
                 str(user_id),
                 include_entity_local=include_entity_local,
             )
+            cached_versions = request_cache.bind_authority_versions(cache_service, cached_versions)
             if cached_names is not None:
                 return cached_names
 
@@ -1280,7 +1292,7 @@ class PermissionService(BaseService[Permission]):
                     )
                 )
                 observed_at = cache_validity.now()
-                entity_result = await session.execute(entity_stmt)
+                entity_result = await session.execute(entity_stmt.execution_options(populate_existing=True))
                 rows = list(entity_result.scalars().all())
                 cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
                 return rows
@@ -1315,6 +1327,13 @@ class PermissionService(BaseService[Permission]):
 
         return list(all_permissions)
 
+    async def _observe_request_policy_versions(self, user_id: UUID, entity_id: Optional[UUID] = None) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        getter = getattr(cache_service, "get_api_key_auth_snapshot_versions", None)
+        if getter is not None:
+            versions = await getter(user_id=str(user_id), entity_id=str(entity_id) if entity_id is not None else None)
+            request_cache.bind_authority_versions(cache_service, versions)
+
     async def get_effective_permission_names(
         self,
         session: AsyncSession,
@@ -1330,6 +1349,7 @@ class PermissionService(BaseService[Permission]):
         This keeps the same non-ABAC semantics as ``check_permission`` while
         avoiding a per-permission round-trip through the full permission check.
         """
+        await self._observe_request_policy_versions(user_id, entity_id)
         resolved_user = user
         if resolved_user is None:
             resolved_user = await session.get(User, user_id)
@@ -1414,7 +1434,7 @@ class PermissionService(BaseService[Permission]):
             .where(cast(Any, Permission.status) == DefinitionStatus.ACTIVE)
             .order_by(cast(Any, Permission.name).asc())
         )
-        result = await session.execute(stmt)
+        result = await session.execute(stmt.execution_options(populate_existing=True))
         return [row[0] for row in result.all()]
 
     async def _get_entity_membership_permission_names(
@@ -1438,7 +1458,7 @@ class PermissionService(BaseService[Permission]):
             )
         )
         observed_at = cache_validity.now()
-        result = await session.execute(stmt)
+        result = await session.execute(stmt.execution_options(populate_existing=True))
         memberships: list[EntityMembership] = list(result.scalars().all())
         cache_validity.observe_windows(str(user_id), memberships, observed_at=observed_at)
 
@@ -1484,7 +1504,7 @@ class PermissionService(BaseService[Permission]):
             )
         )
         observed_at = cache_validity.now()
-        memberships_result = await session.execute(memberships_stmt)
+        memberships_result = await session.execute(memberships_stmt.execution_options(populate_existing=True))
         memberships: list[EntityMembership] = list(memberships_result.scalars().all())
         cache_validity.observe_windows(str(user_id), memberships, observed_at=observed_at)
 

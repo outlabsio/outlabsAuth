@@ -183,7 +183,9 @@ class APIKeyPolicyService:
     ) -> bool:
         """Check whether a stored API key is still usable right now."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None:
                 logger.warning("API key %s rejected because principal is missing", api_key.prefix)
                 self._log_policy_decision(
@@ -208,7 +210,7 @@ class APIKeyPolicyService:
                 )
                 return False
         else:
-            owner = await session.get(User, api_key.owner_id)
+            owner = await session.get(User, api_key.owner_id, populate_existing=True)
             if owner is None:
                 logger.warning("API key %s rejected because owner is missing", api_key.prefix)
                 self._log_policy_decision(
@@ -238,7 +240,7 @@ class APIKeyPolicyService:
             return True
 
         observed_at = cache_validity.now()
-        entity = await session.get(Entity, api_key.entity_id)
+        entity = await session.get(Entity, api_key.entity_id, populate_existing=True)
         if entity is None:
             logger.warning("API key %s rejected because anchor entity is missing", api_key.prefix)
             self._log_policy_decision(
@@ -277,7 +279,9 @@ class APIKeyPolicyService:
     ) -> bool:
         """Check the current owner permission side of runtime intersection."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None or not principal.is_active():
                 return False
             from outlabs_auth.services.api_key import APIKeyService
@@ -1179,7 +1183,7 @@ class APIKeyPolicyService:
                 details={"integration_principal_id": str(integration_principal.id)},
             )
 
-        entity = await session.get(Entity, integration_principal.anchor_entity_id)
+        entity = await session.get(Entity, integration_principal.anchor_entity_id, populate_existing=True)
         if entity is None:
             raise self._policy_error(
                 "entity_anchor_not_found",

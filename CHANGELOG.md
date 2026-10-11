@@ -20,6 +20,13 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   serialize migration runners and refuse invalid/incomplete indexes.
 - Fence shared authority on Redis startup/recovery before enabling cache reads;
   discard the recovering worker's local key snapshots without resetting counters.
+- Refresh retained ORM authority before validating user epochs, API keys and policy
+  graphs; never retag older request authority with newer cache counters.
+- Retire pending login/recovery challenges on delete and identity-only restore;
+  serialize issue/consume with lifecycle writes using a fresh user row lock.
+- Make refresh-token replay containment durable despite the rejecting HTTP error:
+  abort the caller unit of work, independently commit only revocation/epoch, then
+  refuse the replay. Protect legacy platform accounts even with scope enforcement off.
 
 ### Database migrations
 
@@ -34,6 +41,9 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 - Migration `lock_timeout` defaults to 5 seconds (independent of statement timeout),
   accepts 1ms–30s via `migrate --lock-timeout` / `migration_lock_timeout`, and permits
   at most three lock-only attempts. Repair invalid indexes explicitly before retry.
+- Refresh-reuse containment requires configured-engine sessions with an independent
+  checkout. External connection-local schema overrides and single-connection pools
+  are not qualified; review the [independent review boundaries](docs/S1_REVIEW_A37.md).
 - Database restore or rollback to pre-epoch validators requires closed admission,
   externally held fresh signing secrets/cache namespace and reconciliation of
   post-backup revocations. See `docs/AUTH_RECOVERY.md` and the S1 qualification receipt.

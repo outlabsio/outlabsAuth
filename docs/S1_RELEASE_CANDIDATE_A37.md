@@ -1,6 +1,9 @@
 # Auth a37 S1 release candidate
 
-**Date:** 2026-10-11. **Status:** qualified local package candidate; unpublished.
+**Date:** 2026-10-11. **Status:** publication review and final qualification in progress; unpublished.
+**Latest:** [independent publication review](S1_REVIEW_A37.md) corrected eight
+additional reproduced gaps. The inputs/results below retain the pre-review build;
+they do not qualify the corrected runtime or the final publication artifacts.
 **Source:** `f00eb25`, branch `codex/auth-security-20261010`, based on `main baba18c`.
 **Version:** `0.1.0a37`. **Auth head:** `20261011_0026`.
 

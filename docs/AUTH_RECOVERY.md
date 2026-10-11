@@ -5,6 +5,14 @@ production RPO/RTO, lifecycle outbox or source-replay runner is implied.
 
 ## Ordinary upgrade
 
+The a37 [publication review](S1_REVIEW_A37.md) also qualifies durable refresh-reuse
+containment: that security refusal aborts the caller unit of work and commits only
+revocation/epoch in an independent configured-engine session. Externally held
+connections, connection-local schema overrides and single-connection pools need
+a host-owned containment boundary and remain unqualified. Pending login/recovery
+challenges are retired on deletion and identity-only restore; issuance and use
+serialize with those lifecycle writes.
+
 Qualify the exact wheel and sdist SHA-256 with a new release version, an inventory
 of validators/writers and a tested recovery image before admitting a consumer.
 Run migration once as a controlled startup/release step; application instances may

@@ -144,6 +144,7 @@ class JWTStrategy:
                     session,
                     user_id,
                     load_root_entity=True,
+                    populate_existing=True,
                 )
                 logger.debug(
                     "jwt_fetch_user_done",

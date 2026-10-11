@@ -346,12 +346,14 @@ async def test_auth_service_refresh_token_reuse_revokes_entire_family(test_sessi
     user = await _create_user(test_session, auth_config, email="refresh-reuse@example.com")
     original = await service.create_tokens_for_user(test_session, user)
     replacement = await service.refresh_access_token(test_session, original.refresh_token)
+    await test_session.commit()
+    user_id = user.id
 
     with pytest.raises(RefreshTokenInvalidError, match="reuse detected") as exc_info:
         await service.refresh_access_token(test_session, original.refresh_token)
     assert exc_info.value.details["reason"] == "reuse_detected"
 
-    tokens = (await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))).scalars().all()
+    tokens = (await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user_id))).scalars().all()
     assert len(tokens) == 2
     assert all(token.is_revoked for token in tokens)
     assert any(token.token_hash == service._hash_token(replacement.refresh_token) for token in tokens)

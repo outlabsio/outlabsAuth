@@ -167,7 +167,7 @@ def get_users_router(
             if (
                 for_mutation
                 and actor_user.id != target_user.id
-                and getattr(target_user, "platform_protected", False) is True
+                and await user_is_global_account(auth, session, target_user)
                 and not actor_user.is_superuser
             ):
                 historical_scope = await _resolve_actor_scope(session, actor_user)
@@ -227,7 +227,7 @@ def get_users_router(
         *,
         for_mutation: bool = False,
     ) -> Any:
-        target_user = await auth.user_service.get_user_by_id(session, target_user_id)
+        target_user = await auth.user_service.get_user_by_id(session, target_user_id, for_update=for_mutation)
         if not target_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

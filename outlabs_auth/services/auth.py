@@ -18,7 +18,7 @@ from typing import Any, List, Mapping, Optional, Tuple, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.session_security import advance_epoch, epoch, proof_is_current
@@ -622,7 +622,10 @@ class AuthService:
         if self.config.store_refresh_tokens:
             token_hash = self._hash_token(refresh_token)
             refresh_token_stmt = (
-                select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash).with_for_update()
+                select(RefreshToken)
+                .where(cast(Any, RefreshToken.token_hash) == token_hash)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
             result = await session.execute(refresh_token_stmt)
             token_model = result.scalar_one_or_none()
@@ -639,16 +642,31 @@ class AuthService:
                         # A rotated token is single-use. Reuse means the prior
                         # credential was copied or raced, so revoke every active
                         # session rather than guessing which child is trusted.
-                        revoked_count = await self.revoke_all_user_tokens(
-                            session,
-                            token_model.user_id,
-                            reason="Refresh token reuse detected",
-                        )
+                        containment_user_id = token_model.user_id
+                        containment_family_id = str(token_model.family_id)
+                        bind = session.bind
+                        if isinstance(bind, AsyncConnection):
+                            bind = bind.engine
+                        # Refusal aborts the caller's unit of work. Commit only
+                        # security containment in an independent transaction:
+                        # the ordinary exception path rolls its UoW back.
+                        await session.rollback()
+                        async with AsyncSession(bind=bind, expire_on_commit=False) as containment:
+                            await containment.execute(
+                                select(User)
+                                .where(cast(Any, User.id) == containment_user_id)
+                                .with_for_update()
+                                .execution_options(populate_existing=True)
+                            )
+                            revoked_count = await self.revoke_all_user_tokens(
+                                containment, containment_user_id, reason="Refresh token reuse detected"
+                            )
+                            await containment.commit()
                         raise RefreshTokenInvalidError(
                             message="Refresh token reuse detected; all sessions were revoked",
                             details={
                                 "reason": "reuse_detected",
-                                "family_id": str(token_model.family_id),
+                                "family_id": containment_family_id,
                                 "revoked_session_count": revoked_count,
                             },
                         )
@@ -841,8 +859,8 @@ class AuthService:
                 details={"payload": payload},
             )
 
-        # Get user from database
-        stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
+        # Refresh authority even when a long-lived session already holds this user.
+        stmt = select(User).where(cast(Any, User.id) == UUID(user_id)).execution_options(populate_existing=True)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -995,6 +1013,20 @@ class AuthService:
         await session.flush()
         return revoked_count
 
+    async def _lock_active_challenge_user(self, session: AsyncSession, user_id: UUID) -> User:
+        """Serialize challenge issuance/consumption with account lifecycle writes."""
+        stmt = (
+            select(User)
+            .where(cast(Any, User.id) == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        user = (await session.execute(stmt)).scalar_one_or_none()
+        if user is None:
+            raise UserNotFoundError(message="User not found", details={"user_id": str(user_id)})
+        self._check_user_status(user)
+        return user
+
     async def generate_reset_token(
         self,
         session: AsyncSession,
@@ -1011,6 +1043,8 @@ class AuthService:
             Plain reset token (to be sent via email)
         """
         import secrets
+
+        user = await self._lock_active_challenge_user(session, user.id)
 
         # Generate secure random token
         plain_token = secrets.token_urlsafe(32)
@@ -1071,6 +1105,7 @@ class AuthService:
         The returned token is plain text for host-owned email delivery. Only a
         hash is stored in the database.
         """
+        user = await self._lock_active_challenge_user(session, user.id)
         plain_token = secrets.token_urlsafe(32)
         hashed_token = self._hash_token(plain_token)
         now = datetime.now(timezone.utc)
@@ -1162,6 +1197,7 @@ class AuthService:
         Phone requests store ``whatsapp_otp`` or ``sms_otp``; email requests
         store ``access_code``.
         """
+        user = await self._lock_active_challenge_user(session, user.id)
         challenge_recipient = (recipient or user.email).strip()
         if not challenge_recipient:
             raise InvalidInputError(
@@ -1274,6 +1310,7 @@ class AuthService:
         Plain code is for host-owned WhatsApp/SMS delivery. Stored verifier is
         a nonce-prefixed HMAC bound to the E.164 phone number.
         """
+        user = await self._lock_active_challenge_user(session, user.id)
         phone = (user.phone or "").strip()
         if not phone:
             raise InvalidInputError(
@@ -1378,6 +1415,8 @@ class AuthService:
                 message="Invalid or expired reset token",
                 details={"reason": "token_not_found"},
             )
+
+        self._check_user_status(user)
 
         # Check expiration
         if not user.password_reset_expires or user.password_reset_expires < datetime.now(timezone.utc):
@@ -1512,7 +1551,7 @@ class AuthService:
                 cast(Any, User.phone_verified).is_(True),
             )
 
-        user_result = await session.execute(user_stmt)
+        user_result = await session.execute(user_stmt.with_for_update().execution_options(populate_existing=True))
         user = user_result.scalar_one_or_none()
         if not user:
             raise TokenInvalidError(
@@ -1529,6 +1568,7 @@ class AuthService:
             )
             .order_by(cast(Any, AuthChallenge.created_at).desc())
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         challenge_result = await session.execute(challenge_stmt)
         matching_challenge = None
@@ -1644,14 +1684,7 @@ class AuthService:
 
         Does not issue login tokens — this is account verification only.
         """
-        user_stmt = select(User).where(cast(Any, User.id) == user.id).with_for_update()
-        user_result = await session.execute(user_stmt)
-        locked_user = user_result.scalar_one_or_none()
-        if locked_user is None:
-            raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": str(user.id)},
-            )
+        locked_user = await self._lock_active_challenge_user(session, user.id)
 
         phone = (locked_user.phone or "").strip()
         if not phone:
@@ -1670,6 +1703,7 @@ class AuthService:
             )
             .order_by(cast(Any, AuthChallenge.created_at).desc())
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         challenge_result = await session.execute(challenge_stmt)
         matching_challenge = None
@@ -1743,6 +1777,16 @@ class AuthService:
             AccountInactiveError: If the user cannot authenticate
         """
         hashed_token = self._hash_token(token)
+        # Discover the immutable owner, then lock user before challenge. This
+        # matches deletion and every other issuer/consumer's mutex order.
+        owner_stmt = select(cast(Any, AuthChallenge.user_id)).where(
+            cast(Any, AuthChallenge.token_hash) == hashed_token,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
+        )
+        owner_id = (await session.execute(owner_stmt)).scalar_one_or_none()
+        if owner_id is None:
+            raise TokenInvalidError(message="Invalid or expired magic link", details={"reason": "token_not_found"})
+        user = await self._lock_active_challenge_user(session, owner_id)
         stmt = (
             select(AuthChallenge)
             .where(
@@ -1750,6 +1794,7 @@ class AuthService:
                 cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         result = await session.execute(stmt)
         challenge = result.scalar_one_or_none()
@@ -1771,15 +1816,6 @@ class AuthService:
             raise TokenExpiredError(
                 message="Magic link has expired",
                 details={"expired_at": challenge.expires_at.isoformat()},
-            )
-
-        user_stmt = select(User).where(cast(Any, User.id) == challenge.user_id)
-        user_result = await session.execute(user_stmt)
-        user = user_result.scalar_one_or_none()
-        if not user:
-            raise TokenInvalidError(
-                message="Invalid or expired magic link",
-                details={"reason": "user_not_found"},
             )
 
         previous_email_verified = user.email_verified
@@ -2013,7 +2049,12 @@ class AuthService:
         # Hash token to find user (same pattern as reset_password)
         hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
-        stmt = select(User).where(cast(Any, User.invite_token) == hashed_token)
+        stmt = (
+            select(User)
+            .where(cast(Any, User.invite_token) == hashed_token)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
