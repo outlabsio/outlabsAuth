@@ -38,6 +38,11 @@ def _hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _fresh(statement: Any, lock: bool = False) -> Any:
+    statement = statement.execution_options(populate_existing=True)
+    return statement.with_for_update(read=True) if lock else statement
+
+
 def _time(value: datetime | None) -> str | None:
     if value is not None and (value.tzinfo is None or value.utcoffset() is None):
         raise InvalidInputError(message="Administrative validity requires aware UTC times")
@@ -71,7 +76,7 @@ class AdministrativeGrantService:
             raise PermissionDeniedError(message="Administrative management is platform-only")
         return actor
 
-    async def _path(self, session: AsyncSession, target_id: UUID, now: datetime) -> list[Entity]:
+    async def _path(self, session: AsyncSession, target_id: UUID, now: datetime, *, lock: bool = False) -> list[Entity]:
         path: list[Entity] = []
         seen: set[UUID] = set()
         cursor: UUID | None = target_id
@@ -80,9 +85,7 @@ class AdministrativeGrantService:
                 raise InvalidInputError(message="Invalid administrative target ancestry")
             seen.add(cursor)
             entity = (
-                await session.execute(
-                    select(Entity).where(cast(Any, Entity.id) == cursor).execution_options(populate_existing=True)
-                )
+                await session.execute(_fresh(select(Entity).where(cast(Any, Entity.id) == cursor), lock))
             ).scalar_one_or_none()
             if entity is None or entity.entity_class != EntityClass.STRUCTURAL or entity.status != "active":
                 raise InvalidInputError(message="Administrative target is not active and structural")
@@ -105,8 +108,8 @@ class AdministrativeGrantService:
             raise InvalidInputError(message="Administrative target closure disagrees with ancestry")
         return path
 
-    async def _trusted(self, session: AsyncSession, now: datetime) -> None:
-        path = await self._path(session, self.trusted_root, now)
+    async def _trusted(self, session: AsyncSession, now: datetime, *, lock: bool = False) -> None:
+        path = await self._path(session, self.trusted_root, now, lock=lock)
         if len(path) != 1:
             raise InvalidInputError(message="Administrative control root is not independent")
 
@@ -422,6 +425,8 @@ class AdministrativeGrantService:
         account_root_required: bool = False,
         key_actions: set[str] | None = None,
         key_entity_ids: set[UUID] | None = None,
+        protected_write: bool = False,
+        qualifying_grant_id: UUID | None = None,
     ) -> AdministrativeDecision:
         """Fresh database evaluation; never infer authentication from this result.
 
@@ -430,7 +435,10 @@ class AdministrativeGrantService:
         """
         now = datetime.now(timezone.utc)
         try:
-            path = await self._customer(session, entity_id, now)
+            await self._trusted(session, now, lock=protected_write)
+            path = await self._path(session, entity_id, now, lock=protected_write)
+            if path[-1].id == self.trusted_root:
+                raise InvalidInputError(message="Internal cannot be a customer target")
         except InvalidInputError:
             return AdministrativeDecision(False, AdministrativeDecisionReason.INVALID_TARGET)
         holder = (
@@ -445,23 +453,18 @@ class AdministrativeGrantService:
             key_entity_ids is not None and not {entity_id, checked}.issubset(key_entity_ids)
         ):
             return AdministrativeDecision(False, AdministrativeDecisionReason.OUTSIDE_KEY_BOUNDARY, checked)
-        # One indexed actor query, not every customer/grant in the deployment.
-        grants = (
-            (
-                await session.execute(
-                    select(AdministrativeGrantRecord)
-                    .where(
-                        cast(Any, AdministrativeGrantRecord.user_id) == user_id,
-                        cast(Any, AdministrativeGrantRecord.holder_security_epoch)
-                        == int(holder.session_security_epoch or 0),
-                        cast(Any, AdministrativeGrantRecord.revoked_at).is_(None),
-                    )
-                    .execution_options(populate_existing=True)
-                )
-            )
-            .scalars()
-            .all()
+        if protected_write and qualifying_grant_id is None:
+            raise InvalidInputError(message="A protected write must pin one qualifying grant")
+        statement = select(AdministrativeGrantRecord).where(
+            cast(Any, AdministrativeGrantRecord.user_id) == user_id,
+            cast(Any, AdministrativeGrantRecord.holder_security_epoch) == int(holder.session_security_epoch or 0),
+            cast(Any, AdministrativeGrantRecord.revoked_at).is_(None),
         )
+        if qualifying_grant_id is not None:
+            statement = statement.where(cast(Any, AdministrativeGrantRecord.id) == qualifying_grant_id)
+        grants = (await session.execute(_fresh(statement.limit(65), protected_write))).scalars().all()
+        if len(grants) > 64:
+            return AdministrativeDecision(False, AdministrativeDecisionReason.NO_MATCHING_GRANT, checked)
         for grant in grants:
             if (grant.valid_from is not None and now < grant.valid_from) or (
                 grant.valid_until is not None and now >= grant.valid_until
@@ -469,9 +472,12 @@ class AdministrativeGrantService:
                 continue
             template = (
                 await session.execute(
-                    select(AdministrativeTemplateRevision)
-                    .where(cast(Any, AdministrativeTemplateRevision.id) == grant.template_revision_id)
-                    .execution_options(populate_existing=True)
+                    _fresh(
+                        select(AdministrativeTemplateRevision).where(
+                            cast(Any, AdministrativeTemplateRevision.id) == grant.template_revision_id
+                        ),
+                        protected_write,
+                    )
                 )
             ).scalar_one()
             if (
@@ -489,10 +495,12 @@ class AdministrativeGrantService:
                 continue
             permission = (
                 await session.execute(
-                    select(Permission)
-                    .where(cast(Any, Permission.id) == UUID(permission_ref["id"]))
-                    .options(selectinload(cast(Any, Permission.conditions)))
-                    .execution_options(populate_existing=True)
+                    _fresh(
+                        select(Permission)
+                        .where(cast(Any, Permission.id) == UUID(permission_ref["id"]))
+                        .options(selectinload(cast(Any, Permission.conditions))),
+                        protected_write,
+                    )
                 )
             ).scalar_one_or_none()
             if (
@@ -509,17 +517,21 @@ class AdministrativeGrantService:
             if grant.selector_kind == "group":
                 group = (
                     await session.execute(
-                        select(AdministrativeGroup)
-                        .where(cast(Any, AdministrativeGroup.id) == grant.group_id)
-                        .execution_options(populate_existing=True)
+                        _fresh(
+                            select(AdministrativeGroup).where(cast(Any, AdministrativeGroup.id) == grant.group_id),
+                            protected_write,
+                        )
                     )
                 ).scalar_one()
                 admission = (
                     await session.execute(
-                        select(cast(Any, AdministrativeAdmission.id)).where(
-                            cast(Any, AdministrativeAdmission.group_id) == grant.group_id,
-                            cast(Any, AdministrativeAdmission.customer_root_id) == path[-1].id,
-                            cast(Any, AdministrativeAdmission.closed_at).is_(None),
+                        _fresh(
+                            select(cast(Any, AdministrativeAdmission.id)).where(
+                                cast(Any, AdministrativeAdmission.group_id) == grant.group_id,
+                                cast(Any, AdministrativeAdmission.customer_root_id) == path[-1].id,
+                                cast(Any, AdministrativeAdmission.closed_at).is_(None),
+                            ),
+                            protected_write,
                         )
                     )
                 ).scalar_one_or_none()

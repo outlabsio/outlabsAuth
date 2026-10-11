@@ -232,6 +232,7 @@ class APIKeyService(BaseService[APIKey]):
         event_source: str = "api_key_service.create_api_key",
         record_audit: bool = True,
         record_observability: bool = True,
+        _staff_approval: Any = None,
     ) -> tuple[str, APIKey]:
         """
         Create a new API key.
@@ -301,6 +302,7 @@ class APIKeyService(BaseService[APIKey]):
                 scopes=scopes,
                 entity_id=entity_id,
                 inherit_from_tree=inherit_from_tree,
+                **({"staff_approval": _staff_approval} if _staff_approval is not None else {}),
             )
 
         # Generate API key
@@ -1035,11 +1037,14 @@ class APIKeyService(BaseService[APIKey]):
     ) -> dict[str, int]:
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
-            return await cache_service.get_api_key_auth_snapshot_versions(
-                user_id=user_id,
-                integration_principal_id=integration_principal_id,
-                entity_id=entity_id,
-                credential_hash=credential_hash,
+            return cast(
+                dict[str, int],
+                await cache_service.get_api_key_auth_snapshot_versions(
+                    user_id=user_id,
+                    integration_principal_id=integration_principal_id,
+                    entity_id=entity_id,
+                    credential_hash=credential_hash,
+                ),
             )
 
         if not self.redis_client or not self.redis_client.is_available:
@@ -1264,16 +1269,16 @@ class APIKeyService(BaseService[APIKey]):
         if not self.redis_client or not self.redis_client.is_available:
             return False
 
+        redis_client = self.redis_client
+
         async def publish() -> None:
             cache_service = getattr(self, "cache_service", None)
             if cache_service is not None:
                 await cache_service.bump_api_key_auth_snapshot_version("credential", key_hash)
             else:
-                await self.redis_client.increment(
-                    self._make_auth_snapshot_version_key("credential", key_hash), amount=1
-                )
+                await redis_client.increment(self._make_auth_snapshot_version_key("credential", key_hash), amount=1)
             self._local_snapshot_evict(key_hash)
-            await self.redis_client.delete(self._make_auth_snapshot_key(key_hash))
+            await redis_client.delete(self._make_auth_snapshot_key(key_hash))
 
         await defer_after_commit(session, publish)
         return True
@@ -1438,10 +1443,13 @@ class APIKeyService(BaseService[APIKey]):
             version = await self._entity_relation_cache_version()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None and hasattr(cache_service, "get_entity_relation"):
-            return await cache_service.get_entity_relation(
-                ancestor_id,
-                descendant_id,
-                version=version,
+            return cast(
+                Optional[bool],
+                await cache_service.get_entity_relation(
+                    ancestor_id,
+                    descendant_id,
+                    version=version,
+                ),
             )
 
         cached = await self.redis_client.get(

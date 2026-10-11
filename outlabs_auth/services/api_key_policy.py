@@ -51,6 +51,18 @@ class APIKeyEffectivenessResult:
     ineffective_reasons: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _StaffKeyApproval:
+    issuer: object
+    session: AsyncSession
+    transaction: object
+    owner_id: UUID
+    security_epoch: int
+    entity_id: UUID
+    scopes: tuple[str, ...]
+    inherit_from_tree: bool
+
+
 class APIKeyPolicyService:
     """Grant-time and runtime policy checks for API keys."""
 
@@ -61,6 +73,7 @@ class APIKeyPolicyService:
         observability: Optional["ObservabilityService"] = None,
     ):
         self.config = config
+        self._staff_approval_issuer = object()
         self.permission_service = permission_service
         self.observability = observability
         self._personal_allowed_action_prefixes = [
@@ -111,9 +124,36 @@ class APIKeyPolicyService:
         scopes: Optional[List[str]],
         entity_id: Optional[UUID],
         inherit_from_tree: bool,
+        staff_approval: _StaffKeyApproval | None = None,
     ) -> None:
         """Validate a new key before it is stored."""
         try:
+            if staff_approval is not None:
+                if (
+                    not isinstance(staff_approval, _StaffKeyApproval)
+                    or staff_approval.issuer is not self._staff_approval_issuer
+                    or staff_approval.session is not session
+                    or staff_approval.transaction is not session.sync_session.get_transaction()
+                    or owner is None
+                    or integration_principal is not None
+                    or key_kind != APIKeyKind.PERSONAL
+                    or actor_user_id != owner.id
+                    or staff_approval.owner_id != owner.id
+                    or int(owner.session_security_epoch or 0) != staff_approval.security_epoch
+                    or entity_id != staff_approval.entity_id
+                    or tuple(sorted(set(scopes or []))) != staff_approval.scopes
+                    or inherit_from_tree != staff_approval.inherit_from_tree
+                ):
+                    raise self._policy_error(
+                        "invalid_staff_key_approval", message="Invalid staff credential creation approval"
+                    )
+                for scope in scopes or []:
+                    self._validate_scope_allowlist(scope, key_kind)
+                if inherit_from_tree and not self.config.api_key_personal_allow_inherit_from_tree:
+                    raise self._policy_error(
+                        "inherit_from_tree_disallowed", message="Personal key tree inheritance is disabled"
+                    )
+                return
             await self._validate_key_policy(
                 session,
                 actor_user_id=actor_user_id,

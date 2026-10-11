@@ -80,7 +80,7 @@ async def test_real_a37_upgrade_and_database_immutability():
             assert before == after
             assert (
                 await connection.execute(text(f'SELECT version_num FROM "{schema}".outlabs_auth_alembic_version'))
-            ).scalar_one() == "20261011_0027"
+            ).scalar_one() == "20261011_0028"
             identity = uuid4()
             await connection.execute(
                 text(

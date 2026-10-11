@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Sequence, cast
+from typing import TYPE_CHECKING, Any, Sequence, cast
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
@@ -19,6 +19,9 @@ from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.membership import MembershipService
 from outlabs_auth.services.role import RoleService
+
+if TYPE_CHECKING:
+    from outlabs_auth.services.administrative_authorization import AdministrativeAuthorization
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,28 @@ class HostQueryService:
     auth-owned tables. It provides the stable cross-domain reads that host
     products commonly need while keeping auth schema details inside the library.
     """
+
+    def staff_administration(
+        self, auth: Any, *, trusted_internal_root_id: UUID, allow_unanchored_personal_keys: bool = False
+    ) -> AdministrativeAuthorization:
+        """Create an explicit staff facade; existing host/IAM scope stays intact.
+
+        Configure only from the server's reviewed control-root UUID. The returned
+        facade issues verified request contexts and permission-bound projections.
+        It does not attach to or broaden existing mounted IAM authorization.
+        """
+        from outlabs_auth.services.administrative_authorization import AdministrativeAuthorization
+        from outlabs_auth.services.administrative_grants import AdministrativeGrantService
+
+        if auth.host_query_service is not self:
+            raise ValueError("Staff facade must belong to this Auth installation")
+        return AdministrativeAuthorization(
+            auth,
+            AdministrativeGrantService(
+                trusted_internal_root_id=trusted_internal_root_id, max_depth=auth.max_entity_depth
+            ),
+            allow_unanchored_personal_keys=allow_unanchored_personal_keys,
+        )
 
     def __init__(
         self,
