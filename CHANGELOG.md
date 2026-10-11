@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a37] - 2026-10-11
 
 ### Fixed
 
@@ -29,8 +29,8 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 ### Operational upgrade notes
 
-- This is an unreleased local candidate. Select a new version and qualify the exact
-  published artifacts before changing consumer pins; current a36 is unchanged.
+- This is the local 0.1.0a37 release candidate. Qualify its immutable artifacts and
+  verify the public release before changing consumer pins; published a36 is unchanged.
 - Migration `lock_timeout` defaults to 5 seconds (independent of statement timeout),
   accepts 1ms–30s via `migrate --lock-timeout` / `migration_lock_timeout`, and permits
   at most three lock-only attempts. Repair invalid indexes explicitly before retry.
