@@ -93,14 +93,16 @@ async def test_entity_service_create_update_lookup_and_permission_invalidation(
     assert updated.display_name == "Renamed Root"
 
     assert observability.log_entity_operation.call_count == 2
-    assert [
-        call.kwargs["operation"]
-        for call in observability.log_entity_operation.call_args_list
-    ] == ["create", "update"]
+    assert [call.kwargs["operation"] for call in observability.log_entity_operation.call_args_list] == [
+        "create",
+        "update",
+    ]
 
     # Create and update emit per-entity invalidation but don't nuke globally —
     # neither mutation reshapes the closure table, so descendants' cached tree
     # permissions are unaffected.
+    cache_service.publish_entity_permissions_invalidation.assert_not_awaited()
+    await test_session.commit()
     assert cache_service.publish_entity_permissions_invalidation.await_count == 2
     assert cache_service.publish_all_permissions_invalidation.await_count == 0
 
@@ -204,13 +206,13 @@ async def test_entity_service_move_and_delete_management_paths(
 
     assert membership_service.archive_memberships_for_entity.await_count == 3
     assert role_service.revoke_memberships_for_archived_entities.await_count == 3
-    archived_entity_ids = {
-        call.args[1] for call in membership_service.archive_memberships_for_entity.await_args_list
-    }
+    archived_entity_ids = {call.args[1] for call in membership_service.archive_memberships_for_entity.await_args_list}
     assert archived_entity_ids == {root.id, child.id, grandchild.id}
     assert observability.log_entity_operation.call_args_list[-1].kwargs["operation"] == "delete"
     # 3 creates emit per-entity only; the cascade delete emits both per-entity
     # and global for each of root/child/grandchild (closure table shrinks).
+    cache_service.publish_entity_permissions_invalidation.assert_not_awaited()
+    await test_session.commit()
     assert cache_service.publish_entity_permissions_invalidation.await_count == 6
     assert cache_service.publish_all_permissions_invalidation.await_count == 3
 
@@ -222,20 +224,22 @@ async def test_entity_service_invalidate_permission_cache_scope_switch():
         publish_entity_permissions_invalidation=AsyncMock(),
         publish_all_permissions_invalidation=AsyncMock(),
     )
-    service = EntityService(config=AuthConfig(secret_key="test-secret-key-do-not-use-in-production-1234567890"), redis_client=None)
+    service = EntityService(
+        config=AuthConfig(secret_key="test-secret-key-do-not-use-in-production-1234567890"), redis_client=None
+    )
     service.cache_service = cache_service
 
     entity_id = uuid4()
 
     # Default scope is per-entity — closure table is untouched, so descendants'
     # cached tree checks don't need to be invalidated.
-    await service._invalidate_permission_cache(entity_id)
+    await service._invalidate_permission_cache(None, entity_id)
     assert cache_service.publish_entity_permissions_invalidation.await_count == 1
     assert cache_service.publish_all_permissions_invalidation.await_count == 0
 
     # Global scope is explicit — used by move/delete where ancestor/descendant
     # relationships shift and downstream cache keys must be purged.
-    await service._invalidate_permission_cache(entity_id, scope_global=True)
+    await service._invalidate_permission_cache(None, entity_id, scope_global=True)
     assert cache_service.publish_entity_permissions_invalidation.await_count == 2
     assert cache_service.publish_all_permissions_invalidation.await_count == 1
 

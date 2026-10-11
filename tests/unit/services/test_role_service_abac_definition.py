@@ -248,12 +248,12 @@ async def test_role_service_helper_paths_cover_permission_resolution_and_cache_i
         publish_all_permissions_invalidation=AsyncMock(),
         publish_user_permissions_invalidation=AsyncMock(),
     )
-    await role_service._invalidate_all_permissions_cache()
-    await role_service._invalidate_user_permissions_cache(user.id)
+    await role_service._invalidate_all_permissions_cache(test_session)
+    await role_service._invalidate_user_permissions_cache(test_session, user.id)
+    role_service.cache_service.publish_all_permissions_invalidation.assert_not_awaited()
+    await test_session.commit()
     role_service.cache_service.publish_all_permissions_invalidation.assert_awaited_once()
-    role_service.cache_service.publish_user_permissions_invalidation.assert_awaited_once_with(
-        str(user.id)
-    )
+    role_service.cache_service.publish_user_permissions_invalidation.assert_awaited_once_with(str(user.id))
 
     snapshot = await role_service._build_user_role_audit_snapshot(test_session, membership)
     assert snapshot["role_name"] == role.name

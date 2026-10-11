@@ -141,7 +141,7 @@ async def test_usage_pipeline_without_rate_windows(redis_client):
 @pytest.mark.unit
 def test_local_snapshot_cache_disabled_by_default():
     svc = _service(local_ttl=0.0)
-    svc._local_snapshot_put("h1", {"key_id": "k1"})
+    svc._local_snapshot_put("h1", {"key_id": "k1", "validity_schema": 1, "valid_until": None})
     assert svc._local_snapshot_get("h1") is None
 
 
@@ -159,7 +159,7 @@ def test_configured_api_key_rate_limits_fail_closed_when_redis_is_unavailable():
 @pytest.mark.unit
 def test_local_snapshot_cache_hit_and_evict():
     svc = _service(local_ttl=5.0)
-    snap = {"key_id": "k1", "status": "active"}
+    snap = {"key_id": "k1", "status": "active", "validity_schema": 1, "valid_until": None}
     svc._local_snapshot_put("h1", snap)
     assert svc._local_snapshot_get("h1") is snap
     svc._local_snapshot_evict("h1")
@@ -174,7 +174,7 @@ def test_local_snapshot_cache_expires(monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(mod.time, "monotonic", lambda: clock["t"])
 
-    svc._local_snapshot_put("h1", {"key_id": "k1"})
+    svc._local_snapshot_put("h1", {"key_id": "k1", "validity_schema": 1, "valid_until": None})
     assert svc._local_snapshot_get("h1") is not None
     clock["t"] = 1003.0  # 3s elapsed > 2s TTL
     assert svc._local_snapshot_get("h1") is None
@@ -183,7 +183,13 @@ def test_local_snapshot_cache_expires(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_get_snapshot_serves_hot_key_from_local_cache(monkeypatch):
-    snapshot = {"key_id": "k1", "status": APIKeyStatus.ACTIVE.value, "expires_at": None}
+    snapshot = {
+        "key_id": "k1",
+        "status": APIKeyStatus.ACTIVE.value,
+        "expires_at": None,
+        "validity_schema": 1,
+        "valid_until": None,
+    }
     fake = _FakeRedis(snapshot)
     svc = _service(local_ttl=5.0, redis_client=fake)
     # Version revalidation is covered elsewhere; force a match for this read path.
@@ -201,7 +207,13 @@ async def test_get_snapshot_serves_hot_key_from_local_cache(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_get_snapshot_reads_redis_each_time_when_cache_disabled(monkeypatch):
-    snapshot = {"key_id": "k1", "status": APIKeyStatus.ACTIVE.value, "expires_at": None}
+    snapshot = {
+        "key_id": "k1",
+        "status": APIKeyStatus.ACTIVE.value,
+        "expires_at": None,
+        "validity_schema": 1,
+        "valid_until": None,
+    }
     fake = _FakeRedis(snapshot)
     svc = _service(local_ttl=0.0, redis_client=fake)  # in-process cache disabled
     monkeypatch.setattr(svc, "_auth_snapshot_versions_match", AsyncMock(return_value=True))

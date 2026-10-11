@@ -69,6 +69,35 @@ async def admin_user(auth_instance: EnterpriseRBAC) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_deleted_email_change_via_http_keeps_reservation(
+    auth_instance: EnterpriseRBAC,
+    client: httpx.AsyncClient,
+    admin_user: dict,
+):
+    async with auth_instance.get_session() as session:
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"reserved-http-{uuid.uuid4().hex}@example.com",
+            password="TestPass123!",
+        )
+        user_id, reserved = user.id, user.email
+        await auth_instance.user_service.delete_user(session, user_id)
+        await session.commit()
+    response = await client.patch(
+        f"/v1/users/{user_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"email": "replacement-http@example.com", "first_name": "Changed"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"] == "INVALID_INPUT"
+    async with auth_instance.get_session() as session:
+        actual = await auth_instance.user_service.get_user_by_id(session, user_id)
+        assert actual.email == reserved
+        assert actual.first_name is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_user_audit_events_capture_status_delete_and_restore(
     auth_instance: EnterpriseRBAC,
     client: httpx.AsyncClient,

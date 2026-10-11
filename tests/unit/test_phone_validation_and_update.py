@@ -38,7 +38,7 @@ async def test_update_user_fields_sets_phone_and_clears_verification():
         root_entity_id=None,
     )
 
-    service.get_by_id = AsyncMock(return_value=user)
+    service.get_user_by_id = AsyncMock(return_value=user)
     service.update = AsyncMock(side_effect=lambda _session, updated: updated)
     service.user_audit_service = None
 
@@ -70,7 +70,7 @@ async def test_update_user_fields_clears_phone_when_null_provided():
         root_entity_id=None,
     )
 
-    service.get_by_id = AsyncMock(return_value=user)
+    service.get_user_by_id = AsyncMock(return_value=user)
     service.update = AsyncMock(side_effect=lambda _session, updated: updated)
     service.user_audit_service = None
 

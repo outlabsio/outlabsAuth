@@ -34,6 +34,7 @@ from outlabs_auth.models.sql.enums import (
 from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal, IntegrationPrincipalRole
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.services import cache_validity
 
 if TYPE_CHECKING:
     from outlabs_auth.observability.service import ObservabilityService
@@ -182,7 +183,9 @@ class APIKeyPolicyService:
     ) -> bool:
         """Check whether a stored API key is still usable right now."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None:
                 logger.warning("API key %s rejected because principal is missing", api_key.prefix)
                 self._log_policy_decision(
@@ -207,7 +210,7 @@ class APIKeyPolicyService:
                 )
                 return False
         else:
-            owner = await session.get(User, api_key.owner_id)
+            owner = await session.get(User, api_key.owner_id, populate_existing=True)
             if owner is None:
                 logger.warning("API key %s rejected because owner is missing", api_key.prefix)
                 self._log_policy_decision(
@@ -233,9 +236,11 @@ class APIKeyPolicyService:
                 return False
 
         if api_key.entity_id is None:
+            cache_validity.record(api_key.key_hash, None)
             return True
 
-        entity = await session.get(Entity, api_key.entity_id)
+        observed_at = cache_validity.now()
+        entity = await session.get(Entity, api_key.entity_id, populate_existing=True)
         if entity is None:
             logger.warning("API key %s rejected because anchor entity is missing", api_key.prefix)
             self._log_policy_decision(
@@ -261,6 +266,7 @@ class APIKeyPolicyService:
                 entity_id=str(api_key.entity_id),
             )
             return False
+        cache_validity.observe_windows(api_key.key_hash, [entity], observed_at=observed_at)
         return True
 
     async def validate_runtime_permission(
@@ -273,7 +279,9 @@ class APIKeyPolicyService:
     ) -> bool:
         """Check the current owner permission side of runtime intersection."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None or not principal.is_active():
                 return False
             from outlabs_auth.services.api_key import APIKeyService
@@ -356,12 +364,21 @@ class APIKeyPolicyService:
             owners_by_id = {owner.id: owner for owner in owners_result.scalars().all()}
         if principal_ids:
             principals_result = await session.execute(
-                select(IntegrationPrincipal).where(cast(Any, IntegrationPrincipal.id).in_(principal_ids))
+                select(IntegrationPrincipal, Entity)
+                .outerjoin(Entity, cast(Any, Entity.id) == IntegrationPrincipal.anchor_entity_id)
+                .where(cast(Any, IntegrationPrincipal.id).in_(principal_ids))
             )
-            principals_by_id = {principal.id: principal for principal in principals_result.scalars().all()}
-        if entity_ids:
-            entities_result = await session.execute(select(Entity).where(cast(Any, Entity.id).in_(entity_ids)))
-            entities_by_id = {entity.id: entity for entity in entities_result.scalars().all()}
+            # Load current anchors with their principals rather than relying on
+            # a memo carried over from setup/a prior transaction. This saves a
+            # round trip on principal inventory while retaining cold budgets.
+            for principal, anchor in principals_result.all():
+                principals_by_id[principal.id] = principal
+                if anchor is not None:
+                    entities_by_id[anchor.id] = anchor
+        missing_entity_ids = [entity_id for entity_id in entity_ids if entity_id not in entities_by_id]
+        if missing_entity_ids:
+            entities_result = await session.execute(select(Entity).where(cast(Any, Entity.id).in_(missing_entity_ids)))
+            entities_by_id.update({entity.id: entity for entity in entities_result.scalars().all()})
 
         from outlabs_auth.services.api_key import APIKeyService
 
@@ -1166,7 +1183,7 @@ class APIKeyPolicyService:
                 details={"integration_principal_id": str(integration_principal.id)},
             )
 
-        entity = await session.get(Entity, integration_principal.anchor_entity_id)
+        entity = await session.get(Entity, integration_principal.anchor_entity_id, populate_existing=True)
         if entity is None:
             raise self._policy_error(
                 "entity_anchor_not_found",

@@ -69,6 +69,10 @@ class AuthConfig(BaseModel):
         default="60s",
         description="PostgreSQL statement_timeout applied to auto-migration and CLI migration sessions",
     )
+    migration_lock_timeout: str = Field(
+        default="5s",
+        description="Positive PostgreSQL migration lock wait, between 1ms and 30s; at most three lock-only retries",
+    )
     initialize_timeout_seconds: float = Field(
         default=120.0,
         gt=0,

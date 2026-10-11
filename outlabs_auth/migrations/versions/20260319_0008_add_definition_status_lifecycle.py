@@ -12,6 +12,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 
 from alembic import context, op
+from outlabs_auth.migrations.safety import index_exists
 
 # revision identifiers, used by Alembic.
 revision: str = "20260319_0008"
@@ -33,17 +34,11 @@ def _table_exists(schema: str | None, table_name: str) -> bool:
 def _column_exists(schema: str | None, table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return column_name in {
-        column["name"] for column in inspector.get_columns(table_name, schema=schema)
-    }
+    return column_name in {column["name"] for column in inspector.get_columns(table_name, schema=schema)}
 
 
 def _index_exists(schema: str | None, table_name: str, index_name: str) -> bool:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    return index_name in {
-        index["name"] for index in inspector.get_indexes(table_name, schema=schema)
-    }
+    return index_exists(op.get_bind(), schema, table_name, index_name)
 
 
 def _qualified_name(schema: str | None, table_name: str) -> str:
@@ -104,9 +99,7 @@ def upgrade() -> None:
             schema=schema,
         )
 
-    if _table_exists(schema, "permissions") and not _index_exists(
-        schema, "permissions", "ix_permissions_status"
-    ):
+    if _table_exists(schema, "permissions") and not _index_exists(schema, "permissions", "ix_permissions_status"):
         op.create_index(
             "ix_permissions_status",
             "permissions",
@@ -119,9 +112,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     schema = _current_schema()
 
-    if _table_exists(schema, "permissions") and _index_exists(
-        schema, "permissions", "ix_permissions_status"
-    ):
+    if _table_exists(schema, "permissions") and _index_exists(schema, "permissions", "ix_permissions_status"):
         op.drop_index(
             "ix_permissions_status",
             table_name="permissions",

@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm import selectinload
 
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, has_pending_cache_changes, mark_authority_change
+from outlabs_auth.services import cache_validity, request_cache
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     AuthenticationInfrastructureError,
@@ -111,6 +113,13 @@ class APIKeyService(BaseService[APIKey]):
         # config.api_key_local_snapshot_cache_ttl). Maps key_hash -> (expiry_monotonic, snapshot).
         self._local_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._local_snapshot_cache_max = 50000
+        self._local_snapshot_generation = getattr(redis_client, "authority_cache_generation", 0)
+
+    def _sync_local_snapshot_generation(self) -> None:
+        generation = getattr(self.redis_client, "authority_cache_generation", 0)
+        if generation != self._local_snapshot_generation:
+            self._local_snapshot_cache.clear()
+            self._local_snapshot_generation = generation
 
     def _local_snapshot_cache_enabled(self) -> bool:
         return (getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0) > 0
@@ -124,11 +133,12 @@ class APIKeyService(BaseService[APIKey]):
         """
         if not self._local_snapshot_cache_enabled():
             return None
+        self._sync_local_snapshot_generation()
         entry = self._local_snapshot_cache.get(key_hash)
         if entry is None:
             return None
         expires_at, snapshot = entry
-        if time.monotonic() >= expires_at:
+        if time.monotonic() >= expires_at or not cache_validity.is_fresh(snapshot):
             self._local_snapshot_cache.pop(key_hash, None)
             return None
         return snapshot
@@ -137,6 +147,7 @@ class APIKeyService(BaseService[APIKey]):
         ttl = getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0
         if ttl <= 0:
             return
+        self._sync_local_snapshot_generation()
         cache = self._local_snapshot_cache
         if len(cache) >= self._local_snapshot_cache_max:
             # Coarse bound to avoid unbounded growth; entries are short-lived anyway.
@@ -153,13 +164,15 @@ class APIKeyService(BaseService[APIKey]):
     ) -> Optional[ResolvedAPIKeyOwner]:
         """Resolve the concrete owner record for a stored API key."""
         if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            principal = await session.get(
+                IntegrationPrincipal, api_key.integration_principal_id, populate_existing=True
+            )
             if principal is None:
                 return None
             return ResolvedAPIKeyOwner(owner_type="integration_principal", integration_principal=principal)
 
         if api_key.owner_id is not None:
-            user = await session.get(User, api_key.owner_id)
+            user = await session.get(User, api_key.owner_id, populate_existing=True)
             if user is None:
                 return None
             return ResolvedAPIKeyOwner(owner_type="user", user=user)
@@ -415,11 +428,21 @@ class APIKeyService(BaseService[APIKey]):
         prefix = api_key_string[:16]
         key_hash = APIKey.hash_key(api_key_string)
 
+        # Observe global/key versions BEFORE the first authority-bearing DB read.
+        # A writer that commits while authentication is paused must make the
+        # eventual snapshot stale, rather than relabel its old authority.
+        observe_snapshot = bool(getattr(self.config, "enable_caching", False)) and not has_pending_cache_changes(
+            session
+        )
+        observed = await self._current_auth_snapshot_versions(credential_hash=key_hash) if observe_snapshot else {}
+        session.info.setdefault("outlabs_auth.snapshot_observations", {}).pop(key_hash, None)
+
         # Find API key by prefix and verify hash
         api_key = await self.get_one(
             session,
             APIKey.prefix == prefix,
             APIKey.key_hash == key_hash,
+            populate_existing=True,
         )
 
         if not api_key:
@@ -436,6 +459,23 @@ class APIKeyService(BaseService[APIKey]):
                 reason=f"status_{getattr(api_key.status, 'value', api_key.status)}",
             )
             return None, 0
+
+        owner_versions = (
+            await self._current_auth_snapshot_versions(
+                user_id=str(api_key.resolved_owner_id) if api_key.owner_type == "user" else None,
+                integration_principal_id=(
+                    str(api_key.resolved_owner_id) if api_key.owner_type == "integration_principal" else None
+                ),
+                entity_id=str(api_key.entity_id) if api_key.entity_id else None,
+                credential_hash=key_hash,
+            )
+            if observe_snapshot
+            else {}
+        )
+        # Keep the first global/key observation; owner versions precede owner,
+        # policy, scope and effective-permission reads.
+        if observed and owner_versions and not has_pending_cache_changes(session):
+            session.info["outlabs_auth.snapshot_observations"][key_hash] = {**owner_versions, **observed}
 
         if self.policy_service is not None:
             runtime_allowed = await self.policy_service.validate_runtime_use(session, api_key=api_key)
@@ -991,6 +1031,7 @@ class APIKeyService(BaseService[APIKey]):
         user_id: Optional[str] = None,
         integration_principal_id: Optional[str] = None,
         entity_id: Optional[str] = None,
+        credential_hash: Optional[str] = None,
     ) -> dict[str, int]:
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
@@ -998,6 +1039,7 @@ class APIKeyService(BaseService[APIKey]):
                 user_id=user_id,
                 integration_principal_id=integration_principal_id,
                 entity_id=entity_id,
+                credential_hash=credential_hash,
             )
 
         if not self.redis_client or not self.redis_client.is_available:
@@ -1013,13 +1055,24 @@ class APIKeyService(BaseService[APIKey]):
             )
         if entity_id:
             versions[f"entity:{entity_id}"] = await self._get_auth_snapshot_version("entity", entity_id)
+        if credential_hash:
+            versions[f"credential:{credential_hash}"] = await self._get_auth_snapshot_version(
+                "credential", credential_hash
+            )
         return versions
+
+    def get_api_key_auth_observation(self, session: AsyncSession, api_key_string: str) -> Optional[dict[str, int]]:
+        """Versions observed before credential/owner authority was loaded."""
+        if has_pending_cache_changes(session):
+            return None
+        observed = session.info.get("outlabs_auth.snapshot_observations", {}).get(APIKey.hash_key(api_key_string))
+        return dict(observed) if isinstance(observed, dict) else None
 
     async def _entity_relation_cache_version(self) -> int:
         versions = await self._current_auth_snapshot_versions()
         return int(versions.get("global", 0))
 
-    async def _auth_snapshot_versions_match(self, snapshot: dict[str, Any]) -> bool:
+    async def _auth_snapshot_versions_match(self, snapshot: dict[str, Any], key_hash: str) -> bool:
         snapshot_versions = snapshot.get("versions")
         if not isinstance(snapshot_versions, dict):
             return False
@@ -1030,6 +1083,7 @@ class APIKeyService(BaseService[APIKey]):
                 str(snapshot["integration_principal_id"]) if snapshot.get("integration_principal_id") else None
             ),
             entity_id=str(snapshot["entity_id"]) if snapshot.get("entity_id") else None,
+            credential_hash=key_hash,
         )
         try:
             normalized_snapshot_versions = {str(key): int(value) for key, value in snapshot_versions.items()}
@@ -1079,6 +1133,10 @@ class APIKeyService(BaseService[APIKey]):
         if not isinstance(snapshot, dict):
             return None
 
+        if not cache_validity.is_fresh(snapshot):
+            await self.redis_client.delete(cache_key)
+            return None
+
         if snapshot.get("status") != APIKeyStatus.ACTIVE.value:
             await self.redis_client.delete(cache_key)
             return None
@@ -1088,7 +1146,7 @@ class APIKeyService(BaseService[APIKey]):
             await self.redis_client.delete(cache_key)
             return None
 
-        if not await self._auth_snapshot_versions_match(snapshot):
+        if not await self._auth_snapshot_versions_match(snapshot, key_hash):
             await self.redis_client.delete(cache_key)
             return None
 
@@ -1129,12 +1187,37 @@ class APIKeyService(BaseService[APIKey]):
             str(auth_result["integration_principal_id"]) if auth_result.get("integration_principal_id") else None
         )
         entity_id = str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None
-        versions = await self._current_auth_snapshot_versions(
-            user_id=user_id,
-            integration_principal_id=integration_principal_id,
-            entity_id=entity_id,
-        )
+        observed = auth_result.get("_outlabs_snapshot_versions")
+        expected_scopes = {"global", f"credential:{key_hash}"}
+        if user_id:
+            expected_scopes.add(f"user:{user_id}")
+        if integration_principal_id:
+            expected_scopes.add(f"integration_principal:{integration_principal_id}")
+        if entity_id:
+            expected_scopes.add(f"entity:{entity_id}")
+        if not isinstance(observed, dict) or set(observed) != expected_scopes:
+            return False
+        if any(type(value) is not int or value < 0 for value in observed.values()):
+            return False
+        # Never read fresh versions here: effective permissions may have been
+        # computed much earlier by a permission dependency.
+        versions = dict(observed)
+        if user_id and not request_cache.contains(("authority_deadline", user_id)):
+            # Custom permission suppliers without a time proof cannot lease authority.
+            return False
+        if entity_id and not request_cache.contains(("authority_deadline", key_hash)):
+            return False
+        bounds = [cache_validity.deadline(subject) for subject in (user_id, key_hash) if subject]
+        expires_at = getattr(api_key, "expires_at", None)
+        if isinstance(expires_at, datetime):
+            bounds.append(expires_at.timestamp())
+        valid_until = min((bound for bound in bounds if bound is not None), default=None)
+        ttl = cache_validity.bounded_ttl(self._auth_snapshot_ttl(), valid_until)
+        if ttl <= 0:
+            return False
         snapshot: dict[str, Any] = {
+            "validity_schema": 1,
+            "valid_until": valid_until,
             "key_id": str(api_key.id),
             "key_prefix": getattr(api_key, "prefix", api_key_string[:16]),
             "status": self._normalize_enum(getattr(api_key, "status", APIKeyStatus.ACTIVE)),
@@ -1162,21 +1245,38 @@ class APIKeyService(BaseService[APIKey]):
             await self.redis_client.set(
                 self._make_auth_snapshot_key(key_hash),
                 snapshot,
-                ttl=self._auth_snapshot_ttl(),
+                ttl=ttl,
             )
         )
         if written:
             self._local_snapshot_put(key_hash, snapshot)
         return written
 
-    async def invalidate_api_key_auth_snapshot(self, api_key: APIKey) -> bool:
-        """Invalidate the cached auth snapshot for a concrete API key row."""
-        # Evict the per-process copy first (best-effort; only affects this process —
-        # other processes age out via the local-cache TTL).
-        self._local_snapshot_evict(api_key.key_hash)
+    async def invalidate_api_key_auth_snapshot(self, api_key: APIKey, session: Optional[AsyncSession] = None) -> bool:
+        """Fence paused snapshot writers after commit, then evict the shared row.
+
+        Explicit cache purges without a transaction run immediately. Transactional
+        callers receive scheduling acknowledgement; publication is awaited by commit.
+        """
+        key_hash = api_key.key_hash
+        mark_authority_change(session)
+        self._local_snapshot_evict(key_hash)
         if not self.redis_client or not self.redis_client.is_available:
             return False
-        return bool(await self.redis_client.delete(self._make_auth_snapshot_key(api_key.key_hash)))
+
+        async def publish() -> None:
+            cache_service = getattr(self, "cache_service", None)
+            if cache_service is not None:
+                await cache_service.bump_api_key_auth_snapshot_version("credential", key_hash)
+            else:
+                await self.redis_client.increment(
+                    self._make_auth_snapshot_version_key("credential", key_hash), amount=1
+                )
+            self._local_snapshot_evict(key_hash)
+            await self.redis_client.delete(self._make_auth_snapshot_key(key_hash))
+
+        await defer_after_commit(session, publish)
+        return True
 
     # Fixed-window TTLs (seconds) for the per-key rate-limit counters.
     _RATE_LIMIT_WINDOW_TTLS: tuple[tuple[str, int], ...] = (
@@ -1326,13 +1426,16 @@ class APIKeyService(BaseService[APIKey]):
         self,
         ancestor_id: str,
         descendant_id: str,
+        *,
+        version: Optional[int] = None,
     ) -> Optional[bool]:
         if not getattr(self.config, "enable_caching", False):
             return None
         if not self.redis_client or not self.redis_client.is_available:
             return None
 
-        version = await self._entity_relation_cache_version()
+        if version is None:
+            version = await self._entity_relation_cache_version()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None and hasattr(cache_service, "get_entity_relation"):
             return await cache_service.get_entity_relation(
@@ -1355,13 +1458,14 @@ class APIKeyService(BaseService[APIKey]):
         ancestor_id: str,
         descendant_id: str,
         result: bool,
+        *,
+        version: int,
     ) -> bool:
         if not getattr(self.config, "enable_caching", False):
             return False
         if not self.redis_client or not self.redis_client.is_available:
             return False
 
-        version = await self._entity_relation_cache_version()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None and hasattr(cache_service, "set_entity_relation"):
             return bool(
@@ -1946,7 +2050,7 @@ class APIKeyService(BaseService[APIKey]):
             event_source=event_source,
             updated_fields=sorted(updates.keys()),
         )
-        await self.invalidate_api_key_auth_snapshot(api_key)
+        await self.invalidate_api_key_auth_snapshot(api_key, session)
         return api_key
 
     async def rotate_api_key(
@@ -2076,9 +2180,18 @@ class APIKeyService(BaseService[APIKey]):
 
         # Check tree access if enabled
         if api_key.inherit_from_tree:
-            cached_relation = await self.get_cached_entity_relation(
-                str(api_key.entity_id),
-                str(target_entity_id),
+            use_cache = (
+                bool(getattr(self.config, "enable_caching", False))
+                and self.redis_client is not None
+                and self.redis_client.is_available
+                and not has_pending_cache_changes(session)
+            )
+            # Bind both cache lookup and DB fallback to the pre-query epoch.
+            version = await self._entity_relation_cache_version() if use_cache else None
+            cached_relation = (
+                await self.get_cached_entity_relation(str(api_key.entity_id), str(target_entity_id), version=version)
+                if use_cache
+                else None
             )
             if cached_relation is not None:
                 return cached_relation
@@ -2092,11 +2205,13 @@ class APIKeyService(BaseService[APIKey]):
             result = await session.execute(stmt)
             closure = result.scalar_one_or_none()
             has_relation = closure is not None
-            await self.set_cached_entity_relation(
-                str(api_key.entity_id),
-                str(target_entity_id),
-                has_relation,
-            )
+            if use_cache and version is not None:
+                await self.set_cached_entity_relation(
+                    str(api_key.entity_id),
+                    str(target_entity_id),
+                    has_relation,
+                    version=version,
+                )
 
             if has_relation:
                 return True
@@ -2121,7 +2236,7 @@ class APIKeyService(BaseService[APIKey]):
         # Scopes and IP whitelist are deleted via cascade
         await session.delete(api_key)
         await session.flush()
-        await self.invalidate_api_key_auth_snapshot(api_key)
+        await self.invalidate_api_key_auth_snapshot(api_key, session)
 
         logger.info(f"Deleted API key: {api_key.prefix}")
         self._log_api_key_lifecycle(
@@ -2150,7 +2265,7 @@ class APIKeyService(BaseService[APIKey]):
 
         api_key.status = APIKeyStatus.REVOKED
         await session.flush()
-        await self.invalidate_api_key_auth_snapshot(api_key)
+        await self.invalidate_api_key_auth_snapshot(api_key, session)
 
         if self.user_audit_service is not None and owner is not None and record_audit:
             await self._record_api_key_audit_event(

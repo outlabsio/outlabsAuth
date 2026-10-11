@@ -16,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import OutlabsAuthException
+from outlabs_auth.core.session_security import epoch, proof_is_current
+from outlabs_auth.services.auth import AuthService
 from outlabs_auth.frontend.types import FrontendFlow
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.security import generate_nonce, generate_pkce_pair
@@ -95,7 +97,7 @@ def _associate_error_code(exc: BaseException) -> str:
             return "provider_conflict"
         if "state" in detail or "binding" in detail or "authenticated user id" in detail:
             return "invalid_state"
-        if "user not found" in detail:
+        if "user not found" in detail or "session" in detail:
             return "auth"
         if "cancel" in detail:
             return "cancelled"
@@ -174,7 +176,22 @@ def get_oauth_associate_router(
         else:
             authorize_redirect_url = str(request.url_for(callback_route_name))
 
-        state_data = {"sub": user_id}
+        user = auth_context.get("user")
+        proof = auth_context.get("metadata") or {}
+        if (
+            auth_context.get("source") != "jwt"
+            or user is None
+            or not user.can_authenticate()
+            or not proof_is_current(proof, user)
+            or AuthService._token_is_stale(proof, user.last_password_change)
+        ):
+            raise HTTPException(status_code=401, detail="A current user session is required to link a login method")
+        state_data = {
+            "sub": user_id,
+            "security_epoch": epoch(user),
+            "proof_iat": proof.get("iat_us", proof.get("iat_ms", proof.get("iat"))),
+            "proof_precision": "us" if "iat_us" in proof else "ms" if "iat_ms" in proof else "s",
+        }
         if app_key:
             state_data["app"] = app_key
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
@@ -313,6 +330,7 @@ def get_oauth_associate_router(
                 token=token,
                 user_uuid=user_uuid,
                 state_app=state_app,
+                initiating_proof=state_data,
                 effective_success_url=effective_success_url,
                 injected_token=access_token_state is not None,
             )
@@ -329,6 +347,7 @@ def get_oauth_associate_router(
         token: Optional[dict[str, Any]],
         user_uuid: UUID,
         state_app: Optional[str],
+        initiating_proof: dict[str, Any],
         effective_success_url: Optional[str],
         injected_token: bool,
     ) -> Union[SocialAccountResponse, RedirectResponse]:
@@ -372,7 +391,10 @@ def get_oauth_associate_router(
 
         user_info = await get_oauth_user_info(oauth_client, token)
 
-        user = await auth.user_service.get_user_by_id(session, user_uuid)
+        # All lifecycle/security writers serialize on this user row. The
+        # provider round trips have finished before taking the lock; retain it
+        # through the link insert, host hook and explicit commit.
+        user = await auth.user_service.get_user_by_id(session, user_uuid, for_update=True)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -381,6 +403,16 @@ def get_oauth_associate_router(
 
         now = datetime.now(timezone.utc)
         token_expires_at = _normalize_expires_at(token.get("expires_at"))
+        proof_timestamp = initiating_proof.get("proof_iat", initiating_proof.get("iat"))
+        timestamp_key = {"us": "iat_us", "ms": "iat_ms"}.get(initiating_proof.get("proof_precision"), "iat")
+        proof_claims = {timestamp_key: proof_timestamp}
+        if (
+            not user.can_authenticate()
+            or not proof_is_current(initiating_proof, user)
+            or AuthService._token_is_stale(proof_claims, user.last_password_change)
+        ):
+            raise HTTPException(status_code=401, detail="The session that initiated this link is no longer valid")
+
         store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
         provider_access_token = encrypt_provider_token(auth, token["access_token"]) if store_provider_tokens else None
         provider_refresh_token = (

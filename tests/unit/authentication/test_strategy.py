@@ -76,6 +76,7 @@ async def test_jwt_strategy_authenticates_active_user():
         session,
         "user-123",
         load_root_entity=True,
+        populate_existing=True,
     )
 
 

@@ -20,7 +20,7 @@ from outlabs_auth.models.sql.oauth_state import OAuthState
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth import get_oauth_router
 from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
-from outlabs_auth.routers.oauth_state_store import oauth_state_cookie_name
+from outlabs_auth.routers.oauth_state_store import oauth_state_cookie_name, stored_state
 
 
 class DummyOAuthClient:
@@ -131,7 +131,9 @@ async def _store_oauth_state(
 
 async def _oauth_state_cookies(auth: SimpleRBAC, state: str, provider: str, flow: str = "login") -> dict[str, str]:
     async with auth.get_session() as session:
-        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        record = (
+            await session.execute(select(OAuthState).where(OAuthState.state.in_([state, stored_state(state)])))
+        ).scalar_one()
     assert record.browser_binding is not None
     return {oauth_state_cookie_name(provider, flow): record.browser_binding}
 
@@ -285,7 +287,9 @@ async def test_oidc_nonce_mismatch_is_rejected_after_state_and_pkce_are_consumed
     state = parse_qs(urlparse(response.authorization_url).query)["state"][0]
     cookies = await _oauth_state_cookies(auth_instance, state, "openid")
     async with auth_instance.get_session() as session:
-        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        record = (
+            await session.execute(select(OAuthState).where(OAuthState.state.in_([state, stored_state(state)])))
+        ).scalar_one()
         assert record.code_verifier
         assert record.nonce == oauth_client.authorization_extras["nonce"]
         assert record.browser_binding != record.nonce
@@ -305,7 +309,9 @@ async def test_oidc_nonce_mismatch_is_rejected_after_state_and_pkce_are_consumed
 
     assert oauth_client.exchange_calls[0][2] == code_verifier
     async with auth_instance.get_session() as session:
-        consumed = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        consumed = (
+            await session.execute(select(OAuthState).where(OAuthState.state.in_([state, stored_state(state)])))
+        ).scalar_one()
         assert consumed.used_at is not None
 
 
@@ -444,7 +450,7 @@ async def test_oauth_associate_authorize_embeds_authenticated_user_in_state(
             request=SimpleNamespace(),
             response=Response(),
             session=session,
-            auth_context={"user_id": user_id},
+            auth_context={"user_id": user_id, "source": "jwt", "user": user, "metadata": {"iat": 1791700000}},
             scopes=["user:email"],
         )
     params = parse_qs(urlparse(response.authorization_url).query)

@@ -1,6 +1,7 @@
 """One-time, browser-bound OAuth state records used by OAuth router factories."""
 
 import hmac
+import hashlib
 import re
 import secrets
 from typing import Any, Optional, cast
@@ -13,6 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth.models.sql.oauth_state import OAuthState
 
 OAUTH_STATE_TTL_SECONDS = 600
+
+
+def stored_state(state: str) -> str:
+    """Opaque lookup key; signed proof claims must not exceed the SQL key size."""
+    return "sha256:" + hashlib.sha256(state.encode()).hexdigest()
 
 
 def oauth_state_cookie_name(provider: str, flow: str, app: Optional[str] = None) -> str:
@@ -67,7 +73,7 @@ async def issue_oauth_state(
     binding = secrets.token_urlsafe(32)
     session.add(
         OAuthState(
-            state=state,
+            state=stored_state(state),
             provider=provider,
             user_id=user_id,
             code_verifier=code_verifier,
@@ -116,7 +122,7 @@ async def consume_oauth_state(
     result = await session.execute(
         select(OAuthState)
         .where(
-            cast(Any, OAuthState.state) == state,
+            cast(Any, OAuthState.state).in_([stored_state(state), state]),
             cast(Any, OAuthState.provider) == provider,
         )
         .with_for_update()

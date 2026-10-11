@@ -11,6 +11,7 @@ for a role created by the immediately preceding request. The fix:
 unit of work just before ``http.response.start`` is forwarded.
 """
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -22,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.core.transaction_callbacks import defer_after_commit
 from outlabs_auth.models.sql.permission import Permission
 
 
@@ -40,6 +42,7 @@ async def simple_auth(test_engine) -> SimpleRBAC:
 def _build_app(auth: SimpleRBAC, *, instrument: bool) -> FastAPI:
     """Minimal host app exercising ``auth.uow`` the way library routers do."""
     app = FastAPI()
+    app.state.cache_publications = []
 
     @app.post("/things", status_code=201)
     async def create_thing(session: AsyncSession = Depends(auth.uow)):
@@ -49,6 +52,12 @@ def _build_app(auth: SimpleRBAC, *, instrument: bool) -> FastAPI:
         )
         session.add(permission)
         await session.flush()
+
+        async def publish():
+            await asyncio.sleep(0)
+            app.state.cache_publications.append(permission.name)
+
+        await defer_after_commit(session, publish)
         return {"name": permission.name}
 
     @app.post("/things-conflict", status_code=201)
@@ -81,9 +90,7 @@ async def _visible_from_second_connection(test_engine, name: str) -> bool:
     rows are visible here."""
     other_connections = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     async with other_connections() as session:
-        row = (
-            await session.execute(select(Permission).where(Permission.name == name))
-        ).scalar_one_or_none()
+        row = (await session.execute(select(Permission).where(Permission.name == name))).scalar_one_or_none()
     return row is not None
 
 
@@ -109,6 +116,7 @@ async def _drive_post_and_check_visibility(app: FastAPI, test_engine) -> dict[st
                 name = json.loads(bytes(body))["name"]
                 seen["name"] = name
                 seen["visible"] = await _visible_from_second_connection(test_engine, name)
+                seen["published"] = name in app.state.cache_publications
 
     scope = {
         "type": "http",
@@ -135,6 +143,7 @@ async def test_write_is_committed_before_response_reaches_client(test_engine, si
     seen = await _drive_post_and_check_visibility(app, test_engine)
 
     assert seen["status"] == 201
+    assert seen["published"] is True
     assert seen["visible"] is True, (
         f"{seen['name']} was not visible from a second connection at the moment the "
         "client finished receiving the 201 — the commit is racing the response again"
@@ -153,6 +162,7 @@ async def test_manual_drive_detects_the_race_when_middleware_is_absent(test_engi
     seen = await _drive_post_and_check_visibility(app, test_engine)
 
     assert seen["status"] == 201
+    assert seen["published"] is False
     assert seen["visible"] is False
     # Teardown has run by now: the legacy path still commits, just late.
     assert await _visible_from_second_connection(test_engine, seen["name"])

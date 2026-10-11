@@ -22,6 +22,7 @@ from sqlmodel import SQLModel
 from alembic import context
 
 from outlabs_auth.models.sql import ALL_MODELS  # noqa: F401
+from outlabs_auth.migrations.safety import acquire_migration_lock, DEFAULT_LOCK_TIMEOUT
 
 config = context.config
 
@@ -116,8 +117,9 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     schema = get_target_schema()
+    acquire_migration_lock(connection, schema, config.attributes.get("lock_timeout", DEFAULT_LOCK_TIMEOUT))
     if schema:
-        connection.execute(text(f'SET search_path TO "{schema}", public'))
+        connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
 
     _configure_context(connection=connection)
     with context.begin_transaction():

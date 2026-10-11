@@ -17,6 +17,14 @@
 7. **Observability** — instrument the API and expose the host `/metrics` registry ([97](./97-Observability.md))
 8. **Maintenance** — keep API background jobs disabled and configure one external owner ([09](./09-Background-Maintenance.md))
 
+In a37, migrations use a default 5s lock budget
+and refuse invalid/incomplete indexes; CLI `migrate --lock-timeout` accepts 1ms–30s.
+Database restore or rollback to older proof validators also requires the
+[external admission fence and credential/cache recovery procedure](../docs/AUTH_RECOVERY.md).
+Resolve the exact public a37 artifact and qualify the consumer's package, schema
+and staging gates before adoption. Review the
+[refresh-replay transaction and pool requirements](./05-Sessions-and-Audit.md#lifecycle-and-replay-barriers-a37).
+
 ```bash
 export DATABASE_URL=postgresql+asyncpg://...
 export OUTLABS_AUTH_SCHEMA=outlabs_auth

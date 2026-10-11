@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a37] - 2026-10-11
+
+### Fixed
+
+- Publish authority-cache invalidation only after the owning transaction commits;
+  bind compiled snapshots to versions observed before authority reads and to their
+  next time transition. Re-evaluate time-conditioned decisions on each request.
+- Retained deletion freezes login identifiers. Restore withdraws old superuser
+  privilege, roles, memberships, refresh sessions and owned keys while retaining
+  historical platform protection. Monotonic user security epochs cancel old
+  access/refresh proofs and pending OAuth association after security changes.
+- Bound migration lock waits, retry only rolled-back PostgreSQL lock timeouts,
+  serialize migration runners and refuse invalid/incomplete indexes.
+- Fence shared authority on Redis startup/recovery before enabling cache reads;
+  discard the recovering worker's local key snapshots without resetting counters.
+- Refresh retained ORM authority before validating user epochs, API keys and policy
+  graphs; never retag older request authority with newer cache counters.
+- Retire pending login/recovery challenges on delete and identity-only restore;
+  serialize issue/consume with lifecycle writes using a fresh user row lock.
+- Make refresh-token replay containment durable despite the rejecting HTTP error:
+  abort the caller unit of work, independently commit only revocation/epoch, then
+  refuse the replay. Protect legacy platform accounts even with scope enforcement off.
+
+### Database migrations
+
+- `20261011_0026`: additive nullable `users.session_security_epoch` (BIGINT) and
+  `users.platform_protected` (BOOLEAN), with no default/backfill/index. Apply using
+  the packaged CLI or `auto_migrate=True`; routine downgrade refuses barrier removal.
+
+### Operational upgrade notes
+
+- This is the local 0.1.0a37 release candidate. Qualify its immutable artifacts and
+  verify the public release before changing consumer pins; published a36 is unchanged.
+- Migration `lock_timeout` defaults to 5 seconds (independent of statement timeout),
+  accepts 1ms–30s via `migrate --lock-timeout` / `migration_lock_timeout`, and permits
+  at most three lock-only attempts. Repair invalid indexes explicitly before retry.
+- Refresh-reuse containment requires configured-engine sessions with an independent
+  checkout. External connection-local schema overrides and single-connection pools
+  are not qualified; review the [independent review boundaries](docs/S1_REVIEW_A37.md).
+- Database restore or rollback to pre-epoch validators requires closed admission,
+  externally held fresh signing secrets/cache namespace and reconciliation of
+  post-backup revocations. See `docs/AUTH_RECOVERY.md` and the S1 qualification receipt.
+
 ## [0.1.0a36] - 2026-10-03
 
 ### Fixed

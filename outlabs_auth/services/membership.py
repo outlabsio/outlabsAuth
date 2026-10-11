@@ -9,6 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, cast
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from outlabs_auth.core.transaction_callbacks import defer_after_commit, mark_authority_change
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
@@ -300,7 +302,7 @@ class MembershipService(BaseService[EntityMembership]):
                     performed_by=str(joined_by_id) if joined_by_id else None,
                 )
 
-            await self._invalidate_membership_permissions_cache(user_id)
+            await self._invalidate_membership_permissions_cache(session, user_id)
             return existing
 
         # Create new membership
@@ -348,7 +350,7 @@ class MembershipService(BaseService[EntityMembership]):
                 performed_by=str(joined_by_id) if joined_by_id else None,
             )
 
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
         return membership
 
     async def remove_member(
@@ -419,7 +421,7 @@ class MembershipService(BaseService[EntityMembership]):
                 performed_by=str(revoked_by_id) if revoked_by_id else None,
             )
 
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
         return True
 
     async def update_membership(
@@ -581,7 +583,7 @@ class MembershipService(BaseService[EntityMembership]):
                 reason=membership.revocation_reason,
                 event_source="membership_service.update_membership",
             )
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
 
         return membership
 
@@ -992,7 +994,7 @@ class MembershipService(BaseService[EntityMembership]):
                 status="suspended",
             )
 
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
         return membership
 
     async def reactivate_membership(
@@ -1057,7 +1059,7 @@ class MembershipService(BaseService[EntityMembership]):
                 status="active",
             )
 
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
         return membership
 
     async def revoke_memberships_for_user(
@@ -1129,7 +1131,7 @@ class MembershipService(BaseService[EntityMembership]):
             )
         await session.flush()
 
-        await self._invalidate_membership_permissions_cache(user_id)
+        await self._invalidate_membership_permissions_cache(session, user_id)
         return memberships
 
     async def archive_memberships_for_entity(
@@ -1205,7 +1207,7 @@ class MembershipService(BaseService[EntityMembership]):
         await session.flush()
 
         for user_id in affected_user_ids:
-            await self._invalidate_membership_permissions_cache(user_id)
+            await self._invalidate_membership_permissions_cache(session, user_id)
 
         return memberships
 
@@ -1368,14 +1370,14 @@ class MembershipService(BaseService[EntityMembership]):
         ]
         return records, total_count
 
-    async def _invalidate_membership_permissions_cache(self, user_id: UUID) -> None:
+    async def _invalidate_membership_permissions_cache(self, session: AsyncSession, user_id: UUID) -> None:
         # Drop request-local permission memos too: a membership mutation
         # followed by a check in the same request must observe its own change.
-        request_cache.reset()
+        mark_authority_change(session)
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
-        await cache_service.publish_user_permissions_invalidation(str(user_id))
+        await defer_after_commit(session, partial(cache_service.publish_user_permissions_invalidation, str(user_id)))
 
     async def _record_membership_history(
         self,

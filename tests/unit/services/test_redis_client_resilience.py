@@ -26,6 +26,14 @@ class _FlakyClient:
     def __init__(self) -> None:
         self.healthy = False
         self.ping_calls = 0
+        self.fence_calls = 0
+
+    async def incr(self, key):
+        assert key.endswith("auth:api-key-snapshot-version:global")
+        if not self.healthy:
+            raise RedisConnectionError("connection refused")
+        self.fence_calls += 1
+        return self.fence_calls
 
     async def get(self, key):
         if not self.healthy:
@@ -77,6 +85,8 @@ async def test_connection_error_trips_breaker_and_probe_restores():
     await asyncio.wait_for(client._reconnect_task, timeout=2.0)
     assert client.is_available is True
     assert fake.ping_calls >= 1
+    assert fake.fence_calls == 1
+    assert client.authority_cache_generation == 1
 
     await client.disconnect()
 
@@ -138,4 +148,22 @@ async def test_failed_startup_connect_schedules_probe_and_recovers():
     await asyncio.wait_for(client._reconnect_task, timeout=2.0)
     assert client.is_available is True
 
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_fence_never_admits_cache():
+    client, fake = _make_client()
+    fake.healthy = True
+    client._available = False
+
+    async def broken_fence(key):
+        raise ResponseError("WRONGTYPE recovery generation")
+
+    fake.incr = broken_fence
+    assert await client.connect() is False
+    assert not client.is_available
+    assert client.authority_cache_generation == 0
+    await asyncio.sleep(0.03)
+    assert not client.is_available
     await client.disconnect()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -57,9 +58,29 @@ def _install_packaged_repo(tmp_path: Path) -> Path:
     )
     python_bin = _python_bin(venv_dir)
 
+    artifact_path = os.getenv("OUTLABS_AUTH_TEST_ARTIFACT")
+    install_target = ROOT
+    if artifact_path:
+        install_target = Path(artifact_path).resolve(strict=True)
+        expected_hash = os.environ["OUTLABS_AUTH_TEST_ARTIFACT_SHA256"]
+        if hashlib.sha256(install_target.read_bytes()).hexdigest() != expected_hash:
+            raise ValueError("Qualification artifact SHA-256 does not match the supplied immutable receipt")
+
     subprocess.run(
-        ["uv", "pip", "install", "--python", str(python_bin), str(ROOT)],
+        ["uv", "pip", "install", "--python", str(python_bin), str(install_target)],
         cwd=ROOT,
+        check=True,
+        env=install_env,
+    )
+    subprocess.run(
+        [
+            str(python_bin),
+            "-I",
+            "-c",
+            "from pathlib import Path; import outlabs_auth; "
+            "assert 'site-packages' in Path(outlabs_auth.__file__).parts, outlabs_auth.__file__",
+        ],
+        cwd=tmp_path,
         check=True,
         env=install_env,
     )

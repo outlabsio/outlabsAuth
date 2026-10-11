@@ -128,9 +128,7 @@ async def admin_user(auth_instance: SimpleRBAC) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_complete_login_use_logout_flow(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_complete_login_use_logout_flow(client: httpx.AsyncClient, registered_user: dict):
     """
     Test the complete user journey:
     1. Login with correct credentials
@@ -181,9 +179,7 @@ async def test_complete_login_use_logout_flow(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_login_with_wrong_password(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_login_with_wrong_password(client: httpx.AsyncClient, registered_user: dict):
     """Test that login with wrong password fails with 401."""
     resp = await client.post(
         "/v1/auth/login",
@@ -260,9 +256,7 @@ async def test_refresh_with_invalid_token(client: httpx.AsyncClient):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_refresh_with_access_token_fails(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_refresh_with_access_token_fails(client: httpx.AsyncClient, registered_user: dict):
     """Test that using access token for refresh fails."""
     # Login to get tokens
     login_resp = await client.post(
@@ -357,9 +351,7 @@ async def test_request_with_malformed_token_returns_401(client: httpx.AsyncClien
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_request_with_wrong_secret_token_returns_401(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_request_with_wrong_secret_token_returns_401(client: httpx.AsyncClient, registered_user: dict):
     """Test that token signed with wrong secret is rejected."""
     # Create token with different secret
     wrong_secret_token = create_access_token(
@@ -378,9 +370,7 @@ async def test_request_with_wrong_secret_token_returns_401(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_request_with_bearer_prefix_variations(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_request_with_bearer_prefix_variations(client: httpx.AsyncClient, registered_user: dict):
     """Test various malformed Authorization header formats."""
     # Login to get a valid token
     login_resp = await client.post(
@@ -422,15 +412,11 @@ async def test_request_with_bearer_prefix_variations(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_suspended_user_cannot_login(
-    auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
-):
+async def test_suspended_user_cannot_login(auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict):
     """Test that suspended user cannot login."""
     # Suspend the user
     async with auth_instance.get_session() as session:
-        user = await auth_instance.user_service.get_user_by_email(
-            session, registered_user["email"]
-        )
+        user = await auth_instance.user_service.get_user_by_email(session, registered_user["email"])
         user.status = UserStatus.SUSPENDED
         await session.commit()
 
@@ -447,15 +433,11 @@ async def test_suspended_user_cannot_login(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_banned_user_cannot_login(
-    auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
-):
+async def test_banned_user_cannot_login(auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict):
     """Test that banned user cannot login."""
     # Ban the user
     async with auth_instance.get_session() as session:
-        user = await auth_instance.user_service.get_user_by_email(
-            session, registered_user["email"]
-        )
+        user = await auth_instance.user_service.get_user_by_email(session, registered_user["email"])
         user.status = UserStatus.BANNED
         await session.commit()
 
@@ -505,9 +487,7 @@ async def test_account_lockout_after_failed_attempts(
     assert resp.status_code == 401
 
     async with auth_instance.get_session() as session:
-        user = await auth_instance.user_service.get_user_by_email(
-            session, registered_user["email"]
-        )
+        user = await auth_instance.user_service.get_user_by_email(session, registered_user["email"])
         assert user is not None
         assert user.failed_login_attempts >= max_attempts
         assert user.locked_until is not None
@@ -555,9 +535,7 @@ async def test_failed_attempt_counter_resets_on_success(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_multiple_concurrent_logins(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_multiple_concurrent_logins(client: httpx.AsyncClient, registered_user: dict):
     """Test that user can have multiple active sessions (tokens)."""
     # Login multiple times to simulate different devices
     tokens = []
@@ -583,9 +561,7 @@ async def test_multiple_concurrent_logins(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_logout_from_one_session_does_not_affect_others(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_logout_from_one_session_does_not_affect_others(client: httpx.AsyncClient, registered_user: dict):
     """Test that logout from one session doesn't invalidate other sessions."""
     # Login twice
     resp1 = await client.post(
@@ -610,6 +586,7 @@ async def test_logout_from_one_session_does_not_affect_others(
     await client.post(
         "/v1/auth/logout",
         headers={"Authorization": f"Bearer {token1}"},
+        json={"refresh_token": resp1.json()["refresh_token"]},
     )
 
     # Token2 should still work (without global token blacklisting)
@@ -627,9 +604,7 @@ async def test_logout_from_one_session_does_not_affect_others(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_access_token_contains_user_id(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_access_token_contains_user_id(client: httpx.AsyncClient, registered_user: dict):
     """Test that access token JWT contains correct user ID."""
     import jwt
 
@@ -650,9 +625,7 @@ async def test_access_token_contains_user_id(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_token_expiry_time_correct(
-    auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
-):
+async def test_token_expiry_time_correct(auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict):
     """Test that token expiry time matches configuration."""
     import jwt
 
@@ -685,9 +658,7 @@ async def test_token_expiry_time_correct(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_register_duplicate_email_fails(
-    client: httpx.AsyncClient, registered_user: dict
-):
+async def test_register_duplicate_email_fails(client: httpx.AsyncClient, registered_user: dict):
     """Test that registering with existing email fails."""
     resp = await client.post(
         "/v1/auth/register",
@@ -752,9 +723,7 @@ async def test_register_then_immediate_login(client: httpx.AsyncClient):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_can_suspend_user(
-    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
-):
+async def test_admin_can_suspend_user(auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict):
     """Test that admin can suspend a user."""
     # Create a user to suspend
     async with auth_instance.get_session() as session:
@@ -815,9 +784,7 @@ async def test_admin_can_suspend_user_with_expiry(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_can_ban_user(
-    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
-):
+async def test_admin_can_ban_user(auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict):
     """Test that admin can permanently ban a user."""
     # Create a user to ban
     async with auth_instance.get_session() as session:

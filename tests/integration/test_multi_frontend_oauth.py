@@ -32,7 +32,7 @@ from outlabs_auth.models.sql.oauth_state import OAuthState
 from outlabs_auth.oauth.state import decode_state_token
 from outlabs_auth.routers.oauth import get_oauth_router
 from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
-from outlabs_auth.routers.oauth_state_store import oauth_state_cookie_name
+from outlabs_auth.routers.oauth_state_store import stored_state, oauth_state_cookie_name
 
 STATE_SECRET = "state-secret-for-tests-1234567890abcdef"
 
@@ -169,7 +169,7 @@ async def _authorize(auth, router, app_key=None):
 
 async def _cookies_for(auth, state: str, *, flow: str = "login", app_key=None) -> dict[str, str]:
     async with auth.get_session() as session:
-        record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+        record = (await session.execute(select(OAuthState).where(OAuthState.state == stored_state(state)))).scalar_one()
     assert record.browser_binding is not None
     return {oauth_state_cookie_name("github", flow, app_key): record.browser_binding}
 
@@ -208,7 +208,9 @@ async def test_single_mount_lands_each_profile_on_its_own_frontend(
         state = await _authorize(auth, router, app_key=app_key)
         assert decode_state_token(state, STATE_SECRET)["app"] == app_key
         async with auth.get_session() as session:
-            record = (await session.execute(select(OAuthState).where(OAuthState.state == state))).scalar_one()
+            record = (
+                await session.execute(select(OAuthState).where(OAuthState.state == stored_state(state)))
+            ).scalar_one()
         assert record.profile_id == app_key
 
         _patch_user_info(monkeypatch, oauth_router_module, email, f"gh-{email}")
@@ -351,7 +353,7 @@ async def test_associate_flow_lands_on_profile_association_route(
                 request=_request(),
                 response=Response(),
                 session=session,
-                auth_context={"user_id": user_id},
+                auth_context={"user_id": user_id, "source": "jwt", "user": user, "metadata": {"iat": 1791700000}},
                 scopes=None,
                 app="portal",
             )
@@ -362,7 +364,7 @@ async def test_associate_flow_lands_on_profile_association_route(
             request=_request(),
             response=Response(),
             session=session,
-            auth_context={"user_id": user_id},
+            auth_context={"user_id": user_id, "source": "jwt", "user": user, "metadata": {"iat": 1791700000}},
             scopes=None,
             app="console",
         )

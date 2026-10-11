@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional, Protocol
 
 import jwt
 
+from outlabs_auth.core.session_security import proof_is_current
 from outlabs_auth.core.exceptions import (
     AuthenticationInfrastructureError,
     RateLimitError,
@@ -143,6 +144,7 @@ class JWTStrategy:
                     session,
                     user_id,
                     load_root_entity=True,
+                    populate_existing=True,
                 )
                 logger.debug(
                     "jwt_fetch_user_done",
@@ -151,6 +153,8 @@ class JWTStrategy:
                         "can_authenticate": user.can_authenticate() if user else None,
                     },
                 )
+                if user and not proof_is_current(payload, user):
+                    return None
                 if user and self._token_is_stale(payload, getattr(user, "last_password_change", None)):
                     logger.info("jwt_stale_password_change", extra={"user_id": user_id})
                     return None
@@ -189,6 +193,15 @@ class JWTStrategy:
     @staticmethod
     def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
         if isinstance(value, Mapping):
+            issued_us = value.get("iat_us")
+            if issued_us is not None:
+                if type(issued_us) is not int:
+                    return None
+                try:
+                    seconds, microseconds = divmod(issued_us, 1_000_000)
+                    return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=microseconds)
+                except (ValueError, OSError, OverflowError):
+                    return None
             precise_issued_at = value.get("iat_ms")
             if precise_issued_at is not None:
                 try:
@@ -285,6 +298,8 @@ class ApiKeyStrategy:
             )
 
             if api_key:
+                observation_getter = getattr(api_key_service, "get_api_key_auth_observation", None)
+                observation = observation_getter(session, credentials) if observation_getter else None
                 resolved_owner = None
                 if hasattr(api_key_service, "resolve_api_key_owner"):
                     resolved_owner = await api_key_service.resolve_api_key_owner(session, api_key)
@@ -329,12 +344,16 @@ class ApiKeyStrategy:
                     else resolved_owner.get("integration_principal")
                 )
                 user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
-                owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+                owner_id = (
+                    resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+                )
                 if principal is not None:
                     if api_key_policy_service is not None:
-                        metadata["principal_allowed_scopes"] = await api_key_policy_service.resolve_integration_principal_effective_scopes(
-                            session,
-                            principal,
+                        metadata["principal_allowed_scopes"] = (
+                            await api_key_policy_service.resolve_integration_principal_effective_scopes(
+                                session,
+                                principal,
+                            )
                         )
                     else:
                         metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
@@ -346,6 +365,7 @@ class ApiKeyStrategy:
                         "source": "api_key",
                         "api_key": api_key,
                         "metadata": metadata,
+                        **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
                     }
 
                 return {
@@ -356,6 +376,7 @@ class ApiKeyStrategy:
                     "source": "api_key",
                     "api_key": api_key,
                     "metadata": metadata,
+                    **({"_outlabs_snapshot_versions": observation} if isinstance(observation, dict) else {}),
                 }
 
             return None
