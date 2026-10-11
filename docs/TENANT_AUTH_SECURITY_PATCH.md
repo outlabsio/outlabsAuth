@@ -3,7 +3,13 @@
 **Date:** 2026-10-11
 **Status:** All eight baseline corrections and local migration/recovery/budget/artifact qualification pass; the complete S1 release and consumer adoption remain open.
 **Branch/base:** `codex/auth-security-20261010`, from merged `main baba18c`.
-**Package baseline:** `0.1.0a36`; two additive nullable columns and migration `20261011_0026` are in the candidate. No version, tag or consumer pin change.
+**Package candidate:** `0.1.0a37` at `f00eb25`; two additive nullable columns and migration `20261011_0026`. Published baseline remains a36; no tag, publication or consumer pin change.
+
+The [a37 release-candidate receipt](S1_RELEASE_CANDIDATE_A37.md) records the new
+version's immutable hashes, full 1511-pass suite, 93-case real-Redis gate,
+149 installed-wheel and 55 installed-sdist cases, HTTP acceptance and train
+preflight. Earlier dated receipts below preserve the historical a36-labelled
+local builds; their hashes must not be used for a37 or published a36.
 
 The [tenant and administrative-grant plan](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 requires eight baseline corrections before later stages use the existing identity
@@ -354,8 +360,8 @@ claimed by the security-state rewind test.
 | Migration safety | Locally implemented/tested bounded runner, lock-only retries, concurrent runners, rollback and index-validity checks. Review exact release artifacts; invalid indexes require explicit repair. |
 | Outage / recovery | Reconnect/local snapshot fencing and backup-epoch signing-key refusal pass locally. Adopting hosts must enforce the external admission fence and reconstruct later revocations; full restore/RPO/RTO and S3 runner/outbox proof are not claimed. |
 | Performance | Numeric SQL caps and local p95 ceilings pass; [measurement receipt](S1_PERFORMANCE_QUALIFICATION.md). Production hardware/latency budgets and S2 staff-grant budgets still need owner disposition. |
-| Installed artifacts | Hashed wheel/sdist pass outside-checkout installation and security/migration acceptance; [artifact receipt](S1_ARTIFACT_QUALIFICATION.md). They remain unreleased candidates with the historical a36 version identifier. |
-| Release and consumers | Review the complete S1 candidate and D35/recovery contract; select a new version, rebuild/qualify its exact artifacts, verify the Auth/TaskQ release train and private consumer inventory, then follow separately authorized publication, consumer staging and promotion. |
+| Installed artifacts | New a37 wheel/sdist pass outside-checkout installation and security/migration/cache acceptance; [release-candidate receipt](S1_RELEASE_CANDIDATE_A37.md). Publication artifacts must be attested again at the accepted merge. |
+| Release and consumers | Review the complete a37 candidate and D35/recovery contract; verify merge/public artifacts and the published Auth/TaskQ train, private consumer inventory and exact-pin acceptance, then follow separately authorized publication, consumer staging and promotion. |
 
 The eventual S1 security patch remains a single release containing the complete
 accepted baseline correction. These eight local corrections are not a partially published

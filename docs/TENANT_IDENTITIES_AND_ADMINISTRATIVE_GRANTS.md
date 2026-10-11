@@ -74,6 +74,9 @@ its rationale are in [the S1 receipt](./TENANT_AUTH_SECURITY_PATCH.md). `eaa5ff3
 also implements bounded migration/index safety and reconnect authority fencing;
 local [numeric budgets](S1_PERFORMANCE_QUALIFICATION.md) and hashed wheel/sdist
 [installed acceptance](S1_ARTIFACT_QUALIFICATION.md) are recorded. The complete
+new-version [a37 candidate](S1_RELEASE_CANDIDATE_A37.md) is now locally qualified
+at `f00eb25` with new immutable hashes and train preflight. The published a36,
+canonical release train and consumer pins are unchanged. The complete
 security release, consumer staging and externally enforced restore admission remain
 open; local proof does not establish a production RPO/RTO or S3 anti-rewind runner.
 S2 grants, S3 observer and namespace stages remain unimplemented. The prototype

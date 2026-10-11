@@ -17,8 +17,10 @@ This document is intentionally short. It is not a full project plan. It is a wor
   estimate. `eaa5ff3` adds bounded runner/index checks and authority reconnect fencing;
   numeric cold/warm gates and installed wheel/sdist acceptance are recorded locally.
   Review the complete candidate, external restore-admission obligations and proposed
-  production budgets; then prepare the exact new-version artifacts and the single S1
-  release. Publication, consumer staging/promotion and S3 anti-rewind replay/outbox
+  production budgets; the [a37 candidate](S1_RELEASE_CANDIDATE_A37.md) now has new
+  version metadata, immutable artifacts and complete local qualification. Prepare
+  the accepted merge/public hashes and published train next. Publication,
+  consumer staging/promotion and S3 anti-rewind replay/outbox
   acceptance remain separate. Full scope: [proposal §12.3 and §19](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md).
 - **S0 decisions and later stages (not started).** Record DD-062 dispositions before
   S2 grants, S3 lifecycle observer or S4 namespaces. Start at the proposal's

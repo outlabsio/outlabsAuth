@@ -1,5 +1,9 @@
 # S1 installed artifact qualification
 
+**Latest:** [the a37 release candidate](S1_RELEASE_CANDIDATE_A37.md) has new
+versioned artifacts and installed acceptance. This document preserves the earlier
+a36-labelled local build only; its historical hashes cannot qualify the a37 release.
+
 **Date:** 2026-10-11. **Qualified package source:** `eaa5ff3` on
 `codex/auth-security-20261010`. These are **unreleased local candidate artifacts**.
 Their embedded `0.1.0a36` identifier is the unchanged historical baseline, not the
