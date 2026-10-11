@@ -34,6 +34,7 @@ from outlabs_auth.models.sql.enums import (
 from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal, IntegrationPrincipalRole
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.services import cache_validity
 
 if TYPE_CHECKING:
     from outlabs_auth.observability.service import ObservabilityService
@@ -233,8 +234,10 @@ class APIKeyPolicyService:
                 return False
 
         if api_key.entity_id is None:
+            cache_validity.record(api_key.key_hash, None)
             return True
 
+        observed_at = cache_validity.now()
         entity = await session.get(Entity, api_key.entity_id)
         if entity is None:
             logger.warning("API key %s rejected because anchor entity is missing", api_key.prefix)
@@ -261,6 +264,7 @@ class APIKeyPolicyService:
                 entity_id=str(api_key.entity_id),
             )
             return False
+        cache_validity.observe_windows(api_key.key_hash, [entity], observed_at=observed_at)
         return True
 
     async def validate_runtime_permission(

@@ -18,7 +18,7 @@ from outlabs_auth.authentication.strategy import ApiKeyStrategy
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.services import request_cache
+from outlabs_auth.services import cache_validity, request_cache
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.api_key_policy import APIKeyPolicyService
 from outlabs_auth.services.cache import CacheService
@@ -159,6 +159,7 @@ async def test_stale_snapshot_cannot_be_relabelled_with_new_versions(
     service = APIKeyService(config, redis_client=cache_backend)
     service.cache_service = cache
     raw_key, key, result = auth_context()
+    cache_validity.record(result["user_id"], None)
     observed = await cache.get_api_key_auth_snapshot_versions(user_id=result["user_id"])
     observed[f"credential:{key.key_hash}"] = 0
     result["_outlabs_snapshot_versions"] = observed
@@ -256,6 +257,7 @@ async def test_key_mutations_only_invalidate_committed_authority(
     result["metadata"]["owner_id"] = str(user.id)
     before = await cache.get_api_key_auth_snapshot_versions(user_id=str(user.id), credential_hash=key.key_hash)
     result["_outlabs_snapshot_versions"] = before
+    cache_validity.record(str(user.id), None)
     assert await service.set_api_key_auth_snapshot(raw_key, auth_result=result, effective_permissions=["report:read"])
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as writer:

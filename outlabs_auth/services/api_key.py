@@ -23,7 +23,7 @@ from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.transaction_callbacks import defer_after_commit, has_pending_cache_changes, mark_authority_change
-from outlabs_auth.services import request_cache
+from outlabs_auth.services import cache_validity, request_cache
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     AuthenticationInfrastructureError,
@@ -130,7 +130,7 @@ class APIKeyService(BaseService[APIKey]):
         if entry is None:
             return None
         expires_at, snapshot = entry
-        if time.monotonic() >= expires_at:
+        if time.monotonic() >= expires_at or not cache_validity.is_fresh(snapshot):
             self._local_snapshot_cache.pop(key_hash, None)
             return None
         return snapshot
@@ -1121,6 +1121,10 @@ class APIKeyService(BaseService[APIKey]):
         if not isinstance(snapshot, dict):
             return None
 
+        if not cache_validity.is_fresh(snapshot):
+            await self.redis_client.delete(cache_key)
+            return None
+
         if snapshot.get("status") != APIKeyStatus.ACTIVE.value:
             await self.redis_client.delete(cache_key)
             return None
@@ -1186,7 +1190,22 @@ class APIKeyService(BaseService[APIKey]):
         # Never read fresh versions here: effective permissions may have been
         # computed much earlier by a permission dependency.
         versions = dict(observed)
+        if user_id and not request_cache.contains(("authority_deadline", user_id)):
+            # Custom permission suppliers without a time proof cannot lease authority.
+            return False
+        if entity_id and not request_cache.contains(("authority_deadline", key_hash)):
+            return False
+        bounds = [cache_validity.deadline(subject) for subject in (user_id, key_hash) if subject]
+        expires_at = getattr(api_key, "expires_at", None)
+        if isinstance(expires_at, datetime):
+            bounds.append(expires_at.timestamp())
+        valid_until = min((bound for bound in bounds if bound is not None), default=None)
+        ttl = cache_validity.bounded_ttl(self._auth_snapshot_ttl(), valid_until)
+        if ttl <= 0:
+            return False
         snapshot: dict[str, Any] = {
+            "validity_schema": 1,
+            "valid_until": valid_until,
             "key_id": str(api_key.id),
             "key_prefix": getattr(api_key, "prefix", api_key_string[:16]),
             "status": self._normalize_enum(getattr(api_key, "status", APIKeyStatus.ACTIVE)),
@@ -1214,7 +1233,7 @@ class APIKeyService(BaseService[APIKey]):
             await self.redis_client.set(
                 self._make_auth_snapshot_key(key_hash),
                 snapshot,
-                ttl=self._auth_snapshot_ttl(),
+                ttl=ttl,
             )
         )
         if written:

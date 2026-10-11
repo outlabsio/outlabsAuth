@@ -44,7 +44,7 @@ from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
 from outlabs_auth.models.sql.role import Role, RoleCondition, RoleEntityTypePermission, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
-from outlabs_auth.services import request_cache
+from outlabs_auth.services import cache_validity, request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
 from outlabs_auth.schemas.abac import serialize_condition_value
@@ -702,14 +702,13 @@ class PermissionService(BaseService[Permission]):
 
     @staticmethod
     def _membership_window_predicates(model: Any) -> list[Any]:
-        """SQL pre-filter matching ``is_currently_valid()`` (which still runs).
+        """Exclude expired rows; retain scheduled rows to observe their starts.
 
-        Expired or not-yet-valid memberships previously triggered the full
-        role+permission eager-load chain only to be discarded in Python.
+        Python still checks validity before granting. Scheduled rows must enter
+        the cold graph so cached denials expire when they become active.
         """
         now = datetime.now(timezone.utc)
         return [
-            or_(cast(Any, model.valid_from).is_(None), cast(Any, model.valid_from) <= now),
             or_(cast(Any, model.valid_until).is_(None), cast(Any, model.valid_until) >= now),
         ]
 
@@ -742,8 +741,11 @@ class PermissionService(BaseService[Permission]):
                     *self._membership_window_predicates(UserRoleMembership),
                 )
             )
+            observed_at = cache_validity.now()
             result = await session.execute(stmt)
-            return list(result.scalars().all())
+            rows = list(result.scalars().all())
+            cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
+            return rows
 
         return cast("list[UserRoleMembership]", await request_cache.get_or_load(cache_key, _load))
 
@@ -886,8 +888,11 @@ class PermissionService(BaseService[Permission]):
                     *self._membership_window_predicates(EntityMembership),
                 )
             )
+            observed_at = cache_validity.now()
             memberships_result = await session.execute(memberships_stmt)
-            return list(memberships_result.scalars().all())
+            rows = list(memberships_result.scalars().all())
+            cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
+            return rows
 
         memberships: list[EntityMembership] = await request_cache.get_or_load(memo_key, _load_memberships)
 
@@ -1204,6 +1209,7 @@ class PermissionService(BaseService[Permission]):
 
         # Superusers have all permissions
         if resolved_user.is_superuser:
+            cache_validity.record(str(user_id), None)
             return ["*:*"]
 
         # PERF: serve the aggregated set from Redis. This is the per-request hot
@@ -1273,8 +1279,11 @@ class PermissionService(BaseService[Permission]):
                         *self._membership_window_predicates(EntityMembership),
                     )
                 )
+                observed_at = cache_validity.now()
                 entity_result = await session.execute(entity_stmt)
-                return list(entity_result.scalars().all())
+                rows = list(entity_result.scalars().all())
+                cache_validity.observe_windows(str(user_id), rows, observed_at=observed_at)
+                return rows
 
             entity_memberships: list[EntityMembership] = await request_cache.get_or_load(
                 em_memo_key, _load_entity_memberships
@@ -1301,6 +1310,7 @@ class PermissionService(BaseService[Permission]):
                 include_entity_local=include_entity_local,
                 names=list(all_permissions),
                 versions=cached_versions,
+                valid_until=cache_validity.deadline(str(user_id)),
             )
 
         return list(all_permissions)
@@ -1427,8 +1437,10 @@ class PermissionService(BaseService[Permission]):
                 cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
         )
+        observed_at = cache_validity.now()
         result = await session.execute(stmt)
         memberships: list[EntityMembership] = list(result.scalars().all())
+        cache_validity.observe_windows(str(user_id), memberships, observed_at=observed_at)
 
         permissions: Set[str] = set()
         for membership in memberships:
@@ -1471,8 +1483,10 @@ class PermissionService(BaseService[Permission]):
                 cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
         )
+        observed_at = cache_validity.now()
         memberships_result = await session.execute(memberships_stmt)
         memberships: list[EntityMembership] = list(memberships_result.scalars().all())
+        cache_validity.observe_windows(str(user_id), memberships, observed_at=observed_at)
 
         direct_permissions: Set[str] = set()
         ancestor_permissions: Set[str] = set()
@@ -1569,7 +1583,12 @@ class PermissionService(BaseService[Permission]):
         }
 
     def _can_use_permission_cache(self) -> bool:
-        return bool(getattr(self.config, "enable_caching", False) and getattr(self, "cache_service", None) is not None)
+        cache = getattr(self, "cache_service", None)
+        return bool(
+            getattr(self.config, "enable_caching", False)
+            and cache is not None
+            and getattr(cache, "supports_authority_deadlines", False) is True
+        )
 
     @staticmethod
     def _permission_cache_context_hash(
@@ -1618,8 +1637,8 @@ class PermissionService(BaseService[Permission]):
         )
         if isinstance(cached, tuple):
             return cached
-        # Host-supplied cache service with the legacy bool-returning contract.
-        return cast(Optional[bool], cached), None
+        # A legacy boolean has no deadline/version proof; evaluate afresh.
+        return None, None
 
     async def _cache_permission_result(
         self,
@@ -1646,16 +1665,11 @@ class PermissionService(BaseService[Permission]):
                 entity_id_str,
                 context_hash,
                 versions=versions,
+                valid_until=cache_validity.deadline(str(user_id)),
             )
         except TypeError:
-            # Host-supplied cache service with the legacy signature.
-            await cache_service.set_permission_check(
-                str(user_id),
-                permission,
-                result,
-                entity_id_str,
-                context_hash,
-            )
+            # Legacy custom backends cannot preserve the transition proof.
+            return
 
     async def require_permission(
         self,

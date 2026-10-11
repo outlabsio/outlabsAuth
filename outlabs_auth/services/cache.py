@@ -10,12 +10,15 @@ import random
 from typing import Any, Optional, Sequence, cast
 
 from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.services import cache_validity
 
 logger = logging.getLogger(__name__)
 
 
 class CacheService:
     """Manages cached RBAC permission checks and invalidation broadcasts."""
+
+    supports_authority_deadlines = True
 
     def __init__(self, redis_client, config: AuthConfig):
         self.redis_client = redis_client
@@ -216,8 +219,9 @@ class CacheService:
             return None, versions
 
         names = payload.get("permissions") if isinstance(payload, dict) else None
-        if not isinstance(names, list) or payload.get("versions") != versions:
+        if not isinstance(names, list) or payload.get("versions") != versions or not cache_validity.is_fresh(payload):
             return None, versions
+        cache_validity.record(user_id, payload["valid_until"])
         return [str(name) for name in names], versions
 
     def make_abac_conditions_flag_key(self) -> str:
@@ -288,6 +292,7 @@ class CacheService:
         include_entity_local: bool,
         names: list[str],
         versions: Optional[dict[str, int]],
+        valid_until: Optional[float] = None,
     ) -> bool:
         if versions is None:
             return False
@@ -296,12 +301,17 @@ class CacheService:
         set_raw = getattr(self.redis_client, "set_raw", None)
         if set_raw is None:
             return False
-        payload = json.dumps({"versions": versions, "permissions": sorted(names)})
+        ttl = cache_validity.bounded_ttl(self._jittered_ttl(self.config.cache_permission_ttl), valid_until)
+        if ttl <= 0:
+            return False
+        payload = json.dumps(
+            {"versions": versions, "permissions": sorted(names), "validity_schema": 1, "valid_until": valid_until}
+        )
         return bool(
             await set_raw(
                 self.make_user_permissions_key(user_id, include_entity_local=include_entity_local),
                 payload,
-                ttl=self._jittered_ttl(self.config.cache_permission_ttl),
+                ttl=ttl,
             )
         )
 
@@ -354,12 +364,13 @@ class CacheService:
             payload = json.loads(values[0])
         except (TypeError, ValueError):
             return None, versions
-        if not isinstance(payload, dict) or payload.get("versions") != versions:
-            # Legacy boolean entry or stale versions — both read as a miss.
+        if not isinstance(payload, dict) or payload.get("versions") != versions or not cache_validity.is_fresh(payload):
+            # Missing proof, expired time bounds and stale versions all miss.
             return None, versions
         result = payload.get("result")
         if not isinstance(result, bool):
             return None, versions
+        cache_validity.record(user_id, payload["valid_until"])
         return result, versions
 
     async def set_permission_check(
@@ -371,6 +382,7 @@ class CacheService:
         context_hash: Optional[str] = None,
         *,
         versions: Optional[dict[str, int]] = None,
+        valid_until: Optional[float] = None,
     ) -> bool:
         if versions is None:
             return False
@@ -379,12 +391,15 @@ class CacheService:
         set_raw = getattr(self.redis_client, "set_raw", None)
         if set_raw is None:
             return False
-        payload = json.dumps({"result": result, "versions": versions})
+        ttl = cache_validity.bounded_ttl(self._jittered_ttl(self.config.cache_permission_ttl), valid_until)
+        if ttl <= 0:
+            return False
+        payload = json.dumps({"result": result, "versions": versions, "validity_schema": 1, "valid_until": valid_until})
         return bool(
             await set_raw(
                 self.make_permission_check_key(user_id, permission, entity_id, context_hash),
                 payload,
-                ttl=self._jittered_ttl(self.config.cache_permission_ttl),
+                ttl=ttl,
             )
         )
 

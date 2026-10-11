@@ -82,6 +82,9 @@ class _PermissionServiceStub:
                 "include_entity_local": include_entity_local,
             }
         )
+        from outlabs_auth.services import cache_validity
+
+        cache_validity.record(str(user_id), None)
         return list(self.user_permissions)
 
 
@@ -95,6 +98,11 @@ async def _seed_auth_snapshot(service, raw_key, *, auth_result, **kwargs):
         entity_id=str(key.entity_id) if key.entity_id else None,
         credential_hash=APIKey.hash_key(raw_key),
     )
+    from outlabs_auth.services import cache_validity
+
+    if auth_result.get("user_id"):
+        cache_validity.record(str(auth_result["user_id"]), None)
+    cache_validity.record(APIKey.hash_key(raw_key), None)
     return await service.set_api_key_auth_snapshot(raw_key, auth_result=auth_result, **kwargs)
 
 

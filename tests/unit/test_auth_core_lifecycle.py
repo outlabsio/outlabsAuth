@@ -165,6 +165,11 @@ async def _seed_auth_snapshot(service, raw_key, *, auth_result, **kwargs):
         entity_id=str(key.entity_id) if key.entity_id else None,
         credential_hash=APIKey.hash_key(raw_key),
     )
+    from outlabs_auth.services import cache_validity
+
+    if auth_result.get("user_id"):
+        cache_validity.record(str(auth_result["user_id"]), None)
+    cache_validity.record(APIKey.hash_key(raw_key), None)
     return await service.set_api_key_auth_snapshot(raw_key, auth_result=auth_result, **kwargs)
 
 
@@ -779,9 +784,16 @@ async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_sl
     )
     api_key_service.get_api_key_scopes = AsyncMock(return_value=["contacts:read"])
     api_key_service.get_api_key_ip_whitelist = AsyncMock(return_value=[])
+
+    async def permission_names(*args, **kwargs):
+        from outlabs_auth.services import cache_validity
+
+        cache_validity.record(str(user_id), None)
+        return ["contacts:read"]
+
     permission_service = SimpleNamespace(
         config=SimpleNamespace(enable_abac=False),
-        get_user_permissions=AsyncMock(return_value=["contacts:read"]),
+        get_user_permissions=permission_names,
     )
 
     auth._initialized = True
