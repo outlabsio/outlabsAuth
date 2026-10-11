@@ -113,6 +113,13 @@ class APIKeyService(BaseService[APIKey]):
         # config.api_key_local_snapshot_cache_ttl). Maps key_hash -> (expiry_monotonic, snapshot).
         self._local_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._local_snapshot_cache_max = 50000
+        self._local_snapshot_generation = getattr(redis_client, "authority_cache_generation", 0)
+
+    def _sync_local_snapshot_generation(self) -> None:
+        generation = getattr(self.redis_client, "authority_cache_generation", 0)
+        if generation != self._local_snapshot_generation:
+            self._local_snapshot_cache.clear()
+            self._local_snapshot_generation = generation
 
     def _local_snapshot_cache_enabled(self) -> bool:
         return (getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0) > 0
@@ -126,6 +133,7 @@ class APIKeyService(BaseService[APIKey]):
         """
         if not self._local_snapshot_cache_enabled():
             return None
+        self._sync_local_snapshot_generation()
         entry = self._local_snapshot_cache.get(key_hash)
         if entry is None:
             return None
@@ -139,6 +147,7 @@ class APIKeyService(BaseService[APIKey]):
         ttl = getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0
         if ttl <= 0:
             return
+        self._sync_local_snapshot_generation()
         cache = self._local_snapshot_cache
         if len(cache) >= self._local_snapshot_cache_max:
             # Coarse bound to avoid unbounded growth; entries are short-lived anyway.

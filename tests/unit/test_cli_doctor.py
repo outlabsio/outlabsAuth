@@ -133,6 +133,7 @@ def test_build_connect_args_applies_migration_statement_timeout_and_schema():
     assert _build_connect_args("auth_schema") == {
         "server_settings": {
             "statement_timeout": "60s",
+            "lock_timeout": "5s",
             "search_path": "auth_schema,public",
         }
     }
@@ -140,7 +141,7 @@ def test_build_connect_args_applies_migration_statement_timeout_and_schema():
 
 def test_build_connect_args_allows_disabling_statement_timeout():
     assert _build_connect_args("auth_schema", statement_timeout=None) == {
-        "server_settings": {"search_path": "auth_schema,public"}
+        "server_settings": {"search_path": "auth_schema,public", "lock_timeout": "5s"}
     }
 
 

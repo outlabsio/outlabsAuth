@@ -59,6 +59,7 @@ class OutlabsAuth:
         engine: Optional[AsyncEngine] = None,
         auto_migrate: bool = False,
         migration_statement_timeout: Optional[str] = "60s",
+        migration_lock_timeout: str = "5s",
         initialize_timeout_seconds: float = 120.0,
         database_schema: Optional[str] = None,
         echo_sql: bool = False,
@@ -221,6 +222,7 @@ class OutlabsAuth:
             database_schema=database_schema,
             auto_migrate=auto_migrate,
             migration_statement_timeout=migration_statement_timeout,
+            migration_lock_timeout=migration_lock_timeout,
             initialize_timeout_seconds=initialize_timeout_seconds,
             echo_sql=echo_sql,
             secret_key=secret_key,
@@ -510,6 +512,7 @@ class OutlabsAuth:
             self.config.database_url,
             schema=self.config.database_schema,
             statement_timeout=self.config.migration_statement_timeout,
+            lock_timeout=self.config.migration_lock_timeout,
         )
 
     def _init_services_sync(self):

@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 from alembic import context, op
+from outlabs_auth.migrations.safety import index_exists
 
 # revision identifiers, used by Alembic.
 revision: str = "20260415_0014"
@@ -32,11 +33,7 @@ def _table_exists(schema: str | None, table_name: str) -> bool:
 
 
 def _index_exists(schema: str | None, table_name: str, index_name: str) -> bool:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    return index_name in {
-        index["name"] for index in inspector.get_indexes(table_name, schema=schema)
-    }
+    return index_exists(op.get_bind(), schema, table_name, index_name)
 
 
 def upgrade() -> None:

@@ -57,6 +57,19 @@ class RedisClient:
         self._available = False
         self._reconnect_task: Optional["asyncio.Task[None]"] = None
         self._closed = False
+        self.authority_cache_generation = 0
+
+    async def _fence_authority_recovery(self) -> None:
+        """Invalidate shared authority before admitting a recovered connection.
+
+        Mutations may have committed while Redis publication was unavailable.
+        Counters and rate limits are preserved; only authority versions advance.
+        A failed fence leaves caching unavailable. Database/Redis backup restore
+        additionally requires the external recovery procedure and fresh namespace.
+        """
+        assert self._client is not None
+        await self._client.incr(self.make_key("auth", "api-key-snapshot-version", "global"))
+        self.authority_cache_generation += 1
 
     def _build_client(self) -> "Redis":
         client_kwargs = {
@@ -102,6 +115,7 @@ class RedisClient:
 
             # Test connection
             await self._client.ping()
+            await self._fence_authority_recovery()
             self._available = True
             location = self.config.redis_url or f"{self.config.redis_host}:{self.config.redis_port}"
             logger.info(f"Connected to Redis at {location}")
@@ -178,6 +192,7 @@ class RedisClient:
                 if self._client is None:
                     self._client = self._build_client()
                 await self._client.ping()
+                await self._fence_authority_recovery()
             except (RedisConnectionError, RedisTimeoutError, RedisError, OSError):
                 backoff = min(backoff * 2, self._RECONNECT_BACKOFF_MAX)
                 continue
@@ -260,16 +275,12 @@ class RedisClient:
             self._trip_breaker(e)
             return None
 
-    async def scan(
-        self, cursor: int = 0, match: Optional[str] = None, count: int = 100
-    ) -> tuple[int, list[str]]:
+    async def scan(self, cursor: int = 0, match: Optional[str] = None, count: int = 100) -> tuple[int, list[str]]:
         if not self._available or not self._client:
             return 0, []
         try:
             qualified_match = self._qualify_key(match) if match else None
-            next_cursor, keys = await self._client.scan(
-                cursor=cursor, match=qualified_match, count=count
-            )
+            next_cursor, keys = await self._client.scan(cursor=cursor, match=qualified_match, count=count)
             return int(next_cursor), list(keys) if keys else []
         except RedisError as e:
             self._trip_breaker(e)
@@ -548,8 +559,7 @@ class RedisClient:
                 return {}
 
             targets = [
-                self.make_key("usage-sync", batch_id, self.strip_key_prefix(source_key))
-                for source_key in source_keys
+                self.make_key("usage-sync", batch_id, self.strip_key_prefix(source_key)) for source_key in source_keys
             ]
             pipe = self._client.pipeline(transaction=False)
             for source_key, target_key in zip(source_keys, targets):
@@ -618,9 +628,7 @@ class RedisClient:
             logger.debug(f"Get and reset counter failed for {key}: {e}")
             return 0
 
-    async def increment_with_ttl(
-        self, key: str, amount: int = 1, ttl: Optional[int] = None
-    ) -> Optional[int]:
+    async def increment_with_ttl(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> Optional[int]:
         """
         Increment counter and set TTL if it's a new key.
 

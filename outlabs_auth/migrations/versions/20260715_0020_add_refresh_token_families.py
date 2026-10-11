@@ -12,6 +12,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 
 from alembic import context, op
+from outlabs_auth.migrations.safety import index_exists
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision: str = "20260715_0020"
@@ -25,11 +26,13 @@ def _current_schema() -> str | None:
 
 
 def _column_exists(schema: str | None, table_name: str, column_name: str) -> bool:
-    return column_name in {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name, schema=schema)}
+    return column_name in {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name, schema=schema)
+    }
 
 
 def _index_exists(schema: str | None, table_name: str, index_name: str) -> bool:
-    return index_name in {index["name"] for index in sa.inspect(op.get_bind()).get_indexes(table_name, schema=schema)}
+    return index_exists(op.get_bind(), schema, table_name, index_name)
 
 
 def _foreign_key_exists(schema: str | None, table_name: str, name: str) -> bool:

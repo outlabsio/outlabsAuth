@@ -25,6 +25,7 @@ from uuid import UUID
 import click
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -47,6 +48,13 @@ from outlabs_auth.cli_support import (
 from outlabs_auth.cli_support.remote_commands import register_remote_commands
 from outlabs_auth.cli_support.runtime import EXIT_USAGE
 from outlabs_auth.maintenance import MaintenanceReport
+from outlabs_auth.migrations.safety import (
+    DEFAULT_LOCK_TIMEOUT,
+    acquire_migration_lock,
+    validate_lock_timeout,
+    validate_indexes,
+    serialized_alembic_context,
+)
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ALEMBIC_VERSION_TABLE = "outlabs_auth_alembic_version"
@@ -152,8 +160,9 @@ def _build_connect_args(
     schema: Optional[str],
     *,
     statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> dict[str, object]:
-    server_settings: dict[str, str] = {}
+    server_settings: dict[str, str] = {"lock_timeout": validate_lock_timeout(lock_timeout)}
     if statement_timeout:
         server_settings["statement_timeout"] = statement_timeout
 
@@ -169,11 +178,12 @@ def _build_engine(
     schema: Optional[str],
     *,
     statement_timeout: Optional[str] = None,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> AsyncEngine:
     return create_async_engine(
         normalize_database_url(database_url),
         echo=False,
-        connect_args=_build_connect_args(schema, statement_timeout=statement_timeout),
+        connect_args=_build_connect_args(schema, statement_timeout=statement_timeout, lock_timeout=lock_timeout),
     )
 
 
@@ -190,6 +200,7 @@ async def _ensure_schema_exists(
     *,
     engine: Optional[AsyncEngine] = None,
     statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> None:
     target_schema = _validate_schema_name(schema)
     if not target_schema:
@@ -204,6 +215,7 @@ async def _ensure_schema_exists(
         )
     try:
         async with engine.begin() as conn:
+            await conn.run_sync(acquire_migration_lock, target_schema, lock_timeout)
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{target_schema}"'))
     finally:
         if owned_engine:
@@ -283,7 +295,11 @@ async def _database_revision_matches_head(
     tables = await _list_schema_tables(database_url, schema, engine=engine)
     if ALEMBIC_VERSION_TABLE not in tables:
         return False
-    return await _get_database_revision(database_url, schema, engine=engine) == _get_code_head_revision()
+    matches = await _get_database_revision(database_url, schema, engine=engine) == _get_code_head_revision()
+    if matches:
+        async with engine.connect() as connection:
+            await connection.run_sync(validate_indexes, schema)
+    return matches
 
 
 def _invoke_alembic_command(
@@ -292,6 +308,7 @@ def _invoke_alembic_command(
     database_url: str,
     schema: Optional[str],
     runner: Callable[["Config"], None],
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> None:
     alembic_cfg = _load_alembic_config()
     alembic_cfg.set_main_option("sqlalchemy.url", database_url)
@@ -299,6 +316,7 @@ def _invoke_alembic_command(
     alembic_cfg.attributes["database_url"] = database_url
     alembic_cfg.attributes["target_schema"] = _validate_schema_name(schema)
     alembic_cfg.attributes["version_table"] = ALEMBIC_VERSION_TABLE
+    alembic_cfg.attributes["lock_timeout"] = validate_lock_timeout(lock_timeout)
     runner(alembic_cfg)
 
 
@@ -310,38 +328,57 @@ async def _run_alembic_command(
     ensure_schema: bool = False,
     engine: Optional[AsyncEngine] = None,
     statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
+    lock_retry_attempts: int = 3,
     operation_label: str = "alembic command",
 ) -> None:
     normalized_url = normalize_database_url(database_url)
     target_schema = _validate_schema_name(schema)
-    if ensure_schema:
-        await _ensure_schema_exists(
-            normalized_url,
-            target_schema,
-            engine=engine,
-            statement_timeout=statement_timeout,
-        )
-
+    validate_lock_timeout(lock_timeout)
+    if not 1 <= lock_retry_attempts <= 3:
+        raise ValueError("Migration lock_retry_attempts must be between 1 and 3")
     owned_engine = engine is None
     if engine is None:
         engine = _build_engine(
-            normalized_url,
-            target_schema,
-            statement_timeout=statement_timeout,
+            normalized_url, target_schema, statement_timeout=statement_timeout, lock_timeout=lock_timeout
         )
     try:
-        logger.info("[outlabs_auth] %s: starting", operation_label)
-        # Alembic expects the caller-owned connection to commit DDL changes.
-        # Using a plain connect() here can leave the migration transaction open
-        # and rolled back on exit even though upgrade logs look successful.
-        async with engine.begin() as conn:
-            await conn.run_sync(
-                _invoke_alembic_command,
-                database_url=normalized_url,
-                schema=target_schema,
-                runner=runner,
-            )
-        logger.info("[outlabs_auth] %s: completed", operation_label)
+        for attempt in range(lock_retry_attempts):
+            try:
+                if ensure_schema:
+                    await _ensure_schema_exists(
+                        normalized_url,
+                        target_schema,
+                        engine=engine,
+                        statement_timeout=statement_timeout,
+                        lock_timeout=lock_timeout,
+                    )
+                logger.info("[outlabs_auth] %s: starting", operation_label)
+                # A failed attempt rolls back before retrying. Never retry data,
+                # statement-timeout or generic migration failures.
+                async with serialized_alembic_context(lock_timeout):
+                    async with engine.begin() as conn:
+                        await conn.run_sync(
+                            _invoke_alembic_command,
+                            database_url=normalized_url,
+                            schema=target_schema,
+                            runner=runner,
+                            lock_timeout=lock_timeout,
+                        )
+                        await conn.run_sync(validate_indexes, target_schema)
+                logger.info("[outlabs_auth] %s: completed", operation_label)
+                return
+            except DBAPIError as exc:
+                state = getattr(exc.orig, "sqlstate", None)
+                if state != "55P03" or attempt + 1 == lock_retry_attempts:
+                    raise
+                logger.warning(
+                    "[outlabs_auth] %s: lock wait expired; bounded retry %s/%s",
+                    operation_label,
+                    attempt + 2,
+                    lock_retry_attempts,
+                )
+                await asyncio.sleep(0.1 * (attempt + 1))
     finally:
         if owned_engine:
             await _dispose_engine_with_logging(engine)
@@ -352,6 +389,7 @@ async def run_migrations(
     revision: str = "head",
     schema: Optional[str] = None,
     statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> None:
     """Run Alembic migrations asynchronously against the target DB/schema."""
     from alembic import command
@@ -362,6 +400,7 @@ async def run_migrations(
         normalized_url,
         target_schema,
         statement_timeout=statement_timeout,
+        lock_timeout=lock_timeout,
     )
     try:
         if revision == "head":
@@ -371,6 +410,7 @@ async def run_migrations(
                 revision=SQUASHED_BASELINE_REVISION,
                 engine=engine,
                 statement_timeout=statement_timeout,
+                lock_timeout=lock_timeout,
             )
             if await _database_revision_matches_head(
                 normalized_url,
@@ -386,6 +426,7 @@ async def run_migrations(
             ensure_schema=True,
             engine=engine,
             statement_timeout=statement_timeout,
+            lock_timeout=lock_timeout,
             operation_label=f"migration upgrade to {revision}",
             runner=lambda alembic_cfg: command.upgrade(alembic_cfg, revision),
         )
@@ -400,6 +441,7 @@ async def adopt_existing_schema(
     revision: str = "head",
     engine: Optional[AsyncEngine] = None,
     statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT,
 ) -> bool:
     """
     Stamp a legacy auth schema that was created outside Alembic.
@@ -418,6 +460,7 @@ async def adopt_existing_schema(
             normalized_url,
             target_schema,
             statement_timeout=statement_timeout,
+            lock_timeout=lock_timeout,
         )
 
     try:
@@ -445,6 +488,7 @@ async def adopt_existing_schema(
             ensure_schema=True,
             engine=engine,
             statement_timeout=statement_timeout,
+            lock_timeout=lock_timeout,
             operation_label=f"adopt_existing_schema stamp to {revision}",
             runner=lambda alembic_cfg: command.stamp(alembic_cfg, revision),
         )
@@ -1414,7 +1458,10 @@ register_remote_commands(main)
 
 @main.command()
 @click.option("--revision", default="head", help="Target revision (default: head)")
-def migrate(revision: str):
+@click.option(
+    "--lock-timeout", default=DEFAULT_LOCK_TIMEOUT, show_default=True, help="Bound migration lock waits (1ms to 30s)"
+)
+def migrate(revision: str, lock_timeout: str):
     """Run database migrations to specified revision."""
     url = get_database_url()
     schema = get_target_schema_from_env()
@@ -1424,6 +1471,7 @@ def migrate(revision: str):
             url,
             revision=revision,
             schema=schema,
+            lock_timeout=lock_timeout,
         )
     )
     emit_result(

@@ -22,6 +22,7 @@ async def test_run_migrations_reuses_single_engine_and_skips_upgrade_at_head(
         schema: str | None,
         *,
         statement_timeout: str | None = None,
+        lock_timeout: str = "5s",
     ):
         build_calls.append((database_url, schema, statement_timeout))
         return fake_engine
@@ -48,6 +49,7 @@ async def test_run_migrations_reuses_single_engine_and_skips_upgrade_at_head(
         revision=SQUASHED_BASELINE_REVISION,
         engine=fake_engine,
         statement_timeout="15s",
+        lock_timeout="5s",
     )
     revision_matches_head.assert_awaited_once_with(
         normalized_url,
@@ -68,7 +70,7 @@ async def test_run_migrations_passes_shared_engine_to_alembic_command(
 
     monkeypatch.setattr(
         "outlabs_auth.cli._build_engine",
-        lambda database_url, schema, *, statement_timeout=None: fake_engine,
+        lambda database_url, schema, *, statement_timeout=None, lock_timeout="5s": fake_engine,
     )
     monkeypatch.setattr("outlabs_auth.cli.adopt_existing_schema", AsyncMock(return_value=False))
     monkeypatch.setattr(

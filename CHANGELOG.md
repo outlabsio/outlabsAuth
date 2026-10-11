@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Fixed
+
+- Publish authority-cache invalidation only after the owning transaction commits;
+  bind compiled snapshots to versions observed before authority reads and to their
+  next time transition. Re-evaluate time-conditioned decisions on each request.
+- Retained deletion freezes login identifiers. Restore withdraws old superuser
+  privilege, roles, memberships, refresh sessions and owned keys while retaining
+  historical platform protection. Monotonic user security epochs cancel old
+  access/refresh proofs and pending OAuth association after security changes.
+- Bound migration lock waits, retry only rolled-back PostgreSQL lock timeouts,
+  serialize migration runners and refuse invalid/incomplete indexes.
+- Fence shared authority on Redis startup/recovery before enabling cache reads;
+  discard the recovering worker's local key snapshots without resetting counters.
+
+### Database migrations
+
+- `20261011_0026`: additive nullable `users.session_security_epoch` (BIGINT) and
+  `users.platform_protected` (BOOLEAN), with no default/backfill/index. Apply using
+  the packaged CLI or `auto_migrate=True`; routine downgrade refuses barrier removal.
+
+### Operational upgrade notes
+
+- This is an unreleased local candidate. Select a new version and qualify the exact
+  published artifacts before changing consumer pins; current a36 is unchanged.
+- Migration `lock_timeout` defaults to 5 seconds (independent of statement timeout),
+  accepts 1ms–30s via `migrate --lock-timeout` / `migration_lock_timeout`, and permits
+  at most three lock-only attempts. Repair invalid indexes explicitly before retry.
+- Database restore or rollback to pre-epoch validators requires closed admission,
+  externally held fresh signing secrets/cache namespace and reconciliation of
+  post-backup revocations. See `docs/AUTH_RECOVERY.md` and the S1 qualification receipt.
+
 ## [0.1.0a36] - 2026-10-03
 
 ### Fixed
