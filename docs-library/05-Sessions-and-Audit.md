@@ -178,7 +178,9 @@ host responsibilities.
 
 The local a38 candidate offers
 `auth.host_query_service.staff_administration(auth, trusted_internal_root_id=...)`.
-Configure the control-root UUID on the server. Authenticate through the facade
+Configure the control-root UUID on the server and retain one facade instance
+for the application lifetime: contexts and entity cursors are instance-bound.
+Authenticate through the facade
 with the actual request and exact host AsyncSession; its context cannot cross
 a transaction, session or installation. Human JWTs and personal keys intersect
 current target-bound grants; machine credentials cannot borrow staff authority.
@@ -195,10 +197,28 @@ qualified ordering, failure handling and writer inventory.
 entity projections in SQL. A list admission is not write authorization.
 `create_personal_key` is explicit JWT-only self-service with exact bounded
 scopes and a durable anchor; ordinary mounted SDK key policy stays in force.
-Unanchored legacy keys require explicit opt-in. Key update/rotation, complete
-IAM route pairing, large-tree numeric budgets and restricted DML privileges
-remain gates. Nothing activates this facade on existing routes.
+`update_personal_key` narrows an owned key's exact scopes and may shorten expiry.
+It cannot transfer owner/anchor, expand inheritance, reactivate a key or extend
+its deadline. `rotate_personal_key` rechecks live grants after locking the old
+key, creates the replacement and revokes the original in the same transaction,
+retaining exact scopes, anchor, inheritance, IP/rate restrictions and expiry.
+The deadline is checked again after authority waits. No commit occurs inside
+these SDK methods; a caller rollback restores the original and discards the
+replacement. `revoke_personal_key` remains available after grants end.
+
+These management methods require the owner's current human JWT. A personal key
+cannot mint or manage a second key. `personal_key_page(limit=..., after=...)`
+returns only that owner's credential metadata, with SQL filtering before count
+and UUID keyset pagination. It exposes no key secret/hash/prefix and grants no
+customer credential-management authority. Use this explicit facade for the
+qualified staff workflow; existing mounted key routes keep ordinary policy.
+
+Unanchored legacy runtime keys require explicit opt-in; update/rotation refuse
+unanchored, revoked, expired or non-expiring keys. Complete IAM route pairing,
+customer credential inventory/management, large-tree numeric budgets and
+restricted DML privileges remain gates. Nothing activates this facade on
+existing routes.
 
 Qualification and remaining release/consumer gates are recorded in
-`docs/S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md`; do not adopt an unreleased
+`docs/S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md`; do not adopt an unreleased
 local build in a deployed consumer. Public a37 does not provide this facade.

@@ -11,8 +11,8 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 - Additive migration `20261011_0027` stores separate immutable administrative
   template revisions, groups, pinned customer admissions, grants and audit.
-  Administrative authority stays unwired from runtime routes, credentials and
-  list predicates; this is a local foundation, not an adoption-ready release.
+  Administrative authority stays unwired from existing mounted routes;
+  explicit SDK facade paths are qualified separately before consumer adoption.
 - Optional same-transaction lifecycle observers capture frozen scalar membership,
   user and archive evidence before destructive cleanup. Failed observation
   refuses commit until rollback; nested rollback cannot clear an outer failure.
@@ -21,6 +21,13 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 - Administrative grants pin their holder's security epoch: delete/restore,
   suspension/reactivation and password security changes require a new explicit
   platform-approved grant rather than reviving earlier administrative access.
+
+- Verified human staff SDK contexts bind credential, installation, session and
+  transaction. Action-bound entity SQL pages, protected account-root checks and
+  migration `20261011_0028` fence policy withdrawal and child writes.
+- JWT-only owned-key narrowing, exact-deadline rotation, self-revocation and SQL
+  metadata inventory retain current grant/action/anchor ceilings. Neither these
+  paths nor the observer activate existing mounted IAM authorization.
 
 ### Changed
 

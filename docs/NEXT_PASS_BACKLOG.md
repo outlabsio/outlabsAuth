@@ -21,7 +21,7 @@ This document is intentionally short. It is not a full project plan. It is a wor
   [qualification and limits](S2_S3_FOUNDATION_2026-10-11.md). Next verified
   complete IAM/detail/list and credential/writer inventory plus numeric budgets.
   The explicit verified facade, protected-account and SQL-list checks and
-  focused concurrency are [qualified locally](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md). Then
+  focused concurrency plus owned-key narrow/rotate/revoke/SQL inventory are [qualified locally](S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md). Then
   full installed S3 writer/failure acceptance and a separately qualified release.
   Keep runtime grants unwired. Record remaining DD-062/S0 dispositions before
   adopting broader policy; namespaces, delegation and machine grants remain deferred.

@@ -34,9 +34,10 @@ unreleased a38 foundation now adds separate persistent policy, immutable
 lineage/audit and optional same-transaction lifecycle observation. It does not
 activate existing mounted administrative routes or complete host-owned replay.
 The explicit verified staff facade qualifies real credential/account targets,
-action-bound SQL entity lists and concurrent withdrawal at `501bf26`: 1,585
-full local cases, 45 each installed artifact, 239 matched package files.
-[Current acceptance and remaining exits](S2_CREDENTIAL_TARGET_CONCURRENCY_2026-10-11.md)
+action-bound SQL entity lists, protected withdrawal and owned-key lifecycle at
+`4c4aebf`: 1,596 full local cases, 56 each installed artifact with zero skips,
+and 239 matched package files.
+[Current acceptance and remaining exits](S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md)
 retain full IAM/credential writer inventory, numeric budgets and release gates. [Implementation scope and pending gates](S2_S3_FOUNDATION_2026-10-11.md)
 keep S2/S3 stage exits open; namespaces retain their later stage. These local corrections do not accept DD-062 or a deployed host.
 

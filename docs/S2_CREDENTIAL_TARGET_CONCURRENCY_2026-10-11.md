@@ -1,5 +1,7 @@
 # Staff credentials, targets, lists and concurrent withdrawal
 
+Latest continuation: [owned-key lifecycle and operation inventory](S2_KEY_LIFECYCLE_ACCEPTANCE_2026-10-11.md). The evidence below retains its original revision.
+
 Date: 2026-10-11. Runtime source `501bf269a7534cd3ecdee559981db7d095467a28`.
 Candidate `0.1.0a38`, unreleased; public a37 consumers keep their pins.
 This follows [the retained-policy/observer foundation](S2_S3_FOUNDATION_2026-10-11.md)
