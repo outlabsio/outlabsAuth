@@ -381,7 +381,7 @@ class AdministrativeAuthorization:
                 raise HTTPException(403, "Staff key scope is outside current administrative authority")
         actor = await self._actor(session, context)
         policy = self.auth.api_key_service.policy_service
-        if actor is None or policy is None:
+        if actor is None or policy is None or key.expires_at is None or key.expires_at <= datetime.now(timezone.utc):
             raise HTTPException(403, "Staff key policy admission refused")
         return _StaffKeyApproval(
             policy._staff_approval_issuer,
@@ -415,6 +415,8 @@ class AdministrativeAuthorization:
         ):
             raise HTTPException(403, "Staff key updates can only shorten a future expiry")
         approval = await self._key_approval(session, context, key, scopes)
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(403, "Staff key deadline passed while waiting on authority")
         updates: dict[str, Any] = {"scopes": sorted(set(scopes))}
         if expires_at is not None:
             updates["expires_at"] = expires_at

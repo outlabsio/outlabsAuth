@@ -562,3 +562,33 @@ async def test_protected_write_lock_timeout_requires_rollback_and_has_no_effect(
             await writer.rollback()
         await blocker.rollback()
     assert (await w.session.execute(text("SELECT value FROM staff_effects"))).scalar_one() == 0
+
+
+async def test_rotation_rechecks_key_deadline_after_authority_wait(world, monkeypatch):
+    from outlabs_auth.services import administrative_authorization as facade_module
+
+    w = world
+    await grant(w, w.read, w.a)
+    ctx = await context(w)
+    _, key = await w.facade.create_personal_key(w.session, ctx, name="deadline", entity_id=w.a.id, scopes=["case:read"])
+    key.expires_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    deadline = key.expires_at
+    await w.session.commit()
+    ctx = await context(w)
+    real_authorize = w.facade.authorize
+
+    class AfterKeyDeadline:
+        @classmethod
+        def now(cls, _timezone):
+            return deadline + timedelta(seconds=1)
+
+    async def authorized_then_clock_passes(*args, **kwargs):
+        result = await real_authorize(*args, **kwargs)
+        monkeypatch.setattr(facade_module, "datetime", AfterKeyDeadline)
+        return result
+
+    monkeypatch.setattr(w.facade, "authorize", authorized_then_clock_passes)
+    with pytest.raises(HTTPException, match="policy admission"):
+        await w.facade.rotate_personal_key(w.session, ctx, key_id=key.id)
+    assert (await w.session.execute(text("SELECT count(*) FROM api_keys"))).scalar_one() == 1
+    assert key.status == "active"
