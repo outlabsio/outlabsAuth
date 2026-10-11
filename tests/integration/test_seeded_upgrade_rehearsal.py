@@ -126,6 +126,9 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
             revision = await conn.execute(
                 text(f"SELECT version_num FROM {_qualified(schema, 'outlabs_auth_alembic_version')}")
             )
+            managed_keys = await conn.execute(
+                text(f"SELECT count(*) FROM {_qualified(schema, 'api_keys')} WHERE staff_managed")
+            )
             index_exists = await conn.execute(
                 text("""
                     SELECT 1 FROM pg_indexes
@@ -138,7 +141,8 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
         assert UUID(str(token.family_id)) == token_id
         assert token.replaced_by_token_id is None
         assert token.usage_count == 3
-        assert revision.scalar_one() == "20261011_0028"
+        assert revision.scalar_one() == "20261011_0029"
+        assert managed_keys.scalar_one() == 0
         assert index_exists.scalar_one() == 1
         async with engine.connect() as conn:
             new_columns = await conn.execute(
