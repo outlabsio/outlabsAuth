@@ -14,6 +14,30 @@ safety and Redis recovery fencing. The [implementation receipt](TENANT_AUTH_SECU
 retain the rationale and limits. The unwired staff-grant prototype remains unchanged;
 S2 grants, S3 history/replay and identity namespaces are separate work.
 
+## Final independent review and local source acceptance
+
+Runtime `90de105`, test-only corrections `d6cdebf`, and fresh-request benchmark
+harness `dff04f6` are accepted. Cache, account/session/OAuth and migration/recovery
+reviewers are independently green. Their eight initial release blockers and the
+explicit unqualified host modes are retained in [S1_REVIEW_A37.md](S1_REVIEW_A37.md).
+No runtime changes followed those reviews.
+
+| Gate | Final result |
+| --- | --- |
+| Full local suite, owned PostgreSQL 16 and required Redis 7 | 1540 passed, 516 warnings, no failures/skips, 455.12s |
+| Independent required-Redis suite | 102 passed, 1438 deselected, 371 warnings, 50.38s |
+| Enterprise HTTP | 62/62 assertions plus admin/ABAC smoke |
+| Metadata and packaging/bootstrap | Metadata check and 15 cases pass |
+| Warm keys/tokens, 100 samples after 20 warmups, concurrency 1 and 10 | All ten scenarios zero SQL/zero failures; p95 below 10ms local ceiling |
+| Ruff and changed Python formatting | Pass |
+| Selected new infrastructure types | Four core modules pass; wider targeted surface retains 13 inherited errors and no new errors |
+
+The full suite ran from clean `d6cdebf`; later edits affect the benchmark and
+handbook/maintainer receipts, without changing library runtime or collected tests.
+Installed wheel/sdist tests must still qualify the exact accepted-merge artifacts;
+the protected publisher must qualify its exact outputs or prove identical hashes.
+Public release/train/consumer adoption are independently recorded gates.
+
 ## Historical pre-review candidate inputs
 
 `uv build --no-sources` built the sdist and then its wheel from clean `f00eb25`.

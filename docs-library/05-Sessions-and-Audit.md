@@ -51,6 +51,21 @@ rotation. See [Multi-Frontend Support](../docs/MULTI_FRONTEND_SUPPORT.md).
 Scoped actors (Enterprise + `enforce_user_scope`) only see targets in their
 access scope. Admin revokes emit audit events when audit is wired.
 
+### Lifecycle and replay barriers (a37)
+
+Deleting or restoring an account retires its pending login/recovery challenges
+and advances its durable session generation. Restore returns an identity without
+restoring its former privilege; pre-boundary access/refresh proofs remain refused.
+
+Reusing a rotated refresh token aborts the caller transaction, then commits session
+revocation and the generation barrier in an independent transaction before refusing
+the request. Unrelated pending caller writes roll back. A containment failure
+propagates rather than reporting successful revocation. Qualified hosts use ordinary
+configured-engine sessions and enough pool capacity for the independent checkout.
+Externally held connections, connection-local schema/search-path overrides and
+single-connection pools require separate host qualification. See
+[Auth recovery](../docs/AUTH_RECOVERY.md) before admission, restore or rollback.
+
 ### Do not confuse with `get_session_router`
 
 `get_session_router` is a **minimal login/refresh/logout** surface for embedded

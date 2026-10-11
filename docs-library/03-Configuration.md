@@ -35,7 +35,7 @@ auth = EnterpriseRBAC(
 |---------|----------|
 | `database_schema` | Keep auth tables in a dedicated schema (e.g. `outlabs_auth`) |
 | `auto_migrate` | `False` in multi-worker runtime; migrate via CLI in prestart |
-| `migration_lock_timeout` (unreleased S1 candidate) | Default `"5s"`, 1ms–30s, independent of statement timeout; CLI `migrate --lock-timeout` |
+| `migration_lock_timeout` (a37) | Default `"5s"`, 1ms–30s, independent of statement timeout; CLI `migrate --lock-timeout` |
 | `redis_url` | Enables counters, rate limits, and shared permission caching |
 | `cache_backend` | `redis` (multi-instance), `memory` (single-process, no Redis), or `none` |
 | `background_job_mode` | `disabled` in production APIs; one external worker runs maintenance |
@@ -49,7 +49,7 @@ auth = EnterpriseRBAC(
 | `memory` | Single-process hosts that want cache without Redis | Instant in-process; TTL-bounded across processes |
 | `none` | No cross-request permission cache | N/A |
 
-The unreleased S1 candidate fences Redis reconnects before cache reads resume.
+a37 fences Redis reconnects before cache reads resume.
 Partial partitions and database/cache backup restore require the separate
 [external recovery admission procedure](../docs/AUTH_RECOVERY.md). Nonzero local
 key-snapshot TTL permits bounded staleness on workers that remain connected;
