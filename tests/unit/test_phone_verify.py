@@ -7,7 +7,7 @@ import pytest
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError, TokenInvalidError
-from outlabs_auth.models.sql.enums import AuthChallengeType
+from outlabs_auth.models.sql.enums import AuthChallengeType, UserStatus
 from outlabs_auth.services.auth import AuthService
 from outlabs_auth.services.user import UserService
 
@@ -47,6 +47,7 @@ async def test_verify_phone_verify_code_sets_phone_verified():
         phone=phone,
         phone_verified=False,
         root_entity_id=None,
+        status=UserStatus.ACTIVE,
     )
 
     class UserResult:
@@ -105,6 +106,7 @@ async def test_confirm_phone_verification_rejects_bad_code():
         phone=phone,
         phone_verified=False,
         root_entity_id=None,
+        status=UserStatus.ACTIVE,
     )
     challenge = SimpleNamespace(
         user_id=user_id,

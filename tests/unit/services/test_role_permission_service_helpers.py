@@ -326,7 +326,8 @@ async def test_permission_service_resolve_context_entity_type_dedupes_within_req
         def __init__(self):
             self.calls = 0
 
-        async def get(self, model, key):
+        async def get(self, model, key, *, populate_existing=False):
+            assert populate_existing is True
             self.calls += 1
             return entity if key == entity_id else None
 
