@@ -408,3 +408,27 @@ async def test_protected_account_write_serializes_future_platform_classification
             await asyncio.gather(pending, return_exceptions=True)
     ctx = await context(w)
     assert not (await w.facade.authorize_account(w.session, ctx, action="user:update", user_id=w.outsider.id)).allowed
+
+
+async def test_verified_context_cannot_outlive_its_jwt(world, monkeypatch):
+    from datetime import datetime, timezone
+    from outlabs_auth.services import administrative_authorization as facade_module
+
+    w = world
+    await grant(w, w.read, w.a)
+    await w.session.commit()
+    ctx = await context(w)
+    expires = ctx._claims["exp"]
+
+    class ExpiredClock:
+        @classmethod
+        def now(cls, _timezone):
+            return datetime.fromtimestamp(expires + 1, timezone.utc)
+
+    monkeypatch.setattr(facade_module, "datetime", ExpiredClock)
+    assert not (await w.facade.authorize(w.session, ctx, action="case:read", entity_id=w.a.id)).allowed
+    assert not (
+        await w.facade.authorize(w.session, ctx, action="case:read", entity_id=w.a.id, protected_write=True)
+    ).allowed
+    with pytest.raises(HTTPException):
+        await w.facade.entity_page(w.session, ctx, action="case:read")

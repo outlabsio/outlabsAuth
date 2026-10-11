@@ -153,8 +153,14 @@ class AdministrativeAuthorization:
         ).scalar_one_or_none()
         if user is None or user.status != UserStatus.ACTIVE or user.root_entity_id != self.grants.trusted_root:
             return None
-        if context.source == "jwt" and not proof_is_current(context._claims, user):
-            return None
+        if context.source == "jwt":
+            expires = context._claims.get("exp")
+            if (
+                not proof_is_current(context._claims, user)
+                or type(expires) not in {int, float}
+                or not expires > datetime.now(timezone.utc).timestamp()
+            ):
+                return None
         return user
 
     async def _key(self, session: AsyncSession, context: StaffContext, *, lock: bool = False) -> APIKey | None:
