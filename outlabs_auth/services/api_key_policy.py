@@ -192,7 +192,20 @@ class APIKeyPolicyService:
     ) -> None:
         """Validate the effective state after an update."""
         try:
-            await self.validate_create(
+            if staff_approval is not None:
+                await self.validate_create(
+                    session,
+                    actor_user_id=actor_user_id,
+                    owner=owner,
+                    integration_principal=integration_principal,
+                    key_kind=api_key.key_kind,
+                    scopes=scopes,
+                    entity_id=entity_id,
+                    inherit_from_tree=inherit_from_tree,
+                    staff_approval=staff_approval,
+                )
+                return
+            await self._validate_key_policy(
                 session,
                 actor_user_id=actor_user_id,
                 owner=owner,
@@ -201,7 +214,6 @@ class APIKeyPolicyService:
                 scopes=scopes,
                 entity_id=entity_id,
                 inherit_from_tree=inherit_from_tree,
-                staff_approval=staff_approval,
             )
         except InvalidInputError as exc:
             self._log_policy_decision(
