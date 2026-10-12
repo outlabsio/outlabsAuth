@@ -66,6 +66,13 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
+**Latest continuation, 2026-10-12:** unreleased a38 runtime `4617817` adds the
+[explicit host security-containment transaction seam](S3_SECURITY_TRANSACTION_2026-10-12.md).
+Default independent behavior remains unchanged. 1,652 distinct source cases,
+independent required Redis 102 and fresh wheel/sdist 103 each plus constructors
+qualify; Auth head stays 0031. Exact publication review and consumer admission
+remain separate.
+
 **Latest implementation state on 2026-10-11:** S1 implements all eight baseline
 corrections, two nullable security-state columns, bounded migration/index checks,
 and recovery fencing. Independent publication review closed eight additional
