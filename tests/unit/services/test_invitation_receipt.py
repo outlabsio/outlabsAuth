@@ -53,7 +53,7 @@ async def test_sendgrid_retains_lowercase_http_receipt_header():
         )
         assert result.accepted and result.provider_message_id == "safe-receipt"
     finally:
-        await provider.close()
+        await provider.aclose()
 
 
 async def test_default_composer_passes_only_safe_setup_correlation_metadata():
