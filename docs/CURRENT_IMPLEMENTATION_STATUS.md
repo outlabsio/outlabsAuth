@@ -36,7 +36,7 @@ activate existing mounted administrative routes or complete host-owned replay.
 The explicit staff facade and opt-in mounted entity/owned-key workflow add
 managed-key provenance, alternate credential-route denial and constant-depth
 SQL budgets at runtime `fda9394`, schema 0029. Exact-selector list qualification
-uses 10,000 extra customer roots. [Current scope and local evidence](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md)
+uses 10,000 extra customer roots. [Current scope and local evidence](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md), followed by [native/source membership ownership and compatible IAM writer fences](S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md)
 keep broad IAM account/member mutation and projection pairing, worst-case group/
 grant scale, restricted DML, multi-effect concurrency and release/consumer gates
 open. [Earlier foundation evidence](S2_S3_FOUNDATION_2026-10-11.md) remains

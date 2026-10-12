@@ -9,6 +9,13 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 ### Added
 
+- Migration `20261011_0030` retains conservative native membership/role ownership,
+  separate exact source claims and compatible account/policy child writer locks.
+  Trusted `set_source_membership` replaces/withdraws one source's intention;
+  native grants and other sources remain. Native same-role assignment records
+  ownership; source replay never changes credentials or overrides lifecycle.
+  Existing consumers remain unadopted pending exact package/schema acceptance.
+
 - Explicit opt-in `get_staff_router` exposes action-qualified entity discovery
   and JWT-owned credential lifecycle without adding grants to ordinary IAM.
   Migration `20261011_0029` retains staff-key provenance and fences lifecycle

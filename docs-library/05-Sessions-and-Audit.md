@@ -237,3 +237,33 @@ existing routes.
 Qualification and remaining release/consumer gates are recorded in
 `docs/S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md`; do not adopt an unreleased
 local build in a deployed consumer. Public a37 does not provide this facade.
+
+
+## Unreleased native and source membership ownership
+
+Public a37 has no source contribution writer. The unreleased a38 candidate adds
+`MembershipService.set_source_membership` for trusted host reconciliation of
+already mapped accounts. The host must review a complete source cut, acquire
+compatible writer fences and compare actual target state before calling it.
+This SDK method has no HTTP route and does not create users or invitations.
+
+Existing attachments and role grants retain native ownership at migration.
+Each source relationship has a stable opaque UUID and its own exact role subset.
+Effective roles are the union of native and source intentions. A native role
+replacement changes its native subset; independently sourced roles remain until
+that source withdraws them. Reassigning a role already held through a source
+records native intention, so subsequent source removal preserves it.
+
+Withdraw one source with `role_ids=None`. Another source or a native attachment
+keeps the membership. Withdrawing the last source-only attachment revokes the
+membership and records history while preserving the account. Source replay
+cannot override native suspension, revocation or validity, transfer accounts,
+change credentials/preferences or restore revoked memberships automatically.
+Explicitly reactivate a revoked membership before accepting a later source
+return. Withdraw source claims before hard-deleting claimed memberships/roles.
+
+The host owns atomic application, stable mappings, accepted source watermarks,
+frozen relationship evidence, recovery admission and delivery. Database child
+fences include empty collections, but restricted runtime permissions and exact
+consumer/package/schema acceptance remain activation gates. See
+`docs/S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md` for the qualified boundary.
