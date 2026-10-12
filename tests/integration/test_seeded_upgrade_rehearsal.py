@@ -141,7 +141,7 @@ async def test_seeded_pre_release_schema_upgrades_losslessly_and_is_idempotent()
         assert UUID(str(token.family_id)) == token_id
         assert token.replaced_by_token_id is None
         assert token.usage_count == 3
-        assert revision.scalar_one() == "20261011_0029"
+        assert revision.scalar_one() == "20261011_0030"
         assert managed_keys.scalar_one() == 0
         assert index_exists.scalar_one() == 1
         async with engine.connect() as conn:

@@ -35,6 +35,8 @@ from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
+    MembershipSourceClaim,
+    MembershipSourceRole,
 )
 from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHistory
 from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope, UserStatus
@@ -107,6 +109,217 @@ class MembershipService(BaseService[EntityMembership]):
             selectinload(cast(Any, EntityMembership.entity)),
         ]
 
+    @staticmethod
+    async def _lock_member_account(session: AsyncSession, user_id: UUID) -> None:
+        await session.execute(
+            select(User)
+            .where(cast(Any, User.id) == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    async def _project_source_roles(self, session: AsyncSession, membership_id: UUID) -> None:
+        """Effective roles are the union of native and all source intentions."""
+        await session.flush()
+        wanted = set(
+            (
+                await session.execute(
+                    select(cast(Any, MembershipSourceRole.role_id))
+                    .join(
+                        MembershipSourceClaim,
+                        cast(Any, MembershipSourceRole.source_id) == MembershipSourceClaim.source_id,
+                    )
+                    .where(cast(Any, MembershipSourceClaim.membership_id) == membership_id)
+                )
+            ).scalars()
+        )
+        links = list(
+            (
+                await session.execute(
+                    select(EntityMembershipRole)
+                    .where(cast(Any, EntityMembershipRole.membership_id) == membership_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalars()
+        )
+        existing = {link.role_id for link in links}
+        for link in links:
+            if not link.native_owned and link.role_id not in wanted:
+                await session.delete(link)
+        for role_id in wanted - existing:
+            session.add(EntityMembershipRole(membership_id=membership_id, role_id=role_id, native_owned=False))
+        await session.flush()
+
+    async def _replace_native_roles(self, session: AsyncSession, membership_id: UUID, wanted: set[UUID]) -> None:
+        links = list(
+            (
+                await session.execute(
+                    select(EntityMembershipRole)
+                    .where(cast(Any, EntityMembershipRole.membership_id) == membership_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalars()
+        )
+        existing = {link.role_id for link in links}
+        for link in links:
+            link.native_owned = link.role_id in wanted
+        for role_id in wanted - existing:
+            session.add(EntityMembershipRole(membership_id=membership_id, role_id=role_id, native_owned=True))
+        await self._project_source_roles(session, membership_id)
+
+    async def set_source_membership(
+        self,
+        session: AsyncSession,
+        *,
+        source_id: UUID,
+        entity_id: UUID,
+        user_id: UUID,
+        role_ids: tuple[UUID, ...] | None,
+    ) -> Optional[EntityMembership]:
+        """Trusted SDK replay primitive; ``None`` withdraws this source only.
+
+        Caller must admit/review its source and owns the transaction. No HTTP
+        route, account initialization, transfer, credential or invitation write.
+        Existing non-active or time-limited memberships refuse source expansion.
+        """
+        await self._lock_member_account(session, user_id)
+        user = await session.get(User, user_id, populate_existing=True)
+        entity = (
+            await session.execute(
+                select(Entity)
+                .where(cast(Any, Entity.id) == entity_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if not user or not entity or user.is_superuser or str(getattr(user.status, "value", user.status)) == "deleted":
+            raise InvalidInputError(message="Source membership subject is absent or protected")
+        from outlabs_auth.models.sql.administrative_grant import AdministrativeGrantRecord
+        from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+
+        protected_role = (
+            select(cast(Any, Role.id))
+            .join(UserRoleMembership, cast(Any, UserRoleMembership.role_id) == Role.id)
+            .where(
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, Role.is_global).is_(True),
+                cast(Any, Role.root_entity_id).is_(None),
+                cast(Any, Role.scope_entity_id).is_(None),
+            )
+            .exists()
+        )
+        protected_grant = (
+            select(cast(Any, AdministrativeGrantRecord.id))
+            .where(cast(Any, AdministrativeGrantRecord.user_id) == user_id)
+            .exists()
+        )
+        if (await session.execute(select(protected_role | protected_grant))).scalar():
+            raise InvalidInputError(message="Source membership subject has protected platform authority")
+        if role_ids:
+            await session.execute(
+                select(Role)
+                .where(cast(Any, Role.id).in_(role_ids))
+                .order_by(cast(Any, Role.id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        root_id = await self._get_root_entity_id(session, entity_id)
+        if user.root_entity_id != root_id:
+            raise InvalidInputError(message="Source membership cannot initialize or transfer a customer root")
+        membership = (
+            await session.execute(
+                select(EntityMembership)
+                .where(
+                    cast(Any, EntityMembership.user_id) == user_id, cast(Any, EntityMembership.entity_id) == entity_id
+                )
+                .options(self._membership_roles_option())
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        claim = await session.get(MembershipSourceClaim, source_id, populate_existing=True)
+        if claim is not None and (membership is None or claim.membership_id != membership.id):
+            raise InvalidInputError(message="Source membership identity cannot transfer")
+        if role_ids is None and claim is None:
+            return membership
+        if role_ids is not None:
+            if len(role_ids) > 64 or len(set(role_ids)) != len(role_ids):
+                raise InvalidInputError(message="Source role set exceeds its exact bounded contract")
+            if str(getattr(entity.status, "value", entity.status)) != "active":
+                raise InvalidInputError(message="Source membership entity is inactive")
+            await self._require_holder_in_entity_tree(session, entity_id, user_id)
+            if membership is not None and (
+                membership.status != MembershipStatus.ACTIVE
+                or membership.valid_from is not None
+                or membership.valid_until is not None
+            ):
+                raise InvalidInputError(message="Source replay cannot override native lifecycle or validity")
+            roles = await self._fetch_roles_by_ids(session, list(role_ids))
+            ancestors = await self._get_entity_ancestor_ids(session, entity_id)
+            for role in roles:
+                if (
+                    role.is_global
+                    or role.root_entity_id != root_id
+                    or role.status != DefinitionStatus.ACTIVE
+                    or not await self._is_role_available_for_entity(
+                        session, role, entity_id, root_id, entity_type=entity.entity_type, ancestor_ids=ancestors
+                    )
+                ):
+                    raise InvalidInputError(
+                        message="Source role is inactive, protected or outside its customer/entity boundary"
+                    )
+        created = membership is None
+        if membership is None:
+            if role_ids is None:
+                return None
+            if (
+                entity.max_members
+                and await self.get_entity_members_count(session, entity_id, active_only=True) >= entity.max_members
+            ):
+                raise InvalidInputError(message="Entity has reached maximum members limit")
+            membership = EntityMembership(user_id=user_id, entity_id=entity_id, native_owned=False)
+            session.add(membership)
+            await session.flush()
+            await session.refresh(membership, ["roles"])
+        previous = await self._build_membership_history_snapshot(session, membership)
+        if claim is not None:
+            await session.execute(
+                sql_delete(MembershipSourceRole).where(cast(Any, MembershipSourceRole.source_id) == source_id)
+            )
+        if role_ids is None:
+            assert claim is not None
+            await session.delete(claim)
+        else:
+            if claim is None:
+                session.add(MembershipSourceClaim(source_id=source_id, membership_id=membership.id))
+                await session.flush()
+            for role_id in role_ids:
+                session.add(MembershipSourceRole(source_id=source_id, role_id=role_id))
+        await session.flush()
+        remaining = (
+            await session.execute(
+                select(cast(Any, MembershipSourceClaim.source_id))
+                .where(cast(Any, MembershipSourceClaim.membership_id) == membership.id)
+                .limit(1)
+            )
+        ).first()
+        if role_ids is None and not membership.native_owned and remaining is None:
+            await self.remove_member(
+                session, entity_id, user_id, reason="All source membership contributions withdrawn"
+            )
+        await self._project_source_roles(session, membership.id)
+        await session.refresh(membership, ["roles"])
+        current = await self._build_membership_history_snapshot(session, membership)
+        if created or previous["role_ids"] != current["role_ids"]:
+            await self._record_membership_history(
+                session,
+                membership=membership,
+                event_type="created" if created else "updated",
+                previous_snapshot=previous,
+                event_source="membership_service.set_source_membership",
+            )
+        await self._invalidate_membership_permissions_cache(session, user_id)
+        return membership
+
     async def add_member(
         self,
         session: AsyncSession,
@@ -148,6 +361,7 @@ class MembershipService(BaseService[EntityMembership]):
             InvalidInputError: If max_members limit exceeded
         """
         start_time = time.perf_counter()
+        await self._lock_member_account(session, user_id)
         role_ids = role_ids or []
 
         if valid_from and valid_until and valid_until < valid_from:
@@ -260,18 +474,10 @@ class MembershipService(BaseService[EntityMembership]):
             else:
                 existing.revocation_reason = reason
 
-            # Update roles via junction table
-            # First, clear existing roles
-            stmt = sql_delete(EntityMembershipRole).where(cast(Any, EntityMembershipRole.membership_id) == existing.id)
-            await session.execute(stmt)
-
-            # Add new roles
-            for role in roles:
-                role_link = EntityMembershipRole(
-                    membership_id=existing.id,
-                    role_id=role.id,
-                )
-                session.add(role_link)
+            # Native replacement changes only native ownership. Source grants
+            # are independently retained in the effective union.
+            existing.native_owned = True
+            await self._replace_native_roles(session, existing.id, {role.id for role in roles})
 
             await session.flush()
             await session.refresh(existing, ["roles"])
@@ -381,6 +587,7 @@ class MembershipService(BaseService[EntityMembership]):
         """
         start_time = time.perf_counter()
 
+        await self._lock_member_account(session, user_id)
         # Serialize repeated removal so only the actual transition emits
         # evidence. Refresh a previously loaded row after the lock is acquired.
         membership = (
@@ -508,6 +715,7 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             EntityMembership: Updated membership with roles loaded
         """
+        await self._lock_member_account(session, user_id)
         membership = await self.get_one(
             session,
             cast(Any, EntityMembership.user_id) == user_id,
@@ -580,17 +788,8 @@ class MembershipService(BaseService[EntityMembership]):
                         },
                     )
 
-            stmt = sql_delete(EntityMembershipRole).where(
-                cast(Any, EntityMembershipRole.membership_id) == membership.id
-            )
-            await session.execute(stmt)
-
-            for role in roles:
-                role_link = EntityMembershipRole(
-                    membership_id=membership.id,
-                    role_id=role.id,
-                )
-                session.add(role_link)
+            membership.native_owned = True
+            await self._replace_native_roles(session, membership.id, {role.id for role in roles})
 
         if update_valid_from:
             membership.valid_from = valid_from
@@ -2063,20 +2262,19 @@ class MembershipService(BaseService[EntityMembership]):
         memberships_result = await session.execute(memberships_stmt)
         memberships = list(memberships_result.scalars().all())
 
-        # Add role to memberships that don't already have it
+        # Explicitly retain auto-assignment as native ownership.
         updated_count = 0
         for membership in memberships:
             entity_type = membership.entity.entity_type if getattr(membership, "entity", None) is not None else None
             if not self._allows_entity_type(role, entity_type):
                 continue
-
-            existing_role_ids = {r.id for r in membership.roles}
-            if role_id not in existing_role_ids:
-                role_link = EntityMembershipRole(
-                    membership_id=membership.id,
-                    role_id=role_id,
-                )
-                session.add(role_link)
+            await self._lock_member_account(session, membership.user_id)
+            link = await session.get(EntityMembershipRole, (membership.id, role_id), populate_existing=True)
+            if link is None:
+                session.add(EntityMembershipRole(membership_id=membership.id, role_id=role_id))
+                updated_count += 1
+            elif not link.native_owned:
+                link.native_owned = True
                 updated_count += 1
 
         await session.flush()

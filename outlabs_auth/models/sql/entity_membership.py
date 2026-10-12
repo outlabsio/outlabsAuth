@@ -9,7 +9,7 @@ from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID
 
 from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, DateTime
+from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, DateTime, Boolean, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
@@ -30,6 +30,7 @@ class EntityMembershipRole(SQLModel, table=True):
 
     Table: entity_membership_roles
     """
+
     __tablename__ = "entity_membership_roles"
     __table_args__ = (
         Index("ix_emr_membership_id", "membership_id"),
@@ -50,6 +51,36 @@ class EntityMembershipRole(SQLModel, table=True):
             primary_key=True,
         ),
     )
+    native_owned: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
+
+
+class MembershipSourceClaim(SQLModel, table=True):
+    """One opaque, stable source relationship owns an attachment and role subset.
+
+    Host crosswalks resolve source IDs; these claims never own account state.
+    """
+
+    __tablename__ = "membership_source_claims"
+    source_id: UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), primary_key=True))
+    membership_id: UUID = Field(
+        sa_column=Column(
+            PG_UUID(as_uuid=True), ForeignKey("entity_memberships.id", ondelete="RESTRICT"), nullable=False, index=True
+        )
+    )
+
+
+class MembershipSourceRole(SQLModel, table=True):
+    __tablename__ = "membership_source_roles"
+    source_id: UUID = Field(
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("membership_source_claims.source_id", ondelete="CASCADE"),
+            primary_key=True,
+        )
+    )
+    role_id: UUID = Field(
+        sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True)
+    )
 
 
 class EntityMembership(BaseModel, table=True):
@@ -61,6 +92,7 @@ class EntityMembership(BaseModel, table=True):
 
     Table: entity_memberships
     """
+
     __tablename__ = "entity_memberships"
     __table_args__ = (
         # uq(user_id, entity_id) and ix_em_user_status both cover user_id via
@@ -71,6 +103,7 @@ class EntityMembership(BaseModel, table=True):
         Index("ix_em_status", "status"),
         Index("ix_em_valid_until", "valid_until"),
     )
+    native_owned: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
 
     # === Foreign Keys ===
     user_id: UUID = Field(

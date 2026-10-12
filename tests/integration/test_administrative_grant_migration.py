@@ -36,13 +36,22 @@ async def test_real_a37_upgrade_and_database_immutability():
         import asyncio, importlib.metadata, os
         from outlabs_auth import EnterpriseRBAC
         from outlabs_auth.cli import run_migrations
+        from outlabs_auth.models.sql import Entity, EntityMembership, EntityMembershipRole, Role
         assert importlib.metadata.version("outlabs-auth") == "0.1.0a37"
         async def main():
             await run_migrations(os.environ["DATABASE_URL"], schema=os.environ["OUTLABS_AUTH_SCHEMA"])
             auth=EnterpriseRBAC(database_url=os.environ["DATABASE_URL"], database_schema=os.environ["OUTLABS_AUTH_SCHEMA"], secret_key="synthetic-genuine-public-a37-upgrade-fixture", enable_caching=False)
             await auth.initialize()
             async with auth.get_session() as session:
-                await auth.user_service.create_user(session, email="retained@example.com", password="SyntheticUpgrade123!", first_name="Retained", is_superuser=True)
+                retained = await auth.user_service.create_user(session, email="retained@example.com", password="SyntheticUpgrade123!", first_name="Retained", is_superuser=True)
+                root = Entity(name="synthetic", slug="synthetic", display_name="Synthetic", entity_class="structural", entity_type="organization")
+                session.add(root)
+                await session.flush()
+                role = Role(name="synthetic", display_name="Synthetic", root_entity_id=root.id)
+                member = EntityMembership(user_id=retained.id, entity_id=root.id)
+                session.add_all([role,member])
+                await session.flush()
+                session.add(EntityMembershipRole(membership_id=member.id, role_id=role.id))
                 await session.commit()
             await auth.shutdown()
         asyncio.run(main())
@@ -80,7 +89,14 @@ async def test_real_a37_upgrade_and_database_immutability():
             assert before == after
             assert (
                 await connection.execute(text(f'SELECT version_num FROM "{schema}".outlabs_auth_alembic_version'))
-            ).scalar_one() == "20261011_0029"
+            ).scalar_one() == "20261011_0030"
+            for table in ("entity_memberships", "entity_membership_roles"):
+                assert (
+                    await connection.execute(text(f'SELECT count(*) FROM "{schema}".{table} WHERE native_owned'))
+                ).scalar_one() == 1
+            assert (
+                await connection.execute(text(f'SELECT count(*) FROM "{schema}".membership_source_claims'))
+            ).scalar_one() == 0
             identity = uuid4()
             await connection.execute(
                 text(

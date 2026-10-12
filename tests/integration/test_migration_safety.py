@@ -124,7 +124,7 @@ async def test_contended_security_upgrade_rolls_back_with_bounded_wait(prior_hea
         assert "session_security_epoch" not in columns and "platform_protected" not in columns
     await run_migrations(TEST_DATABASE_URL, schema=schema, lock_timeout="100ms")
     version, columns = await version_and_columns(engine, schema)
-    assert version == "20261011_0029"
+    assert version == "20261011_0030"
     assert {"session_security_epoch", "platform_protected"} <= columns
 
 
@@ -155,7 +155,7 @@ async def test_lock_retry_succeeds_after_holder_releases(prior_head, monkeypatch
     try:
         await asyncio.wait_for(run_migrations(TEST_DATABASE_URL, schema=schema, lock_timeout="100ms"), 5)
         assert len(attempts) == 2
-        assert (await version_and_columns(engine, schema))[0] == "20261011_0029"
+        assert (await version_and_columns(engine, schema))[0] == "20261011_0030"
     finally:
         release.set()
         await holder
@@ -165,7 +165,7 @@ async def test_lock_retry_succeeds_after_holder_releases(prior_head, monkeypatch
 async def test_concurrent_runners_converge_without_duplicate_ddl(prior_head):
     schema, engine = prior_head
     await asyncio.gather(*(run_migrations(TEST_DATABASE_URL, schema=schema, lock_timeout="500ms") for _ in range(2)))
-    assert (await version_and_columns(engine, schema))[0] == "20261011_0029"
+    assert (await version_and_columns(engine, schema))[0] == "20261011_0030"
 
 
 @pytest.mark.asyncio
@@ -225,7 +225,7 @@ asyncio.run(_run_alembic_command(os.environ['TEST_DATABASE_URL'], schema=os.envi
         for process in processes:
             stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
             assert process.returncode == 0, (stdout, stderr)
-        assert (await version_and_columns(engine, schema))[0] == "20261011_0029"
+        assert (await version_and_columns(engine, schema))[0] == "20261011_0030"
     finally:
         for process in processes:
             if process.returncode is None:
