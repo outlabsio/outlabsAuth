@@ -96,3 +96,19 @@ async def test_cache_isolated_between_independent_contexts():
 
     assert observed_in_b is None
     assert ctx_a.run(request_cache.get, ("user", "u1")) == "A"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_child_task_cannot_retain_http_usage_scope_after_response():
+    released = asyncio.Event()
+
+    async def child():
+        await released.wait()
+        return request_cache.is_http_request()
+
+    with request_cache.request_scope():
+        assert request_cache.is_http_request()
+        task = asyncio.create_task(child())
+    released.set()
+    assert not await task

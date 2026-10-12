@@ -28,23 +28,26 @@ _request_cache: ContextVar[Optional[dict[Hashable, Any]]] = ContextVar(
 )
 
 
-_request_active: ContextVar[bool] = ContextVar("outlabs_auth_http_request_active", default=False)
+_request_active: ContextVar[dict[str, bool] | None] = ContextVar("outlabs_auth_http_request_active", default=None)
 
 
 @contextmanager
 def request_scope() -> Iterator[None]:
     """Explicit HTTP lifetime; background/SDK calls must never reuse usage counts."""
     cache_token = _request_cache.set({})
-    active_token = _request_active.set(True)
+    marker = {"active": True}
+    active_token = _request_active.set(marker)
     try:
         yield
     finally:
+        marker["active"] = False
         _request_active.reset(active_token)
         _request_cache.reset(cache_token)
 
 
 def is_http_request() -> bool:
-    return _request_active.get()
+    marker = _request_active.get()
+    return bool(marker and marker["active"])
 
 
 def _store() -> dict[Hashable, Any]:
