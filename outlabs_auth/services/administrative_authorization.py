@@ -33,6 +33,7 @@ from outlabs_auth.models.sql.administrative_grant import (
     AdministrativeTemplateRevision,
 )
 from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, EntityClass, UserStatus
@@ -521,25 +522,7 @@ class AdministrativeAuthorization:
         target = (await session.execute(statement)).scalar_one_or_none()
         if target is None or target.root_entity_id is None or target.is_superuser or target.platform_protected:
             return _deny(AdministrativeDecisionReason.INVALID_TARGET)
-        # Hold all assigned definitions, including dormant ones. Parent user
-        # fencing serializes new assignments; shared role locks serialize a
-        # later change into system-wide classification.
-        roles_statement = (
-            select(Role)
-            .join(UserRoleMembership, cast(Any, Role.id) == cast(Any, UserRoleMembership.role_id))
-            .where(cast(Any, UserRoleMembership.user_id) == target.id)
-            .execution_options(populate_existing=True)
-        )
-        if protected_write:
-            roles_statement = roles_statement.with_for_update(read=True, of=Role)
-        roles = (await session.execute(roles_statement)).scalars().all()
-        protected = any(r.is_global and r.root_entity_id is None and r.scope_entity_id is None for r in roles)
-        administrative = (
-            select(cast(Any, AdministrativeGrantRecord.id))
-            .where(cast(Any, AdministrativeGrantRecord.user_id) == target.id)
-            .exists()
-        )
-        if protected or (await session.execute(select(administrative))).scalar():
+        if not await self._unprotected_subject(session, target, lock=protected_write):
             return _deny(AdministrativeDecisionReason.INVALID_TARGET)
         return await self.authorize(
             session,
@@ -549,6 +532,148 @@ class AdministrativeAuthorization:
             account_root_required=True,
             protected_write=protected_write,
         )
+
+    async def _unprotected_subject(self, session: AsyncSession, target: User, *, lock: bool) -> bool:
+        """Reject retained platform classification and every assigned global role."""
+        if (
+            target.root_entity_id is None
+            or target.root_entity_id == self.grants.trusted_root
+            or target.is_superuser
+            or target.platform_protected
+        ):
+            return False
+        direct = select(cast(Any, UserRoleMembership.role_id)).where(cast(Any, UserRoleMembership.user_id) == target.id)
+        member = (
+            select(cast(Any, EntityMembershipRole.role_id))
+            .join(EntityMembership, cast(Any, EntityMembership.id) == cast(Any, EntityMembershipRole.membership_id))
+            .where(cast(Any, EntityMembership.user_id) == target.id)
+        )
+        statement = (
+            select(Role)
+            .where(cast(Any, Role.id).in_(union_all(direct, member)))
+            .execution_options(populate_existing=True)
+        )
+        if lock:
+            statement = statement.with_for_update(read=True, of=Role)
+        roles = (await session.execute(statement)).scalars().all()
+        if any(r.is_global and r.root_entity_id is None and r.scope_entity_id is None for r in roles):
+            return False
+        administrative = (
+            select(cast(Any, AdministrativeGrantRecord.id))
+            .where(cast(Any, AdministrativeGrantRecord.user_id) == target.id)
+            .exists()
+        )
+        return not (await session.execute(select(administrative))).scalar()
+
+    def _customer_filter(self, root_id: UUID) -> Any:
+        direct = (
+            select(cast(Any, UserRoleMembership.role_id))
+            .where(cast(Any, UserRoleMembership.user_id) == User.id)
+            .correlate(User)
+        )
+        member = (
+            select(cast(Any, EntityMembershipRole.role_id))
+            .join(EntityMembership, cast(Any, EntityMembership.id) == EntityMembershipRole.membership_id)
+            .where(cast(Any, EntityMembership.user_id) == User.id)
+            .correlate(User)
+        )
+        protected = (
+            select(cast(Any, Role.id))
+            .where(
+                cast(Any, Role.id).in_(union_all(direct, member)),
+                cast(Any, Role.is_global).is_(True),
+                cast(Any, Role.root_entity_id).is_(None),
+                cast(Any, Role.scope_entity_id).is_(None),
+            )
+            .exists()
+        )
+        staff = (
+            select(cast(Any, AdministrativeGrantRecord.id))
+            .where(cast(Any, AdministrativeGrantRecord.user_id) == User.id)
+            .exists()
+        )
+        return and_(
+            cast(Any, User.root_entity_id) == root_id,
+            cast(Any, User.is_superuser).is_(False),
+            cast(Any, User.platform_protected).is_not(True),
+            ~protected,
+            ~staff,
+        )
+
+    async def customer_users(
+        self,
+        session: AsyncSession,
+        context: StaffContext,
+        *,
+        customer_root_id: UUID,
+        limit: int = 50,
+        after: UUID | None = None,
+    ) -> tuple[list[User], int]:
+        path = await self.grants._path(session, customer_root_id, datetime.now(timezone.utc))
+        if (
+            len(path) != 1
+            or customer_root_id == self.grants.trusted_root
+            or not 1 <= limit <= 100
+            or not (
+                await self.authorize(
+                    session, context, action="user:read", entity_id=customer_root_id, account_root_required=True
+                )
+            ).allowed
+        ):
+            raise HTTPException(403, "Customer account list admission refused")
+        predicate = self._customer_filter(customer_root_id)
+        total = int((await session.execute(select(func.count()).select_from(User).where(predicate))).scalar_one())
+        statement = select(User).where(predicate).order_by(cast(Any, User.id)).limit(limit)
+        if after is not None:
+            statement = statement.where(cast(Any, User.id) > after)
+        return list((await session.execute(statement)).scalars()), total
+
+    async def member_admission(
+        self,
+        session: AsyncSession,
+        context: StaffContext,
+        *,
+        action: str,
+        entity_id: UUID,
+        user_id: UUID,
+        role_ids: list[UUID] | None = None,
+        write: bool = False,
+    ) -> User:
+        """Derive customer ownership and hold subject/roles before final approval."""
+        if await self._actor(session, context) is None:
+            raise HTTPException(403, "Staff admission refused")
+        target_stmt = select(User).where(cast(Any, User.id) == user_id).execution_options(populate_existing=True)
+        if write:
+            target_stmt = target_stmt.with_for_update()
+        user = (await session.execute(target_stmt)).scalar_one_or_none()
+        if user is None or not await self._unprotected_subject(session, user, lock=write):
+            raise HTTPException(403, "Protected or absent customer subject")
+        path = await self.grants._path(session, entity_id, datetime.now(timezone.utc), lock=write)
+        if path[-1].id != user.root_entity_id or user.status == UserStatus.DELETED:
+            raise HTTPException(403, "Membership subject belongs to another customer or is deleted")
+        if role_ids is not None:
+            if len(role_ids) > 64 or len(set(role_ids)) != len(role_ids):
+                raise HTTPException(422, "Exact bounded role IDs required")
+            stmt = (
+                select(Role)
+                .where(cast(Any, Role.id).in_(role_ids))
+                .order_by(cast(Any, Role.id))
+                .execution_options(populate_existing=True)
+            )
+            if write:
+                stmt = stmt.with_for_update(read=True)
+            roles = (await session.execute(stmt)).scalars().all()
+            if len(roles) != len(role_ids) or any(
+                r.is_global
+                or r.root_entity_id != user.root_entity_id
+                or str(getattr(r.status, "value", r.status)) != "active"
+                for r in roles
+            ):
+                raise HTTPException(403, "Only active customer-owned roles may be assigned")
+        decision = await self.authorize(session, context, action=action, entity_id=entity_id, protected_write=write)
+        if not decision.allowed:
+            raise HTTPException(403, "Action and target admission refused")
+        return user
 
     async def entity_page(
         self,

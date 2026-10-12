@@ -292,3 +292,20 @@ predecessor and applies its successor atomically, retaining old crosswalks,
 accepted watermarks and frozen removal episodes. Handoff does not authorise
 identity transfers, a new cohort, source lease ownership or delivery. See
 `docs/S3_POPULATION_SOURCE_RETURN_2026-10-12.md` for current qualification.
+
+### Opt-in customer account and membership operations (unreleased a38)
+
+The explicitly mounted staff router includes customer account detail/list,
+first/last-name edits, active/suspended status, retained deletion and restore.
+Account actions require one qualifying grant covering the actual customer root.
+Lists exclude platform-protected subjects before count and pagination. Root
+transfer, email/password/privilege edits and self/Internal administration are
+absent from these inputs.
+
+Membership detail, native role replacement, creation, removal and explicit
+reactivation use the stored subject/customer/entity boundary. Only active
+customer-owned roles are assignable. Creation and update require their own
+respective actions; native source overlap is preserved. Retained platform
+classification and global roles through either direct or entity membership
+assignments deny limited staff administration. Ordinary IAM routes do not gain
+staff grants. Existing compatible-writer, full-consumer and release gates remain.
