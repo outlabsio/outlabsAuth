@@ -9,6 +9,16 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 
 ## Proposed tenant-identity and administrative-grant design (2026-10-10)
 
+**Latest local continuation, 12 October:** unreleased a38 runtime `da830ba`
+retains canonical invitation provider receipts, fixes case-insensitive SendGrid
+receipt headers and safe setup correlation, with unchanged bool callers/schema.
+Complete source 1,651, independent required Redis 102, fresh installed wheel/sdist
+85 each, constructor/a37 migration and all 243 package bytes pass. Handbook
+`832253e` passes lint/types/build/rendered text. See
+[invitation receipt acceptance](S3_INVITATION_RECEIPT_2026-10-12.md).
+Production external authority/provider evidence and host restricted writers are
+not SDK acceptance; exact a38 review/release/adoption remains open.
+
 The [canonical proposal](./TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
 (revision 0.2, staged delivery S0–S7) and its completed
 [independent review](./TENANT_AUTH_INDEPENDENT_REVIEW_2026-10-10.md) await maintainer

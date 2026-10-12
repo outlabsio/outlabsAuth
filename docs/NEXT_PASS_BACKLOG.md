@@ -7,6 +7,12 @@ This document is intentionally short. It is not a full project plan. It is a wor
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
+- **Latest invitation receipt slice:** unreleased `da830ba` preserves bool
+  compatibility and canonical provider receipts/correlation. Source 1,651,
+  required Redis 102 and installed artifacts 85 each pass; see
+  [receipt](S3_INVITATION_RECEIPT_2026-10-12.md). Exact a38 review/release,
+  host provider/recovery and row-bound writer qualification remain open.
+
 - **S1 consumer admission (library a37 published).** All eight baseline defects and eight additional
   reproduced publication-review gaps are corrected. Three independent reviewers
   are green; see [review boundaries](S1_REVIEW_A37.md) and

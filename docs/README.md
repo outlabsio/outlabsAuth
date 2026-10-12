@@ -62,3 +62,4 @@ the doc worth fixing rather than working around. The `examples/` are the referen
 integration, and `README.md`'s quickstart is executed by a test.
 
 - **S1_RELEASE_A37.md** - Published a37 accepted merge/tag/run, verified public artifact hashes, independent review and local/installed qualification boundaries.
+- **S3_INVITATION_RECEIPT_2026-10-12.md** - Receipt-preserving canonical invitation hook, header/correlation fixes and final 1651-source/102-Redis/85-per-artifact acceptance; unreleased a38, unchanged schema and host operational gates.
