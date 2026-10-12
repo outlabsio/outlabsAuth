@@ -321,3 +321,5 @@ Unreleased local candidate. Public release remains a37.
 ## License
 
 MIT, copyright 2026 OUTLABS LLC.
+
+Unreleased a38 continuation: [HTTP key usage and host metrics acceptance](./docs/S3_HTTP_KEY_USAGE_2026-10-12.md), runtime `99460ab`, full source 1,655 and exact wheel/sdist 115 each. Production custody/storage/durability and independent release review remain separate gates.

@@ -159,3 +159,16 @@ TEST_REDIS_REQUIRED=1 uv run pytest -m redis
 - [User Management API](./23-User-Management-API.md)
 - [ABAC](./26-ABAC.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)
+
+## HTTP usage accounting
+
+In the unreleased a38 candidate, install `auth.instrument_fastapi(app)` so
+`RequestCacheMiddleware` defines the HTTP lifetime. Multiple cold or cached
+authentication/permission dependencies for the same key charge one usage/quota
+operation in that request. Each dependency still checks its current permission,
+entity, scope and validity; only the counter operation is shared. Concurrent
+checks share that operation, including an over-limit result.
+
+A new HTTP request counts again. Direct SDK and maintenance calls count on
+every invocation. Child tasks that outlive the response cannot retain its
+usage memo. Separate keys and Redis namespaces have separate accounting.

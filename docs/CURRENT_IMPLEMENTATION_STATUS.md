@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-10-11
+**Updated**: 2026-10-12
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -9,7 +9,15 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 
 ## Proposed tenant-identity and administrative-grant design (2026-10-10)
 
-**Latest local continuation, 12 October:** unreleased a38 runtime `da830ba`
+**Latest local continuation:** unreleased `99460ab` qualifies once-per-HTTP
+Redis quotas and bounded child-task lifetime, source1655/Redis60/artifacts115
+and constructors/243 bytes. Diverse9ea75eea qualifies187 staff-key/metrics/
+storage cases; public a37 stays pinned. Production inventory/storage/retention,
+independent failure domains/custody/RPO-RTO, remaining positive profiles and
+independent exact a38 review/release/adoption are open. See
+[HTTP key usage receipt](S3_HTTP_KEY_USAGE_2026-10-12.md).
+
+**Earlier local continuation, 12 October:** unreleased a38 runtime `da830ba`
 retains canonical invitation provider receipts, fixes case-insensitive SendGrid
 receipt headers and safe setup correlation, with unchanged bool callers/schema.
 Complete source 1,651, independent required Redis 102, fresh installed wheel/sdist

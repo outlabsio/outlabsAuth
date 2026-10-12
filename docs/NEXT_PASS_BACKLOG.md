@@ -1,13 +1,21 @@
 # Next Pass Backlog
 
-**Updated**: 2026-10-11
+**Updated**: 2026-10-12
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-- **Latest invitation receipt slice:** unreleased `da830ba` preserves bool
+**Latest local continuation:** unreleased `99460ab` qualifies once-per-HTTP
+Redis quotas and bounded child-task lifetime, source1655/Redis60/artifacts115
+and constructors/243 bytes. Diverse9ea75eea qualifies187 staff-key/metrics/
+storage cases; public a37 stays pinned. Production inventory/storage/retention,
+independent failure domains/custody/RPO-RTO, remaining positive profiles and
+independent exact a38 review/release/adoption are open. See
+[HTTP key usage receipt](S3_HTTP_KEY_USAGE_2026-10-12.md).
+
+- **Earlier invitation receipt slice:** unreleased `da830ba` preserves bool
   compatibility and canonical provider receipts/correlation. Source 1,651,
   required Redis 102 and installed artifacts 85 each pass; see
   [receipt](S3_INVITATION_RECEIPT_2026-10-12.md). Exact a38 review/release,

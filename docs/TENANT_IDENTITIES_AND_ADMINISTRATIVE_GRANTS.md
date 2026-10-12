@@ -66,7 +66,17 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
-**Latest continuation, 2026-10-12:** unreleased a38 runtime `4617817` adds the
+**Latest continuation, 2026-10-12:** unreleased runtime `99460ab` counts Redis
+key usage once per bounded HTTP request while rechecking every authorization.
+Full source 1655, independent required Redis60 and fresh wheel/sdist115 each,
+constructors and all243 package bytes pass. Diverse's frozen native pair9ea75eea
+passes187, including staff keys, metrics real commit-before-ACK and storage/
+unsafe-commit gates; public a37 stays pinned. Production growth/storage,
+independent custody/failure domains/RPO-RTO, remaining positive profiles and
+exact a38 review/release/adoption remain open. Read the
+[HTTP key usage and host metrics receipt](S3_HTTP_KEY_USAGE_2026-10-12.md).
+
+**Earlier continuation, 2026-10-12:** unreleased a38 runtime `4617817` adds the
 [explicit host security-containment transaction seam](S3_SECURITY_TRANSACTION_2026-10-12.md).
 Default independent behavior remains unchanged. 1,652 distinct source cases,
 independent required Redis 102 and fresh wheel/sdist 103 each plus constructors

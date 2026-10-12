@@ -132,3 +132,14 @@ complete interval has elapsed.
 - [Activity Tracking](./49-Activity-Tracking.md)
 - [Testing](./95-Testing-Guide.md)
 - [Observability](./97-Observability.md)
+
+## Hosts with deferred commits
+
+API-key usage synchronization acknowledges staged Redis counters only after
+`session.commit()` has actually committed the PostgreSQL receipt and usage
+update. A host that defers inner commits to an HTTP response boundary must
+provide a separate admitted metrics session with a real commit; running this
+step in its borrowed HTTP unit can acknowledge Redis before SQL is durable.
+Keep that worker's write grants limited to usage fields and sync receipts.
+Authorization, token cleanup and activity writes require their own reviewed
+host profiles; the metrics session does not authorize them.
