@@ -66,6 +66,17 @@ Externally held connections, connection-local schema/search-path overrides and
 single-connection pools require separate host qualification. See
 [Auth recovery](../docs/AUTH_RECOVERY.md) before admission, restore or rollback.
 
+a38 adds `AuthService.security_transaction_factory`, an optional async context
+manager factory receiving the rolled-back caller session. A host with an external
+write journal may set it on `auth.auth_service` after initialization. Its yielded
+session must durably commit and acknowledge **only containment effects** before
+the SDK's `commit()` returns; refusal and cancellation must propagate. Never
+silently borrow an uncommitted request transaction or enqueue revocation after
+the refusal response. Without the hook, the independent configured-engine
+transaction remains the default. Qualify rotated-token replay through the actual
+mounted host, including unrelated pending-write rollback, replacement bearer/
+refresh denial, store failure and the host's recovery generation.
+
 ### Do not confuse with `get_session_router`
 
 `get_session_router` is a **minimal login/refresh/logout** surface for embedded

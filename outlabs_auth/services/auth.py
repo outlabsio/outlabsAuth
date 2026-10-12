@@ -13,8 +13,9 @@ import hashlib
 import hmac
 import secrets
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Mapping, Optional, Tuple, cast
+from typing import Any, AsyncContextManager, AsyncIterator, Callable, List, Mapping, Optional, Tuple, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -91,6 +92,7 @@ class AuthService:
         activity_tracker: Optional[Any] = None,
         observability: Optional[Any] = None,
         user_audit_service: Optional[Any] = None,
+        security_transaction_factory: Optional[Callable[[AsyncSession], AsyncContextManager[AsyncSession]]] = None,
     ):
         """
         Initialize AuthService.
@@ -107,6 +109,22 @@ class AuthService:
         self.activity_tracker = activity_tracker
         self.observability = observability
         self.user_audit_service = user_audit_service
+        # Hosts with externally fenced transactions must explicitly supply a
+        # containment transaction. It must commit only security effects after
+        # the failed caller transaction has rolled back, before refusal escapes.
+        self.security_transaction_factory = security_transaction_factory
+
+    @asynccontextmanager
+    async def _security_transaction(self, session: AsyncSession) -> AsyncIterator[AsyncSession]:
+        if self.security_transaction_factory is not None:
+            async with self.security_transaction_factory(session) as containment:
+                yield containment
+            return
+        bind = session.bind
+        if isinstance(bind, AsyncConnection):
+            bind = bind.engine
+        async with AsyncSession(bind=bind, expire_on_commit=False) as containment:
+            yield containment
 
     def _new_family_expiry(self, started_at: datetime) -> Optional[datetime]:
         days = self.config.refresh_token_absolute_lifetime_days
@@ -644,14 +662,11 @@ class AuthService:
                         # session rather than guessing which child is trusted.
                         containment_user_id = token_model.user_id
                         containment_family_id = str(token_model.family_id)
-                        bind = session.bind
-                        if isinstance(bind, AsyncConnection):
-                            bind = bind.engine
                         # Refusal aborts the caller's unit of work. Commit only
                         # security containment in an independent transaction:
                         # the ordinary exception path rolls its UoW back.
                         await session.rollback()
-                        async with AsyncSession(bind=bind, expire_on_commit=False) as containment:
+                        async with self._security_transaction(session) as containment:
                             await containment.execute(
                                 select(User)
                                 .where(cast(Any, User.id) == containment_user_id)

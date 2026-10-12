@@ -150,8 +150,23 @@ async def test_stale_challenge_issuer_cannot_follow_deletion(test_session, test_
 
 
 @pytest.mark.asyncio
-async def test_refresh_reuse_commits_only_containment(test_session, test_engine, auth_config):
+@pytest.mark.parametrize("host_factory", [False, True])
+async def test_refresh_reuse_commits_only_containment(test_session, test_engine, auth_config, host_factory):
     auth = AuthService(auth_config)
+    entered = []
+    if host_factory:
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def security_transaction(failed_session):
+            assert failed_session is test_session
+            # The failed caller transaction has already rolled back.
+            assert not failed_session.in_transaction()
+            entered.append(True)
+            async with async_sessionmaker(test_engine, expire_on_commit=False)() as containment:
+                yield containment
+
+        auth.security_transaction_factory = security_transaction
     user = User(email=f"reuse-{uuid4().hex}@example.test")
     test_session.add(user)
     await test_session.commit()
@@ -165,6 +180,7 @@ async def test_refresh_reuse_commits_only_containment(test_session, test_engine,
     await test_session.flush()
     with pytest.raises(RefreshTokenInvalidError, match="reuse detected"):
         await auth.refresh_access_token(test_session, original.refresh_token)
+    assert len(entered) == int(host_factory)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as reader:
         assert (await reader.get(User, user_id)).session_security_epoch == 1
