@@ -287,7 +287,7 @@ return. Explicit native reactivation records native ownership. Earlier source
 withdrawals without proof need explicit native acknowledgement.
 
 A host changing its schema, recovery generation or mapping policy must retain
-its original opaque source claim namespace. The Diverse adapter retires the
+its original opaque source claim namespace. A qualified host adapter retires the
 predecessor and applies its successor atomically, retaining old crosswalks,
 accepted watermarks and frozen removal episodes. Handoff does not authorise
 identity transfers, a new cohort, source lease ownership or delivery. See

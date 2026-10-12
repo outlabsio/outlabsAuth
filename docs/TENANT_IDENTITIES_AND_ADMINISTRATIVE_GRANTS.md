@@ -78,7 +78,7 @@ establish a production RPO/RTO or S3 anti-rewind runner. An isolated, unreleased
 `0.1.0a38` foundation adds persistent S2 policy and optional S3 lifecycle
 observation; [current scope and remaining gates](S2_S3_FOUNDATION_2026-10-11.md)
 are explicit. The explicit S2 credential/target/account/list facade and focused concurrency
-are [continued by the explicit mounted owned-key workflow and measured SQL budgets](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md), followed by [native/source membership ownership and compatible IAM writer fences](S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md); existing
+are [continued by the explicit mounted owned-key workflow and measured SQL budgets](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md), followed by [native/source membership ownership and compatible IAM writer fences](S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md), then [reviewed invited identities and fenced source-only return](S3_POPULATION_SOURCE_RETURN_2026-10-12.md); existing
 consumer IAM authorization remains unadopted. S3 is opt-in and
 unadopted by public consumers. Namespace stages remain unimplemented. S1 delivery
 does not adopt proposed DD-062 or resolve the remaining S0 decisions.

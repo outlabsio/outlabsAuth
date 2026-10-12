@@ -21,7 +21,7 @@ This document is intentionally short. It is not a full project plan. It is a wor
   [qualification and limits](S2_S3_FOUNDATION_2026-10-11.md). Next verified
   complete IAM/detail/list and credential/writer inventory plus numeric budgets.
   The explicit verified facade, protected-account and SQL-list checks and
-  focused concurrency plus owned-key narrow/rotate/revoke/SQL inventory are [continued by the explicit staff mount and measured SQL budgets](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md), followed by [native/source membership ownership and compatible IAM writer fences](S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md). Customer IAM/member/account mutation pairing, group/worst-case scale and restricted DML remain exits. Then
+  focused concurrency plus owned-key narrow/rotate/revoke/SQL inventory are [continued by the explicit staff mount and measured SQL budgets](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md), followed by [native/source membership ownership and compatible IAM writer fences](S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md), then [reviewed invited identities and fenced source-only return](S3_POPULATION_SOURCE_RETURN_2026-10-12.md). Customer IAM/member/account mutation pairing, group/worst-case scale and restricted DML remain exits. Then
   full installed S3 writer/failure acceptance and a separately qualified release.
   Keep runtime grants unwired. Record remaining DD-062/S0 dispositions before
   adopting broader policy; namespaces, delegation and machine grants remain deferred.

@@ -1,5 +1,9 @@
 # Native and source membership ownership: local qualification
 
+This is the earlier ownership checkpoint. Reviewed invited identity creation
+and source-only return continue in
+[S3 population and return](S3_POPULATION_SOURCE_RETURN_2026-10-12.md).
+
 12 October 2026. Unreleased a38 runtime `70d15c9`; Auth head `20261011_0030`.
 Public a37 remains the released version. This follows
 [mounted staff credentials and performance](S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md).
