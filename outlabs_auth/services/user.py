@@ -32,6 +32,7 @@ from outlabs_auth.mail.types import (
     AccessGrantedMailIntent,
     ForgotPasswordMailIntent,
     InviteMailIntent,
+    MailDeliveryResult,
     MailRecipient,
     PasswordResetConfirmationMailIntent,
     coerce_metadata,
@@ -365,8 +366,27 @@ class UserService(BaseService[User]):
         **extra_metadata: Any,
     ) -> bool:
         """Send an invite email via the configured transactional mail service."""
+        result = await self.send_invitation_email_result(
+            user, token, request=request, metadata=metadata, **extra_metadata
+        )
+        return bool(result.accepted)
+
+    async def send_invitation_email_result(
+        self,
+        user: User,
+        token: str,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> MailDeliveryResult:
+        """Canonical invitation composition with the provider receipt retained.
+
+        Acceptance is not delivery or provider idempotency. Existing bool callers
+        use the same path; durable hosts can retain the safe receipt identity.
+        """
         if self.transactional_mail_service is None:
-            return False
+            return MailDeliveryResult.skipped_result("unconfigured", "No transactional mail service")
         merged_metadata = await self._enrich_invite_metadata(user, self._merge_mail_metadata(metadata, extra_metadata))
         intent = InviteMailIntent(
             recipient=self._build_mail_recipient(user),
@@ -376,8 +396,7 @@ class UserService(BaseService[User]):
             metadata=merged_metadata,
             **await self._frontend_context_fields(user),
         )
-        result = await self.transactional_mail_service.send_invite(intent)
-        return bool(result.accepted)
+        return cast(MailDeliveryResult, await self.transactional_mail_service.send_invite(intent))
 
     async def send_forgot_password_email(
         self,

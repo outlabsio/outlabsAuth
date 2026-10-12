@@ -173,6 +173,17 @@ outcomes and the possibility of duplicate physical delivery. Crosswalks,
 source-owned contributions, recovery fencing and cohort completeness remain
 host responsibilities.
 
+The unreleased a38 `user_service.send_invitation_email_result(...)` uses the same
+canonical invitation composition and provider as the existing boolean
+`send_invitation_email(...)` hook. It returns `MailDeliveryResult`, retaining
+provider and message ID for a durable host receipt. Existing boolean callers
+keep their contract. Provider acceptance does not establish delivery or
+idempotency; metadata such as a logical delivery ID is not an idempotency key.
+Retain safe receipt identifiers only, since provider error/details can contain
+personal data or credentials. A missing provider returns an explicit skipped
+result. UNKNOWN reconciliation, transport draining, explicit resend, encrypted
+outbox keys and recovery remain host-owned operational responsibilities.
+
 
 ## Unreleased explicit staff host facade
 
