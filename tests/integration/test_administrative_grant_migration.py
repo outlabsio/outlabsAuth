@@ -89,7 +89,7 @@ async def test_real_a37_upgrade_and_database_immutability():
             assert before == after
             assert (
                 await connection.execute(text(f'SELECT version_num FROM "{schema}".outlabs_auth_alembic_version'))
-            ).scalar_one() == "20261011_0030"
+            ).scalar_one() == "20261012_0031"
             for table in ("entity_memberships", "entity_membership_roles"):
                 assert (
                     await connection.execute(text(f'SELECT count(*) FROM "{schema}".{table} WHERE native_owned'))

@@ -37,6 +37,7 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembershipRole,
     MembershipSourceClaim,
     MembershipSourceRole,
+    MembershipSourceWithdrawal,
 )
 from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHistory
 from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope, UserStatus
@@ -248,7 +249,7 @@ class MembershipService(BaseService[EntityMembership]):
                 raise InvalidInputError(message="Source membership entity is inactive")
             await self._require_holder_in_entity_tree(session, entity_id, user_id)
             if membership is not None and (
-                membership.status != MembershipStatus.ACTIVE
+                membership.status not in (MembershipStatus.ACTIVE, MembershipStatus.REVOKED)
                 or membership.valid_from is not None
                 or membership.valid_until is not None
             ):
@@ -267,6 +268,20 @@ class MembershipService(BaseService[EntityMembership]):
                     raise InvalidInputError(
                         message="Source role is inactive, protected or outside its customer/entity boundary"
                     )
+        proof = await session.get(MembershipSourceWithdrawal, (user_id, entity_id), populate_existing=True)
+        returning = role_ids is not None and membership is not None and membership.status == MembershipStatus.REVOKED
+        if returning:
+            assert membership is not None
+            if (
+                proof is None
+                or proof.membership_id != membership.id
+                or proof.revision != membership.write_revision
+                or proof.user_epoch != int(user.session_security_epoch or 0)
+                or membership.native_owned
+            ):
+                raise InvalidInputError(message="Source return lacks unchanged source-only withdrawal proof")
+        if membership is None and proof is not None and role_ids is not None:
+            raise InvalidInputError(message="Source return cannot recreate a natively deleted membership")
         created = membership is None
         if membership is None:
             if role_ids is None:
@@ -281,6 +296,14 @@ class MembershipService(BaseService[EntityMembership]):
             await session.flush()
             await session.refresh(membership, ["roles"])
         previous = await self._build_membership_history_snapshot(session, membership)
+        if returning and role_ids is not None:
+            membership.status = MembershipStatus.ACTIVE
+            membership.revoked_at = None
+            membership.revoked_by_id = None
+            membership.revocation_reason = None
+            assert proof is not None
+            await session.delete(proof)
+
         if claim is not None:
             await session.execute(
                 sql_delete(MembershipSourceRole).where(cast(Any, MembershipSourceRole.source_id) == source_id)
@@ -302,18 +325,45 @@ class MembershipService(BaseService[EntityMembership]):
                 .limit(1)
             )
         ).first()
-        if role_ids is None and not membership.native_owned and remaining is None:
+        auto_withdraw = (
+            role_ids is None
+            and not membership.native_owned
+            and remaining is None
+            and membership.status == MembershipStatus.ACTIVE
+        )
+        if auto_withdraw:
             await self.remove_member(
-                session, entity_id, user_id, reason="All source membership contributions withdrawn"
+                session,
+                entity_id,
+                user_id,
+                reason="All source membership contributions withdrawn",
+                _source_withdrawal=True,
             )
         await self._project_source_roles(session, membership.id)
         await session.refresh(membership, ["roles"])
+        if auto_withdraw:
+            await session.refresh(membership, ["write_revision"])
+            existing_proof = await session.get(MembershipSourceWithdrawal, (user_id, entity_id), populate_existing=True)
+            if existing_proof is None:
+                existing_proof = MembershipSourceWithdrawal(
+                    user_id=user_id,
+                    entity_id=entity_id,
+                    membership_id=membership.id,
+                    revision=membership.write_revision,
+                    user_epoch=int(user.session_security_epoch or 0),
+                )
+                session.add(existing_proof)
+            else:
+                existing_proof.membership_id = membership.id
+                existing_proof.revision = membership.write_revision
+                existing_proof.user_epoch = int(user.session_security_epoch or 0)
+            await session.flush()
         current = await self._build_membership_history_snapshot(session, membership)
-        if created or previous["role_ids"] != current["role_ids"]:
+        if created or returning or previous["role_ids"] != current["role_ids"]:
             await self._record_membership_history(
                 session,
                 membership=membership,
-                event_type="created" if created else "updated",
+                event_type="created" if created else "reactivated" if returning else "updated",
                 previous_snapshot=previous,
                 event_source="membership_service.set_source_membership",
             )
@@ -568,6 +618,8 @@ class MembershipService(BaseService[EntityMembership]):
         user_id: UUID,
         revoked_by_id: Optional[UUID] = None,
         reason: Optional[str] = None,
+        *,
+        _source_withdrawal: bool = False,
     ) -> bool:
         """
         Remove user from entity (soft delete by setting status=REVOKED).
@@ -610,6 +662,13 @@ class MembershipService(BaseService[EntityMembership]):
             )
 
         if membership.status == MembershipStatus.REVOKED:
+            if not _source_withdrawal:
+                await session.execute(
+                    update(EntityMembership)
+                    .where(cast(Any, EntityMembership.id) == membership.id)
+                    .values(write_revision=cast(Any, EntityMembership.write_revision) + 1)
+                )
+                await session.refresh(membership, ["write_revision"])
             return False
         previous_snapshot = await self._build_membership_history_snapshot(session, membership)
         membership.status = MembershipStatus.REVOKED
@@ -809,6 +868,14 @@ class MembershipService(BaseService[EntityMembership]):
                 membership.revoked_by_id = changed_by_id
 
         await session.flush()
+        if update_roles or update_status or update_valid_from or update_valid_until or update_reason:
+            # Native intent fences return even if the assigned value is unchanged
+            # and the ORM consequently emits no UPDATE for it.
+            await session.execute(
+                update(EntityMembership)
+                .where(cast(Any, EntityMembership.id) == membership.id)
+                .values(write_revision=cast(Any, EntityMembership.write_revision) + 1)
+            )
         await session.refresh(membership, ["roles"])
         current_snapshot = await self._build_membership_history_snapshot(session, membership)
         event_type = self._determine_membership_event_type(
@@ -1277,6 +1344,7 @@ class MembershipService(BaseService[EntityMembership]):
 
         await self._require_holder_in_entity_tree(session, entity_id, user_id)
         previous_snapshot = await self._build_membership_history_snapshot(session, membership)
+        membership.native_owned = True
         membership.status = MembershipStatus.ACTIVE
         membership.revocation_reason = None
         membership.revoked_at = None

@@ -7,7 +7,7 @@ Handles role management operations with PostgreSQL/SQLAlchemy.
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Dict, List, Optional, Set, Tuple, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, false, func, literal, or_, select
 from sqlalchemy import delete as sql_delete
@@ -186,6 +186,7 @@ class RoleService(BaseService[Role]):
         assignable_at_types: Optional[List[str]] = None,
         entity_type_permissions: Optional[Dict[str, List[str]]] = None,
         created_by_id: Optional[UUID] = None,
+        role_id: Optional[UUID] = None,
     ) -> Role:
         """
         Create a new role.
@@ -325,6 +326,7 @@ class RoleService(BaseService[Role]):
             )
 
         role = Role(
+            id=role_id or uuid4(),
             name=name,
             display_name=display_name,
             description=description,

@@ -46,6 +46,7 @@ from .entity_membership import (
     EntityMembershipRole,
     MembershipSourceClaim,
     MembershipSourceRole,
+    MembershipSourceWithdrawal,
 )
 from .entity_membership_history import EntityMembershipHistory
 from .integration_principal import (
@@ -140,6 +141,7 @@ __all__ = [
     "EntityMembershipRole",
     "MembershipSourceClaim",
     "MembershipSourceRole",
+    "MembershipSourceWithdrawal",
     "EntityMembershipHistory",
     "IntegrationPrincipal",
     "IntegrationPrincipalRole",
@@ -199,6 +201,7 @@ ENTERPRISE_RBAC_MODELS = [
     EntityMembershipRole,
     MembershipSourceClaim,
     MembershipSourceRole,
+    MembershipSourceWithdrawal,
     EntityMembershipHistory,
 ]
 

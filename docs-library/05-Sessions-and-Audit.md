@@ -258,12 +258,37 @@ Withdraw one source with `role_ids=None`. Another source or a native attachment
 keeps the membership. Withdrawing the last source-only attachment revokes the
 membership and records history while preserving the account. Source replay
 cannot override native suspension, revocation or validity, transfer accounts,
-change credentials/preferences or restore revoked memberships automatically.
-Explicitly reactivate a revoked membership before accepting a later source
-return. Withdraw source claims before hard-deleting claimed memberships/roles.
+change credentials/preferences or restore a natively revoked membership.
+Source-only return has the narrower proof contract below. Withdraw source claims
+before hard-deleting claimed memberships/roles.
 
 The host owns atomic application, stable mappings, accepted source watermarks,
 frozen relationship evidence, recovery admission and delivery. Database child
 fences include empty collections, but restricted runtime permissions and exact
 consumer/package/schema acceptance remain activation gates. See
 `docs/S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md` for the qualified boundary.
+
+### Reviewed population and source return (unreleased a38)
+
+`UserService.create_source_user` creates an explicitly reviewed UUID under an
+active independent customer root. The account starts `invited`, without a
+password, verified email, session, recovery challenge or delivery hook. Existing
+email or UUID collisions are errors; the method never adopts an account by its
+email. The host owns source aliases, customer-root role templates, the atomic
+population receipt and a pending setup intent. Pending intent is not evidence
+that an invitation was delivered or that the user can log in.
+
+Migration `20261012_0031` retains a source-only withdrawal proof containing the
+membership UUID, its write revision and the account security epoch. Source
+return may reactivate that same membership only while those values match and
+no native attachment or validity override exists. Native removal, same-value
+lifecycle edits, role DML, hard deletion or an account security boundary blocks
+return. Explicit native reactivation records native ownership. Earlier source
+withdrawals without proof need explicit native acknowledgement.
+
+A host changing its schema, recovery generation or mapping policy must retain
+its original opaque source claim namespace. The Diverse adapter retires the
+predecessor and applies its successor atomically, retaining old crosswalks,
+accepted watermarks and frozen removal episodes. Handoff does not authorise
+identity transfers, a new cohort, source lease ownership or delivery. See
+`docs/S3_POPULATION_SOURCE_RETURN_2026-10-12.md` for current qualification.

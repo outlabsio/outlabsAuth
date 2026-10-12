@@ -9,7 +9,7 @@ from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID
 
 from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, DateTime, Boolean, text
+from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, DateTime, Boolean, BigInteger, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
@@ -83,6 +83,17 @@ class MembershipSourceRole(SQLModel, table=True):
     )
 
 
+class MembershipSourceWithdrawal(SQLModel, table=True):
+    """Standing source-only withdrawal proof; survives a native hard deletion."""
+
+    __tablename__ = "membership_source_withdrawals"
+    user_id: UUID = Field(primary_key=True)
+    entity_id: UUID = Field(primary_key=True)
+    membership_id: UUID
+    revision: int = Field(sa_column=Column(BigInteger, nullable=False))
+    user_epoch: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
 class EntityMembership(BaseModel, table=True):
     """
     User membership in an entity (EnterpriseRBAC).
@@ -104,6 +115,7 @@ class EntityMembership(BaseModel, table=True):
         Index("ix_em_valid_until", "valid_until"),
     )
     native_owned: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
+    write_revision: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default=text("0")))
 
     # === Foreign Keys ===
     user_id: UUID = Field(

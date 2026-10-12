@@ -344,12 +344,15 @@ class UserService(BaseService[User]):
                 message="Phone verification is unavailable",
                 details={"reason": "auth_service_missing"},
             )
-        return await self.auth_service.verify_phone_verify_code(
-            session,
-            user,
-            code=code,
-            ip_address=ip_address,
-            user_agent=user_agent,
+        return cast(
+            User,
+            await self.auth_service.verify_phone_verify_code(
+                session,
+                user,
+                code=code,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            ),
         )
 
     async def send_invitation_email(
@@ -439,6 +442,56 @@ class UserService(BaseService[User]):
         )
         result = await self.transactional_mail_service.send_access_granted(intent)
         return bool(result.accepted)
+
+    async def create_source_user(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        email: str,
+        root_entity_id: UUID,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> User:
+        """Trusted reviewed population: invited identity, no credential/delivery.
+
+        Stable IDs and tenant/source mapping are host-owned. Email is only a
+        collision check, never an adoption/merge key. Caller owns rollback.
+        No notification, invitation token, recovery challenge or external hook
+        runs before the host's atomic admission and delivery protocol.
+        """
+        email = validate_email(email)
+        if await self.get_one(session, (User.email == email) | (User.id == user_id)):
+            raise UserAlreadyExistsError(message="Reviewed source identity collides with an existing account")
+        entity = (
+            await session.execute(
+                select(Entity)
+                .where(cast(Any, Entity.id) == root_entity_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if (
+            not entity
+            or entity.parent_id is not None
+            or entity.entity_class != "structural"
+            or entity.status != "active"
+        ):
+            raise InvalidInputError(message="Source user requires an active independent structural customer root")
+        user = User(
+            id=user_id,
+            email=email,
+            first_name=validate_name(first_name, "first_name") if first_name else None,
+            last_name=validate_name(last_name, "last_name") if last_name else None,
+            root_entity_id=root_entity_id,
+            status=UserStatus.INVITED,
+            is_superuser=False,
+            email_verified=False,
+            hashed_password=None,
+            session_security_epoch=0,
+        )
+        await self.create(session, user)
+        return user
 
     async def create_user(
         self,
@@ -1096,7 +1149,7 @@ class UserService(BaseService[User]):
         protected_role = (
             (
                 await session.execute(
-                    select(UserRoleMembership.id)
+                    select(cast(Any, UserRoleMembership.id))
                     .join(Role, cast(Any, Role.id) == cast(Any, UserRoleMembership.role_id))
                     .where(
                         cast(Any, UserRoleMembership.user_id) == user.id,
