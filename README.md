@@ -314,7 +314,7 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 Unreleased local candidate. Public release remains a37.
 
-**Release evidence**: [Public S1 a37 receipt](./docs/S1_RELEASE_A37.md). [Local S2/S3 foundation](./docs/S2_S3_FOUNDATION_2026-10-11.md) and [explicit staff mount and SQL budgets](./docs/S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md) are qualified locally; [native/source membership ownership and IAM child fences](./docs/S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md) follow in unreleased a38, continued by [reviewed invited identities and fenced source-only return](./docs/S3_POPULATION_SOURCE_RETURN_2026-10-12.md). Existing consumer IAM admission remains unadopted; package publication and consumer adoption are separate gates.
+**Release evidence**: [Public S1 a37 receipt](./docs/S1_RELEASE_A37.md). [Local S2/S3 foundation](./docs/S2_S3_FOUNDATION_2026-10-11.md) and [explicit staff mount and SQL budgets](./docs/S2_MOUNTED_IAM_PERFORMANCE_2026-10-11.md) are qualified locally; [native/source membership ownership and IAM child fences](./docs/S3_MEMBERSHIP_OWNERSHIP_2026-10-12.md) follow in unreleased a38, continued by [reviewed invited identities and fenced source-only return](./docs/S3_POPULATION_SOURCE_RETURN_2026-10-12.md). [Bounded customer account/member HTTP admission](./docs/S2_ACCOUNT_MEMBER_MOUNT_2026-10-12.md) is also qualified locally. Existing consumer IAM admission remains unadopted; package publication and consumer adoption are separate gates.
 
 **Release Stage**: Alpha
 
