@@ -130,6 +130,9 @@ class DefaultAuthMailComposer(AuthMailComposer):
             to_email=intent.recipient.email,
             to_name=intent.recipient.display_name,
             subject=subject,
+            metadata={
+                key: intent.metadata[key] for key in ("logical_delivery_id", "source_system") if key in intent.metadata
+            },
             text_body=text_body,
             html_body=html_body,
             reply_to=self.support_email,

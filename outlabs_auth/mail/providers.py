@@ -173,8 +173,9 @@ class SendGridMailProvider(TransactionalMailProvider):
                 json=payload,
             )
             response.raise_for_status()
-            headers = dict(response.headers)
-            message_id = headers.get("X-Message-Id") or headers.get("X-Message-ID")
+            # HTTP field names are case-insensitive; converting Headers to a
+            # plain dict lowercases them and discarded real provider receipts.
+            message_id = response.headers.get("X-Message-Id") or response.headers.get("x-message-id")
             return MailDeliveryResult.queued(
                 self.provider_name,
                 provider_message_id=message_id,
@@ -269,11 +270,7 @@ class PostmarkMailProvider(TransactionalMailProvider):
     async def send(self, message: AuthMailMessage) -> MailDeliveryResult:
         payload: dict[str, Any] = {
             "From": f"{self.from_name} <{self.from_email}>" if self.from_name else self.from_email,
-            "To": (
-                f"{message.to_name} <{message.to_email}>"
-                if message.to_name
-                else message.to_email
-            ),
+            "To": (f"{message.to_name} <{message.to_email}>" if message.to_name else message.to_email),
             "Subject": message.subject,
             "TextBody": message.text_body,
             "MessageStream": self.message_stream,
@@ -286,13 +283,10 @@ class PostmarkMailProvider(TransactionalMailProvider):
             payload["Tag"] = message.tags[0]
         if message.metadata:
             payload["Metadata"] = {
-                key: value if isinstance(value, str) else json.dumps(value)
-                for key, value in message.metadata.items()
+                key: value if isinstance(value, str) else json.dumps(value) for key, value in message.metadata.items()
             }
         if message.headers:
-            payload["Headers"] = [
-                {"Name": key, "Value": value} for key, value in message.headers.items()
-            ]
+            payload["Headers"] = [{"Name": key, "Value": value} for key, value in message.headers.items()]
         if message.provider_template_id:
             payload["TemplateId"] = message.provider_template_id
             payload["TemplateModel"] = dict(message.template_data)
@@ -302,9 +296,7 @@ class PostmarkMailProvider(TransactionalMailProvider):
 
         try:
             response = await self._get_http_client().post(
-                f"{self.base_url}/email"
-                if not message.provider_template_id
-                else f"{self.base_url}/email/withTemplate",
+                f"{self.base_url}/email" if not message.provider_template_id else f"{self.base_url}/email/withTemplate",
                 headers={
                     "Accept": "application/json",
                     "Content-Type": "application/json",
@@ -362,9 +354,7 @@ class ResendMailProvider(TransactionalMailProvider):
             # Resend has no first-class metadata bag; stamp intended recipient in headers.
             headers = dict(payload.get("headers") or {})
             for key, value in message.metadata.items():
-                headers[f"X-Outlabs-{key}"] = (
-                    value if isinstance(value, str) else json.dumps(value)
-                )
+                headers[f"X-Outlabs-{key}"] = value if isinstance(value, str) else json.dumps(value)
             payload["headers"] = headers
 
         try:
