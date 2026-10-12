@@ -17,6 +17,8 @@ shapes used elsewhere in the package are:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from collections.abc import Iterator
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable, Hashable, Optional
 
@@ -24,6 +26,25 @@ _request_cache: ContextVar[Optional[dict[Hashable, Any]]] = ContextVar(
     "outlabs_auth_request_cache",
     default=None,
 )
+
+
+_request_active: ContextVar[bool] = ContextVar("outlabs_auth_http_request_active", default=False)
+
+
+@contextmanager
+def request_scope() -> Iterator[None]:
+    """Explicit HTTP lifetime; background/SDK calls must never reuse usage counts."""
+    cache_token = _request_cache.set({})
+    active_token = _request_active.set(True)
+    try:
+        yield
+    finally:
+        _request_active.reset(active_token)
+        _request_cache.reset(cache_token)
+
+
+def is_http_request() -> bool:
+    return _request_active.get()
 
 
 def _store() -> dict[Hashable, Any]:

@@ -5,6 +5,7 @@ Handles API key management and validation with Redis counter pattern for usage t
 Uses SQLAlchemy for PostgreSQL backend.
 """
 
+import asyncio
 from dataclasses import dataclass
 import logging
 import math
@@ -566,7 +567,7 @@ class APIKeyService(BaseService[APIKey]):
             key_id = str(api_key.id)
             usage_key = self._make_usage_counter_key(key_id)
             windows = self._api_key_rate_windows(api_key)
-            counts = await self.redis_client.record_api_key_usage_pipeline(
+            counts = await self._record_redis_usage_once(
                 usage_key=usage_key,
                 last_used_key=self._make_last_used_key(key_id),
                 last_used_value=datetime.now(timezone.utc).isoformat(),
@@ -587,6 +588,22 @@ class APIKeyService(BaseService[APIKey]):
 
         self._log_api_key_validation(prefix=api_key.prefix, status="valid")
         return api_key, usage_count
+
+    async def _record_redis_usage_once(self, **kwargs: Any) -> Optional[dict[str, int]]:
+        """Memoize only the side effect, never the current authorization decision.
+
+        Concurrent dependencies in one explicitly bounded HTTP scope share the
+        same Redis operation. Direct SDK/worker calls always count independently.
+        """
+        assert self.redis_client is not None
+        if not request_cache.is_http_request():
+            return cast(Optional[dict[str, int]], await self.redis_client.record_api_key_usage_pipeline(**kwargs))
+        key = ("api_key_usage_operation", self.config.redis_key_prefix, kwargs["usage_key"])
+        task = request_cache.get(key)
+        if task is None:
+            task = asyncio.create_task(self.redis_client.record_api_key_usage_pipeline(**kwargs))
+            request_cache.set_value(key, task)
+        return cast(Optional[dict[str, int]], await task)
 
     def _require_rate_limit_backend(self) -> None:
         """Reject when a configured distributed quota cannot be enforced."""
@@ -1360,7 +1377,7 @@ class APIKeyService(BaseService[APIKey]):
         windows = self._snapshot_rate_windows(snapshot)
         rate_windows = [(self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows]
 
-        counts = await self.redis_client.record_api_key_usage_pipeline(
+        counts = await self._record_redis_usage_once(
             usage_key=usage_key,
             last_used_key=self._make_last_used_key(key_id),
             last_used_value=datetime.now(timezone.utc).isoformat(),

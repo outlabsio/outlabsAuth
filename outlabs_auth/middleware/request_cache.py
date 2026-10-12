@@ -11,7 +11,6 @@ from typing import Any, Awaitable, Callable
 
 from outlabs_auth.services import request_cache
 
-
 ASGIApp = Callable[[dict, Callable[[], Awaitable[dict]], Callable[[dict], Awaitable[None]]], Awaitable[None]]
 
 
@@ -29,8 +28,5 @@ class RequestCacheMiddleware:
             await self.app(scope, receive, send)
             return
 
-        request_cache.reset()
-        try:
+        with request_cache.request_scope():
             await self.app(scope, receive, send)
-        finally:
-            request_cache.reset()

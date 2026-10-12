@@ -112,3 +112,38 @@ async def test_concurrent_usage_pipeline_keeps_one_expiring_window(redis_client)
     assert sorted(result[rate_key] for result in results if result is not None) == list(range(1, request_count + 1))
     assert await redis_client.get_counter("contract:concurrent:usage") == request_count
     assert 0 < await redis_client._client.ttl(redis_client.make_key(rate_key)) <= 60
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_http_quota_memo_is_concurrent_key_bound_and_ends_with_request(redis_client, test_secret_key):
+    from outlabs_auth.services import request_cache
+
+    service = _service(redis_client, test_secret_key)
+    one = {"key_id": str(uuid4()), "rate_limit_per_minute": 100}
+    two = {"key_id": str(uuid4()), "rate_limit_per_minute": 100}
+    with request_cache.request_scope():
+        values = await asyncio.gather(*(service.record_api_key_auth_snapshot_usage(one) for _ in range(10)))
+        assert values == [1] * 10
+        assert await service.record_api_key_auth_snapshot_usage(two) == 1
+    assert not request_cache.is_http_request()
+    with request_cache.request_scope():
+        assert await service.record_api_key_auth_snapshot_usage(one) == 2
+    assert await service.record_api_key_auth_snapshot_usage(one) == 3
+    assert await service.record_api_key_auth_snapshot_usage(one) == 4
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repeated_http_quota_denial_does_not_charge_again(redis_client, test_secret_key):
+    from outlabs_auth.services import request_cache
+
+    service = _service(redis_client, test_secret_key)
+    snapshot = {"key_id": str(uuid4()), "key_prefix": "synthetic", "rate_limit_per_minute": 1}
+    assert await service.record_api_key_auth_snapshot_usage(snapshot) == 1
+    with request_cache.request_scope():
+        for _ in range(2):
+            with pytest.raises(RateLimitError) as error:
+                await service.record_api_key_auth_snapshot_usage(snapshot)
+            assert error.value.details["current"] == 2
+    assert await redis_client.get_counter(service._make_usage_counter_key(snapshot["key_id"])) == 2
