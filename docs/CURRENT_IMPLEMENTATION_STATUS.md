@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-10-12
+**Updated**: 2026-10-14
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -9,7 +9,16 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 
 ## Proposed tenant-identity and administrative-grant design (2026-10-10)
 
-**Latest local continuation:** unreleased `99460ab` qualifies once-per-HTTP
+**Latest local continuation, 14 October:** `61f8b6b` adds explicit opt-in
+customer-catalog templates and callsite admission, with ordinary role/control-plane
+denial retained. Full local collection 1,663 is covered by source shards plus
+installed genuine-a37 migration; new installed-wheel policy cases pass 8 and all
+243 package bytes match. The new artifact needs independent exact review,
+sdist/packaging and consumer/release/adoption qualification. See
+[customer catalog policy and evidence](CUSTOMER_CATALOG_ADMINISTRATION_2026-10-14.md).
+
+
+**Earlier local continuation:** unreleased `99460ab` qualifies once-per-HTTP
 Redis quotas and bounded child-task lifetime, source1655/Redis60/artifacts115
 and constructors/243 bytes. Diverse9ea75eea qualifies187 staff-key/metrics/
 storage cases; public a37 stays pinned. Production inventory/storage/retention,

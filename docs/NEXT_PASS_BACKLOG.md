@@ -1,13 +1,22 @@
 # Next Pass Backlog
 
-**Updated**: 2026-10-12
+**Updated**: 2026-10-14
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
 
 ## Open: tenant identities and administrative grants (2026-10-10)
 
-**Latest local continuation:** unreleased `99460ab` qualifies once-per-HTTP
+**Latest local continuation, 14 October:** `61f8b6b` adds explicit opt-in
+customer-catalog templates and callsite admission, with ordinary role/control-plane
+denial retained. Full local collection 1,663 is covered by source shards plus
+installed genuine-a37 migration; new installed-wheel policy cases pass 8 and all
+243 package bytes match. The new artifact needs independent exact review,
+sdist/packaging and consumer/release/adoption qualification. See
+[customer catalog policy and evidence](CUSTOMER_CATALOG_ADMINISTRATION_2026-10-14.md).
+
+
+**Earlier local continuation:** unreleased `99460ab` qualifies once-per-HTTP
 Redis quotas and bounded child-task lifetime, source1655/Redis60/artifacts115
 and constructors/243 bytes. Diverse9ea75eea qualifies187 staff-key/metrics/
 storage cases; public a37 stays pinned. Production inventory/storage/retention,

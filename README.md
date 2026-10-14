@@ -323,3 +323,10 @@ Unreleased local candidate. Public release remains a37.
 MIT, copyright 2026 OUTLABS LLC.
 
 Unreleased a38 continuation: [HTTP key usage and host metrics acceptance](./docs/S3_HTTP_KEY_USAGE_2026-10-12.md), runtime `99460ab`, full source 1,655 and exact wheel/sdist 115 each. Production custody/storage/durability and independent release review remain separate gates.
+
+
+Unreleased a38 customer-catalog continuation: [explicit customer role catalog
+policy](./docs/CUSTOMER_CATALOG_ADMINISTRATION_2026-10-14.md), runtime `61f8b6b`,
+all 1,663 library cases covered across local source and genuine-a37 migration,
+8 installed policy cases and 243-file match. Defaults remain restricted; the new
+artifact still requires independent exact review, packaging and consumer qualification.
