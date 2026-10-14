@@ -66,6 +66,8 @@ section 19 delivery order. The companion
 
 ### Start here (for whoever implements this)
 
+14 October customer-catalog continuation: [explicit customer role catalog policy](CUSTOMER_CATALOG_ADMINISTRATION_2026-10-14.md) records the opt-in template marker and callsite admission. Default role/control-plane denial remains; this local a38 candidate still requires independent exact source/artifact review before release.
+
 **Latest continuation, 2026-10-12:** unreleased runtime `99460ab` counts Redis
 key usage once per bounded HTTP request while rechecking every authorization.
 Full source 1655, independent required Redis60 and fresh wheel/sdist115 each,

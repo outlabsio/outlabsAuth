@@ -154,6 +154,7 @@ class AdministrativeGrantService:
         revision: int,
         actions: list[str],
         entity_types: list[str] | None = None,
+        customer_catalog: bool = False,
     ) -> AdministrativeTemplateRevision:
         await self._platform(session, actor_id)
         if not template_key or len(template_key) > 100 or revision < 1 or not actions:
@@ -169,7 +170,13 @@ class AdministrativeGrantService:
         }
         snapshots: list[dict[str, str]] = []
         for action in sorted(set(actions)):
-            if "*" in action or action.split(":")[0] in control:
+            is_catalog = customer_catalog is True and action in {
+                "role:create",
+                "role:read",
+                "role:update",
+                "role:delete",
+            }
+            if "*" in action or (action.split(":")[0] in control and not is_catalog):
                 raise InvalidInputError(message="Wildcard and control-plane administrative actions are unsupported")
             permission = (
                 await session.execute(
@@ -191,6 +198,8 @@ class AdministrativeGrantService:
             "entity_types": sorted(set(entity_types or [])),
             "matching": "exact",
         }
+        if customer_catalog is True:
+            policy["customer_catalog"] = "bounded-customer-role-v1"
         template = AdministrativeTemplateRevision(
             template_key=template_key, revision=revision, policy=policy, policy_hash=_hash(policy)
         )
@@ -446,12 +455,18 @@ class AdministrativeGrantService:
         key_entity_ids: set[UUID] | None = None,
         protected_write: bool = False,
         qualifying_grant_id: UUID | None = None,
+        customer_catalog: bool = False,
     ) -> AdministrativeDecision:
         """Fresh database evaluation; never infer authentication from this result.
 
         A host must pass credential ceilings from its verified authentication
         context. This foundation is not wired to the existing permission API.
         """
+        catalog_action = action.split(":")[0] == "role"
+        if catalog_action and (
+            not customer_catalog or action not in {"role:create", "role:read", "role:update", "role:delete"}
+        ):
+            return AdministrativeDecision(False, AdministrativeDecisionReason.NO_MATCHING_GRANT)
         now = datetime.now(timezone.utc)
         try:
             await self._trusted(session, now, lock=protected_write)
@@ -500,7 +515,8 @@ class AdministrativeGrantService:
                 )
             ).scalar_one()
             if (
-                not template.active
+                (catalog_action and template.policy.get("customer_catalog") != "bounded-customer-role-v1")
+                or not template.active
                 or template.policy_hash != _hash(template.policy)
                 or template.policy.get("matching") != "exact"
             ):

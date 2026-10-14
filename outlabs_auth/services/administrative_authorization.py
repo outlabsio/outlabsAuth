@@ -210,6 +210,7 @@ class AdministrativeAuthorization:
         entity_id: UUID,
         account_root_required: bool = False,
         protected_write: bool = False,
+        customer_catalog: bool = False,
     ) -> AdministrativeDecision:
         if await self._actor(session, context) is None:
             return _deny()
@@ -247,6 +248,7 @@ class AdministrativeAuthorization:
             user_id=context.user_id,
             action=action,
             entity_id=entity_id,
+            customer_catalog=customer_catalog,
             account_root_required=account_root_required,
         )
         if not decision.allowed or not protected_write:
@@ -258,6 +260,7 @@ class AdministrativeAuthorization:
             user_id=context.user_id,
             action=action,
             entity_id=entity_id,
+            customer_catalog=customer_catalog,
             account_root_required=account_root_required,
             protected_write=True,
             qualifying_grant_id=decision.grant_id,
@@ -274,6 +277,7 @@ class AdministrativeAuthorization:
             user_id=context.user_id,
             action=action,
             entity_id=entity_id,
+            customer_catalog=customer_catalog,
             account_root_required=account_root_required,
             qualifying_grant_id=decision.grant_id,
         )
