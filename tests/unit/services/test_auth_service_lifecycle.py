@@ -577,3 +577,11 @@ async def test_auth_service_verify_password_and_helper_methods_cover_remaining_b
                 deleted_at=now,
             )
         )
+
+
+@pytest.mark.unit
+def test_unknown_persisted_string_status_is_a_controlled_inactive_denial(auth_config: AuthConfig):
+    service = AuthService(config=auth_config)
+    with pytest.raises(AccountInactiveError) as error:
+        service._check_user_status(SimpleNamespace(status="pending_review"))
+    assert error.value.details == {"status": "pending_review"}

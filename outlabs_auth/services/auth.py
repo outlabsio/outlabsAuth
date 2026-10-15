@@ -2094,7 +2094,7 @@ class AuthService:
         if user.status != UserStatus.INVITED:
             raise AccountInactiveError(
                 message="This invitation has already been accepted",
-                details={"status": user.status.value},
+                details={"status": getattr(user.status, "value", user.status)},
             )
 
         # Set password and activate
@@ -2183,8 +2183,8 @@ class AuthService:
             )
         else:
             raise AccountInactiveError(
-                message=f"Account is {user.status.value}",
-                details={"status": user.status.value},
+                message=f"Account is {getattr(user.status, 'value', user.status)}",
+                details={"status": getattr(user.status, "value", user.status)},
             )
 
     def _log_login_failed(
