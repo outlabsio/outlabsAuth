@@ -1,5 +1,7 @@
 # OutlabsAuth
 
+[Auth docs](https://auth.outlabs.io/) · [Auth UI guide](https://auth.outlabs.io/integrations/outlabsauth-ui/) · [TaskQ docs](https://taskq.outlabs.io/) · [Use them together](https://auth.outlabs.io/integrations/taskq/)
+
 **Library-first authentication and authorization for FastAPI** — RBAC, optional ABAC, API keys, and Postgres-backed permissions that live inside your app.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -23,24 +25,28 @@ Most auth products push you into a separate IdP or a black-box service. OutlabsA
 
 ## Documentation
 
-**Implementers** start in the [OutlabsAuth Handbook](./docs-library/)
-(`docs-library/`) — human-readable guides written for people integrating the
-library. A Nuxt docs site lives beside this repo at
-[`../outlabsAuth-docs`](../outlabsAuth-docs) (Nuxt UI docs template); re-port
-with `python3 scripts/port_handbook.py` from that project.
+Start in the **[live Auth handbook](https://auth.outlabs.io/)**. For a first
+integration, follow this path:
+
+1. [Choose SimpleRBAC or EnterpriseRBAC](https://auth.outlabs.io/getting-started/choosing-a-preset/).
+2. [Install, migrate, mount the API and log in](https://auth.outlabs.io/getting-started/getting-started/).
+3. [Connect Auth UI](https://auth.outlabs.io/integrations/outlabsauth-ui/) for administration,
+   or [add TaskQ](https://auth.outlabs.io/integrations/taskq/) for background jobs.
 
 | Guide | What it covers |
 |-------|----------------|
-| [Handbook home](./docs-library/) | Reading paths, full guide index |
-| [Introduction](./docs-library/00-Introduction.md) | Mental model in a few minutes |
-| [Getting Started](./docs-library/01-Getting-Started.md) | Install → migrate → mount → login → optional UI |
-| [Choosing a Preset](./docs-library/07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
-| [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
-| [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
-| [Background Maintenance](./docs-library/09-Background-Maintenance.md) | Typed one-shot cleanup/sync, external ownership, activation, and rollback |
-| [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
-| [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
-| [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Nuxt static SPA) |
+| [Getting started](https://auth.outlabs.io/getting-started/getting-started/) | Install → migrate → first login |
+| [Routers & prefixes](https://auth.outlabs.io/build/routers-and-prefixes/) | Mount only the API surfaces your host needs |
+| [Configuration](https://auth.outlabs.io/build/configuration/) | Secrets, Redis, schema and production defaults |
+| [Auth UI](https://auth.outlabs.io/integrations/outlabsauth-ui/) | Set up the Nuxt administration console |
+| [Command line](https://auth.outlabs.io/build/cli/) | Administer identity without the console |
+| [Background maintenance](https://auth.outlabs.io/getting-started/background-maintenance/) | Cleanup and sync with one external owner |
+| [Use Auth, Auth UI and TaskQ together](https://auth.outlabs.io/integrations/taskq/) | Permissions, worker credentials and scheduled maintenance |
+| [Versions and upgrades](https://auth.outlabs.io/getting-started/versions-and-upgrades/) | Published a37 and upgrade boundaries |
+
+The Markdown handbook remains in [`docs-library/`](./docs-library/); the
+website source is [outlabsAuth-docs](https://github.com/outlabsio/outlabsAuth-docs).
+Runnable examples are in [`examples/`](./examples/).
 
 **Maintainers** (design decisions, audits, release process): [`docs/`](./docs/).
 **Proposed, awaiting review:** [Tenant identities and delegated administration](./docs/TENANT_IDENTITIES_AND_ADMINISTRATIVE_GRANTS.md)
@@ -74,7 +80,7 @@ Need departments / teams / org tree?
 ## Install
 
 ```bash
-pip install outlabs-auth
+pip install outlabs-auth==0.1.0a37
 ```
 
 You need PostgreSQL. Provide at least:
@@ -83,6 +89,12 @@ You need PostgreSQL. Provide at least:
 - a JWT `secret_key` (≥ 32 characters for HS256)
 
 ## Quickstart
+
+The code below is the API wiring. The
+[complete getting-started guide](https://auth.outlabs.io/getting-started/getting-started/)
+walks through database creation, migrations, the signing secret, admin bootstrap,
+starting Uvicorn and the first login. You need Python 3.12+ and PostgreSQL.
+Save the Python block as `main.py` after preparing those prerequisites.
 
 ```python
 import os
@@ -152,7 +164,7 @@ cp public/app-config.template.json public/app-config.json
 bun run dev   # http://localhost:3000
 ```
 
-Open `http://localhost:3000` and sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring, production hosting and the console's release gate: [`docs/AUTH_UI.md`](./docs/AUTH_UI.md).
+Open `http://localhost:3000` and sign in with a seeded admin (e.g. `admin@acme.com` / `Testpass1!`). Full wiring and troubleshooting: [live Auth UI guide](https://auth.outlabs.io/integrations/outlabsauth-ui/). The console's release gate remains in [its repository](https://github.com/outlabsio/OutlabsAuthUI#releasing).
 
 ## CLI Operations and Administration
 
